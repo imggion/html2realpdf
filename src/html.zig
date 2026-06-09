@@ -1,7 +1,5 @@
 const std = @import("std");
 
-// TODO: Encoding in the tokenizer?? For special chars, maybe using ANSI or UTF-8 (need to understand more)
-
 pub const html_simple =
     \\ <!DOCTYPE html>
     \\ <html>
@@ -54,34 +52,31 @@ pub const html_hard =
     \\ </html>
 ;
 
+const Attribute = struct {
+    name: []const u8,
+    value: ?[]const u8,
+};
+
 const TagOpen = struct {
     name: []const u8,
     attributes: []const Attribute,
     self_closing: bool,
 };
 
-const Token = union(enum) {
-    text: []const u8, // input slice
+pub const Token = union(enum) {
+    text: []const u8,
     tag_open: TagOpen,
     tag_close: []const u8,
     comment: []const u8,
     doctype: []const u8,
 };
 
-const Attribute = struct {
-    name: []const u8,
-    value: ?[]const u8, // null if boolean (es. disabled)
-};
-
 const State = enum {
-    // base
     Text,
     TagOpen,
     TagName,
     EndTagName,
     SelfClosing,
-
-    // attributes
     BeforeAttributeName,
     AttributeName,
     AfterAttributeName,
@@ -89,292 +84,327 @@ const State = enum {
     AttributeValueDouble,
     AttributeValueSingle,
     AttributeValueUnquoted,
-
-    // others
     Comment,
     Doctype,
     Error,
 };
 
-pub fn tokenizeHtml(html: []const u8) !void {
-    const allocator = std.heap.page_allocator; // TODO: understand if page_allocator is good for WASM compiling
-    var state: State = .Text;
-    var i: usize = 0;
-    var start: usize = 0;
-    var tag_name: ?[]const u8 = null;
-    var attr_name: ?[]const u8 = null;
+pub const Tokenizer = struct {
+    pub fn tokenizeHtml(allocator: std.mem.Allocator, html: []const u8) !std.ArrayList(Token) {
+        var state: State = .Text;
+        var i: usize = 0;
+        var start: usize = 0;
 
-    // The data normalization is delegated to the Parser.
-    // TODO: Append tokens into the Array.
-    var tokenList = try std.ArrayList(Token).initCapacity(allocator, 0);
-    defer tokenList.deinit(allocator);
+        var current_tag_name: ?[]const u8 = null;
+        var current_attrs_name: ?[]const u8 = null;
+        var current_attributes = try std.ArrayList(Attribute).initCapacity(allocator, 0);
+        var current_token_list = try std.ArrayList(Token).initCapacity(allocator, 0);
 
-    std.debug.print("Raw Html:\n{s}\n", .{html});
+        while (i < html.len) {
+            const c = html[i];
 
-    while (i < html.len) {
-        const c = html[i];
-
-        switch (state) {
-            .Text => {
-                if (c == '<') {
-                    if (i > start) {
-                        const text = html[start..i];
-                        if (text.len > 0)
-                            try tokenList.append(allocator, .{ .text = text });
-                        std.debug.print("[TEXT] \"{s}\"\n", .{text});
+            switch (state) {
+                .Text => {
+                    if (c == '<') {
+                        if (i > start) {
+                            const text = html[start..i];
+                            if (text.len > 0)
+                                try current_token_list.append(allocator, .{ .text = text });
+                        }
+                        start = i + 1;
+                        state = .TagOpen;
                     }
-                    start = i + 1;
-                    state = .TagOpen;
-                }
-            },
+                },
 
-            .TagOpen => {
-                state = switch (c) {
-                    '/' => .EndTagName,
-                    '!' => .Doctype,
-                    'a'...'z', 'A'...'Z' => .TagName,
-                    else => .Text,
-                };
-                if (state == .TagName) {
-                    start = i;
-                }
-            },
+                .TagOpen => {
+                    switch (c) {
+                        '/' => {
+                            state = .EndTagName;
+                        },
+                        '!' => {
+                            // look forward to distinguish between comment and doctype
+                            if (i + 1 < html.len and html[i + 1] == '-' and i + 2 < html.len and html[i + 2] == '-') {
+                                start = i + 3; // after "<!--"
+                                state = .Comment;
+                            } else {
+                                state = .Doctype;
+                            }
+                        },
+                        'a'...'z', 'A'...'Z' => {
+                            state = .TagName;
+                        },
+                        else => {
+                            state = .Text;
+                        },
+                    }
+                    if (state == .TagName) start = i;
+                },
 
-            .TagName => {
-                switch (c) {
-                    ' ', '\t', '\n' => {
-                        const name = html[start..i];
-                        tag_name = name;
-                        std.debug.print("[START_TAG] {s}\n", .{name});
+                .TagName => {
+                    if (start == i) {
+                        current_tag_name = null;
+                        current_attributes.clearRetainingCapacity();
+                    }
+                    switch (c) {
+                        ' ', '\t', '\n' => {
+                            current_tag_name = html[start..i];
+                            start = i + 1;
+                            state = .BeforeAttributeName;
+                        },
+                        '>' => {
+                            current_tag_name = html[start..i];
+                            if (current_tag_name) |name| {
+                                const attrs_slice = try current_attributes.toOwnedSlice(allocator);
+                                try current_token_list.append(allocator, .{
+                                    .tag_open = .{
+                                        .name = name,
+                                        .attributes = attrs_slice,
+                                        .self_closing = false,
+                                    },
+                                });
+                                current_attributes = try std.ArrayList(Attribute).initCapacity(allocator, 0);
+                            }
+                            start = i + 1;
+                            state = .Text;
+                        },
+                        '/' => {
+                            current_tag_name = html[start..i];
+                            start = i + 1;
+                            state = .SelfClosing;
+                        },
+                        'a'...'z', 'A'...'Z', '0'...'9', '-' => {},
+                        else => state = .Error,
+                    }
+                },
+
+                .EndTagName => {
+                    switch (c) {
+                        '/' => {
+                            start = i + 1;
+                            state = .EndTagName;
+                        },
+                        '>' => {
+                            const name = html[start..i];
+                            try current_token_list.append(allocator, .{ .tag_close = name });
+                            start = i + 1;
+                            state = .Text;
+                        },
+                        ' ', '\t', '\n' => {},
+                        'a'...'z', 'A'...'Z', '0'...'9', '-' => {},
+                        else => state = .Error,
+                    }
+                },
+
+                .SelfClosing => {
+                    if (c == '>') {
+                        if (current_tag_name) |name| {
+                            const attrs_slice = try current_attributes.toOwnedSlice(allocator);
+                            try current_token_list.append(allocator, .{
+                                .tag_open = .{
+                                    .name = name,
+                                    .attributes = attrs_slice,
+                                    .self_closing = true,
+                                },
+                            });
+                            current_attributes = try std.ArrayList(Attribute).initCapacity(allocator, 0);
+                        }
+                        current_tag_name = null;
+                        start = i + 1;
+                        state = .Text;
+                    } else {
+                        state = .Error;
+                    }
+                },
+
+                .BeforeAttributeName => {
+                    switch (c) {
+                        ' ', '\t', '\n' => {},
+                        '>' => {
+                            state = .Text;
+                            start = i + 1;
+                        },
+                        '/' => state = .SelfClosing,
+                        'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {
+                            start = i;
+                            state = .AttributeName;
+                        },
+                        else => state = .Error,
+                    }
+                },
+
+                .AttributeName => {
+                    switch (c) {
+                        ' ', '\t', '\n' => {
+                            const name = html[start..i];
+                            current_attrs_name = name;
+                            start = i + 1;
+                            state = .AfterAttributeName;
+                        },
+                        '=' => {
+                            const name = html[start..i];
+                            current_attrs_name = name;
+                            start = i + 1;
+                            state = .BeforeAttributeValue;
+                        },
+                        'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
+                        else => state = .Error,
+                    }
+                },
+
+                .AfterAttributeName => {
+                    switch (c) {
+                        ' ', '\t', '\n' => {},
+                        '=' => state = .BeforeAttributeValue,
+                        'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {
+                            start = i;
+                            state = .AttributeName;
+                        },
+                        '>' => {
+                            state = .Text;
+                            start = i + 1;
+                        },
+                        '/' => state = .SelfClosing,
+                        else => state = .Error,
+                    }
+                },
+
+                .BeforeAttributeValue => {
+                    switch (c) {
+                        ' ', '\t', '\n' => {},
+                        '"' => {
+                            start = i + 1;
+                            state = .AttributeValueDouble;
+                        },
+                        '\'' => {
+                            start = i + 1;
+                            state = .AttributeValueSingle;
+                        },
+                        '>' => {
+                            state = .Text;
+                            start = i + 1;
+                        },
+                        '/' => state = .SelfClosing,
+                        else => {
+                            start = i;
+                            state = .AttributeValueUnquoted;
+                        },
+                    }
+                },
+
+                .AttributeValueDouble => {
+                    if (c == '"') {
+                        const value = html[start..i];
+                        if (current_attrs_name) |name| {
+                            try current_attributes.append(allocator, Attribute{ .name = name, .value = value });
+                        }
                         start = i + 1;
                         state = .BeforeAttributeName;
-                    },
-                    '>' => {
-                        const name = html[start..i];
-                        tag_name = name;
-                        std.debug.print("[START_TAG] {s}\n", .{name});
-                        start = i + 1;
-                        state = .Text;
-                    },
-                    '/' => {
-                        const name = html[start..i];
-                        tag_name = name;
-                        std.debug.print("[START_TAG] {s}\n", .{name});
-                        start = i + 1;
-                        state = .SelfClosing;
-                    },
-                    'a'...'z', 'A'...'Z', '0'...'9', '-' => {},
-                    else => state = .Error,
-                }
-            },
+                    }
+                },
 
-            .EndTagName => {
-                switch (c) {
-                    '>' => {
-                        const name = html[start..i];
-                        std.debug.print("[END_TAG] {s}\n", .{name});
-                        start = i + 1;
-                        state = .Text;
-                    },
-                    ' ', '\t', '\n' => {},
-                    'a'...'z', 'A'...'Z', '0'...'9', '-' => {},
-                    else => state = .Error,
-                }
-            },
-
-            .SelfClosing => {
-                if (c == '>') {
-                    std.debug.print("[SELF_CLOSING_TAG] {s}\n", .{tag_name orelse "unknown"});
-                    tag_name = null;
-                    start = i + 1;
-                    state = .Text;
-                } else {
-                    state = .Error;
-                }
-            },
-
-            .BeforeAttributeName => {
-                switch (c) {
-                    ' ', '\t', '\n' => {},
-                    '>' => {
-                        state = .Text;
-                        start = i + 1;
-                    },
-                    '/' => state = .SelfClosing,
-                    'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {
-                        start = i;
-                        state = .AttributeName;
-                    },
-                    else => state = .Error,
-                }
-            },
-
-            .AttributeName => {
-                switch (c) {
-                    ' ', '\t', '\n' => {
-                        const name = html[start..i];
-                        attr_name = name;
-                        std.debug.print("[ATTR_NAME] {s}\n", .{name});
-                        start = i + 1;
-                        state = .AfterAttributeName;
-                    },
-                    '=' => {
-                        const name = html[start..i];
-                        attr_name = name;
-                        std.debug.print("[ATTR_NAME] {s}\n", .{name});
-                        start = i + 1;
-                        state = .BeforeAttributeValue;
-                    },
-                    'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
-                    else => state = .Error,
-                }
-            },
-
-            .AfterAttributeName => {
-                switch (c) {
-                    ' ', '\t', '\n' => {},
-                    '=' => state = .BeforeAttributeValue,
-                    'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {
-                        start = i;
-                        state = .AttributeName;
-                    },
-                    '>' => {
-                        state = .Text;
-                        start = i + 1;
-                    },
-                    '/' => state = .SelfClosing,
-                    else => state = .Error,
-                }
-            },
-
-            .BeforeAttributeValue => {
-                switch (c) {
-                    ' ', '\t', '\n' => {},
-                    '"' => {
-                        start = i + 1;
-                        state = .AttributeValueDouble;
-                    },
-                    '\'' => {
-                        start = i + 1;
-                        state = .AttributeValueSingle;
-                    },
-                    '>' => {
-                        state = .Text;
-                        start = i + 1;
-                    },
-                    '/' => state = .SelfClosing,
-                    else => {
-                        start = i;
-                        state = .AttributeValueUnquoted;
-                    },
-                }
-            },
-
-            .AttributeValueDouble => {
-                if (c == '"') {
-                    const value = html[start..i];
-                    std.debug.print("[ATTR_VALUE] \"{s}\"\n", .{value});
-                    start = i + 1;
-                    state = .BeforeAttributeName;
-                }
-            },
-
-            .AttributeValueSingle => {
-                if (c == '\'') {
-                    const value = html[start..i];
-                    std.debug.print("[ATTR_VALUE] '{s}'\n", .{value});
-                    start = i + 1;
-                    state = .BeforeAttributeName;
-                }
-            },
-
-            .AttributeValueUnquoted => {
-                switch (c) {
-                    ' ', '\t', '\n' => {
+                .AttributeValueSingle => {
+                    if (c == '\'') {
                         const value = html[start..i];
-                        std.debug.print("[ATTR_VALUE] {s}\n", .{value});
+                        if (current_attrs_name) |name| {
+                            try current_attributes.append(allocator, Attribute{ .name = name, .value = value });
+                        }
                         start = i + 1;
                         state = .BeforeAttributeName;
-                    },
-                    '>' => {
-                        const value = html[start..i];
-                        std.debug.print("[ATTR_VALUE] {s}\n", .{value});
+                    }
+                },
+
+                .AttributeValueUnquoted => {
+                    switch (c) {
+                        ' ', '\t', '\n' => {
+                            const value = html[start..i];
+                            if (current_attrs_name) |name| {
+                                try current_attributes.append(allocator, Attribute{ .name = name, .value = value });
+                            }
+                            start = i + 1;
+                            state = .BeforeAttributeName;
+                        },
+                        '>' => {
+                            const value = html[start..i];
+                            if (current_attrs_name) |name| {
+                                try current_attributes.append(allocator, Attribute{ .name = name, .value = value });
+                            }
+                            start = i + 1;
+                            state = .Text;
+                        },
+                        '/' => {
+                            const value = html[start..i];
+                            if (current_attrs_name) |name| {
+                                try current_attributes.append(allocator, Attribute{ .name = name, .value = value });
+                            }
+                            start = i + 1;
+                            state = .SelfClosing;
+                        },
+                        else => {},
+                    }
+                },
+
+                .Comment => {
+                    if (c == '-' and i + 2 < html.len and html[i + 1] == '-' and html[i + 2] == '>') {
+                        const comment = html[start..i];
+                        try current_token_list.append(allocator, .{ .comment = comment });
+                        i += 2;
                         start = i + 1;
                         state = .Text;
-                    },
-                    '/' => {
-                        const value = html[start..i];
-                        std.debug.print("[ATTR_VALUE] {s}\n", .{value});
+                    }
+                },
+
+                .Doctype => {
+                    if (c == '>') {
+                        const doctype = html[start..i];
+                        try current_token_list.append(allocator, .{ .doctype = doctype });
                         start = i + 1;
-                        state = .SelfClosing;
-                    },
-                    else => {},
-                }
-            },
+                        state = .Text;
+                    }
+                },
 
-            .Comment => {
-                // Simplified: look for "-->"
-                if (c == '-' and i + 2 < html.len and html[i + 1] == '-' and html[i + 2] == '>') {
-                    const comment = html[start..i];
-                    std.debug.print("[COMMENT] {s}\n", .{comment});
-                    i += 2;
-                    start = i + 1;
-                    state = .Text;
-                }
-            },
-
-            .Doctype => {
-                if (c == '>') {
-                    const doctype = html[start..i];
-                    std.debug.print("[DOCTYPE] {s}\n", .{doctype});
-                    start = i + 1;
-                    state = .Text;
-                }
-            },
-
-            .Error => {
-                std.debug.panic("Tokenization error at character '{c}' (index {})\n", .{ c, i });
-            },
+                .Error => {
+                    std.debug.panic("Tokenization error at character '{c}' (index {})\n", .{ c, i });
+                },
+            }
+            i += 1;
         }
 
-        // std.debug.print("State: {} --- Char: {c}\n", .{ state, c });
-        i += 1;
-    }
+        // Emit any remaining text
+        if (state == .Text and i > start) {
+            const text = html[start..i];
+            if (text.len > 0)
+                try current_token_list.append(allocator, .{ .text = text });
+        }
 
-    // debug info
-    // std.debug.print("Token Array \"{s}\"\n", .{tokenList.items});
-    std.debug.print("Token Array:\n", .{});
-    std.debug.print("[", .{});
-    for (tokenList.items) |tkn| {
-        std.debug.print("{s}, ", .{tkn.text});
-    }
-    std.debug.print("]", .{});
-
-    // Emit any remaining text
-    if (state == .Text and i > start) {
-        std.debug.print("[TEXT] \"{s}\"\n", .{html[start..i]});
-    }
-}
-
-/// Converts raw HTML into a stream of tokens (start/end tags, text, comments, doctype).
-///
-/// ### Why a tokenizer?
-/// The parser needs a structured, low‑level representation of the document.
-/// By decoupling tokenization from parsing, we avoid mixing character‑by‑character
-/// logic with tree‑building logic, making each phase simpler and testable in isolation.
-///
-/// ### Why a state machine?
-/// HTML is not regular; constructs like attributes, quoted values, and comments
-/// require contextual awareness. An explicit state machine (`State` enum) processes
-/// the input in one forward pass without backtracking, which is both efficient
-/// and matches the HTML5 tokenization algorithm.
-///
-/// ---
-/// The tokenizer does **not** validate or normalise data (e.g., entity decoding).
-/// Those tasks belong to the parser, keeping the tokenizer focused on lexical analysis.
-const Tokenizer = struct {
-    pub fn tokenizeHtml(html: []const u8) !void {
-        _ = html;
-        @compileError("Tokenizer not implemented yet");
+        return current_token_list;
     }
 };
+
+test "tokenize html and show tokens" {
+    const html = html_hard;
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, html);
+    defer {
+        // dealloc memory for every open tag's attributes
+        for (tokens.items) |token| {
+            switch (token) {
+                .tag_open => |open_tag| allocator.free(open_tag.attributes),
+                else => {},
+            }
+        }
+        tokens.deinit(allocator);
+    }
+
+    for (tokens.items) |token| {
+        switch (token) {
+            .text => |t| std.debug.print("TEXT: {s}\n", .{t}),
+            .tag_open => |o| std.debug.print("OPEN: {s} (self_closing={})\n", .{ o.name, o.self_closing }),
+            .tag_close => |c| std.debug.print("CLOSE: {s}\n", .{c}),
+            .comment => |c| std.debug.print("COMMENT: {s}\n", .{c}),
+            .doctype => |d| std.debug.print("DOCTYPE: {s}\n", .{d}),
+        }
+    }
+
+    std.debug.print("Token count: {}\n", .{tokens.items.len});
+}
