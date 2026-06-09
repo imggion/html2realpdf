@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const html = @import("html.zig");
+const tokenizer = html.Tokenizer;
 
 const html2realpdf = @import("html2realpdf");
 
@@ -15,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // Main Start
-    try html.tokenizeHtml(html.html_hard);
+    _ = try tokenizer.tokenizeHtml(arena, html.html_hard);
 
     // In order to do I/O operations need an `Io` instance.
     const io = init.io;
