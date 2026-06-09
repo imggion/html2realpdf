@@ -1,0 +1,108 @@
+const std = @import("std");
+
+pub const html_simple =
+    \\ <!DOCTYPE html>
+    \\ <html>
+    \\ <body>
+    \\ 
+    \\ <h1>My First Heading</h1>
+    \\ <p>My first paragraph.</p>
+    \\ 
+    \\ </body>
+    \\ </html>
+;
+
+const TagOpen = struct {
+    name: []const u8,
+    attributes: []const Attribute,
+    self_closing: bool,
+};
+
+const Token = union(enum) {
+    text: []const u8, // input slice
+    tag_open: TagOpen,
+    tag_close: []const u8,
+    comment: []const u8,
+    doctype: []const u8,
+};
+
+const Attribute = struct {
+    name: []const u8,
+    value: ?[]const u8, // null if boolean (es. disabled)
+};
+
+const State = enum {
+    Text,
+    TagOpen,
+    TagName,
+    TagCloseName,
+    AttributeName,
+    AttributeValue,
+    Comment,
+    Doctype,
+};
+
+pub fn tokenizeHtml(html: []const u8) void {
+    var state: State = .Text;
+    var i: usize = 0;
+
+    while (i < html.len) {
+        const c = html[i];
+
+        switch (state) {
+            .Text => {
+                if (c == '<') {
+                    state = .TagOpen;
+                } else {
+                    state = .Text;
+                }
+            },
+            .TagOpen => {
+                state = switch (c) {
+                    '/' => .TagCloseName,
+                    '!' => .Doctype, // or Doctype, but let's keep it simple
+                    'a'...'z', 'A'...'Z' => .TagName,
+                    else => .Text, // invalid tag, treat as text
+                };
+            },
+            .TagName => {
+                state = switch (c) {
+                    '>', '/' => .TagCloseName,
+                    // 1. Estrai nome tag: html[start..i]
+                    // 2. Emetti token tag_open
+                    // 3. Se c == '/' aspetta prossimo '>' (self-closing)
+                    // 4. state = .Text
+                    ' ', '\t', '\n' => .AttributeName,
+                    // Fine del nome, iniziano attributi!
+                    // 1. Estrai nome tag: html[start..i]
+                    // 2. state = .AttributeName
+                    // 3. start = i + 1 (per prossimo attributo)
+                    else => .TagName,
+                };
+            },
+            .TagCloseName => {
+                state = switch (c) {
+                    '>' => .Text,
+                    else => .TagCloseName,
+                };
+            },
+            .AttributeName => {},
+            .AttributeValue => {},
+            .Comment => {
+                state = switch (c) {
+                    '-' => .Comment, // could be comment end if we see two in a row, but let's keep it simple
+                    '>' => .Text, // invalid comment, treat as text
+                    else => .Comment,
+                };
+            },
+            .Doctype => {
+                state = switch (c) {
+                    '>' => .Text,
+                    else => .Doctype,
+                };
+            },
+        }
+        std.debug.print("State: {} --- Char: {c}\n", .{ state, c });
+        i += 1;
+    }
+}

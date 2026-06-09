@@ -1,0 +1,16 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+/build/
+/build-*/
+/docgen_tmp/
+
+# Legacy cache directory (pre-0.16.0)
+zig-cache/
+
+# Package manager lock file
+build.zig.lock
+
+# ZLS (Zig Language Server) temporary files
+.*.zig
+.*.zon
