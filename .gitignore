@@ -14,3 +14,6 @@ build.zig.lock
 # ZLS (Zig Language Server) temporary files
 .*.zig
 .*.zon
+
+# Personal docs
+TODO.md
