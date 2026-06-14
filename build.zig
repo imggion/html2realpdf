@@ -68,6 +68,8 @@ pub fn build(b: *std.Build) void {
         "alloc",
         "free",
         "tokenize_html",
+        "dom_tree_html",
+        "dom_tree_output_len",
     };
 
     const wasm = b.addExecutable(.{
