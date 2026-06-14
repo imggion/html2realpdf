@@ -1,9 +1,8 @@
 const std = @import("std");
 const Io = std.Io;
-const html = @import("html.zig");
-const tokenizer = html.Tokenizer;
-
 const html2realpdf = @import("html2realpdf");
+const html = html2realpdf.html;
+const tokenizer = html.Tokenizer;
 
 pub fn main(init: std.process.Init) !void {
     // This is appropriate for anything that lives as long as the process.
