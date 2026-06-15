@@ -10,13 +10,9 @@ pub const Document = struct {
 
     pub fn deinit(self: *Document, allocator: std.mem.Allocator) void {
         for (self.nodes.items) |node| {
-            switch (node.kind) {
-                .element => |element| {
-                    if (element.attributes.len > 0) {
-                        allocator.free(element.attributes);
-                    }
-                },
-                else => {},
+            if (node.kind == .element) {
+                const element = node.kind.element;
+                if (element.attributes.len > 0) allocator.free(element.attributes);
             }
         }
 
