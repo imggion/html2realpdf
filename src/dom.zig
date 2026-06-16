@@ -22,6 +22,33 @@ pub const Document = struct {
     pub fn dump(self: *const Document, writer: *std.Io.Writer) !void {
         try dumpNode(self, self.root, 0, writer);
     }
+
+    fn appendNode(
+        self: *Document,
+        allocator: std.mem.Allocator,
+        kind: NodeKind,
+        parent: NodeId,
+    ) !NodeId {
+        const node_id = self.nodes.items.len;
+        try self.nodes.append(allocator, .{ .kind = kind, .parent = parent });
+        self.appendChild(parent, node_id);
+        return node_id;
+    }
+
+    fn appendChild(self: *Document, parent: NodeId, child: NodeId) void {
+        const last_child = self.nodes.items[parent].last_child;
+
+        self.nodes.items[child].parent = parent;
+        self.nodes.items[child].prev_sibling = last_child;
+
+        if (last_child) |last_child_id| {
+            self.nodes.items[last_child_id].next_sibling = child;
+        } else {
+            self.nodes.items[parent].first_child = child;
+        }
+
+        self.nodes.items[parent].last_child = child;
+    }
 };
 
 pub const Node = struct {
@@ -95,18 +122,18 @@ pub const Parser = struct {
             switch (token) {
                 .text => |text| {
                     if (text.len > 0) {
-                        _ = try appendNode(&document, allocator, .{ .text = text }, stack.items[stack.items.len - 1]);
+                        _ = try document.appendNode(allocator, .{ .text = text }, stack.items[stack.items.len - 1]);
                     }
                 },
                 .tag_open => |open_tag| {
-                    closeImpliedElements(&document, &stack, open_tag.name);
+                    const tag = tagFromName(open_tag.name);
+                    closeImpliedElements(&document, &stack, tag);
 
                     const attributes = try copyAttributes(allocator, open_tag.attributes);
-                    const node_id = appendNode(
-                        &document,
+                    const node_id = document.appendNode(
                         allocator,
                         .{ .element = .{
-                            .tag = tagFromName(open_tag.name),
+                            .tag = tag,
                             .name = open_tag.name,
                             .attributes = attributes,
                         } },
@@ -129,6 +156,63 @@ pub const Parser = struct {
         }
 
         return document;
+    }
+
+    fn copyAttributes(allocator: std.mem.Allocator, attributes: []const html.Attribute) ![]const html.Attribute {
+        if (attributes.len == 0) return &.{};
+
+        const copied = try allocator.alloc(html.Attribute, attributes.len);
+        @memcpy(copied, attributes);
+        return copied;
+    }
+
+    fn closeElement(document: *const Document, stack: *std.ArrayList(NodeId), name: []const u8) void {
+        var index = stack.items.len;
+
+        while (index > 1) {
+            index -= 1;
+
+            const node_id = stack.items[index];
+            switch (document.nodes.items[node_id].kind) {
+                .element => |element| {
+                    if (eqlTag(element.name, name)) {
+                        stack.shrinkRetainingCapacity(index);
+                        return;
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn closeImpliedElements(document: *const Document, stack: *std.ArrayList(NodeId), incoming_tag: Tag) void {
+        switch (incoming_tag) {
+            .p, .li => popCurrentIf(document, stack, incoming_tag),
+            .tr => {
+                popCurrentIf(document, stack, .td);
+                popCurrentIf(document, stack, .th);
+                popCurrentIf(document, stack, .tr);
+            },
+            .td, .th => {
+                popCurrentIf(document, stack, .td);
+                popCurrentIf(document, stack, .th);
+            },
+            else => {},
+        }
+    }
+
+    fn popCurrentIf(document: *const Document, stack: *std.ArrayList(NodeId), tag: Tag) void {
+        if (stack.items.len <= 1) return;
+
+        const node_id = stack.items[stack.items.len - 1];
+        switch (document.nodes.items[node_id].kind) {
+            .element => |element| {
+                if (element.tag == tag) {
+                    stack.shrinkRetainingCapacity(stack.items.len - 1);
+                }
+            },
+            else => {},
+        }
     }
 };
 
@@ -174,99 +258,6 @@ pub fn isVoidElementName(name: []const u8) bool {
         eqlTag(name, "wbr");
 }
 
-fn appendNode(
-    document: *Document,
-    allocator: std.mem.Allocator,
-    kind: NodeKind,
-    parent: NodeId,
-) !NodeId {
-    const node_id = document.nodes.items.len;
-    try document.nodes.append(allocator, .{ .kind = kind, .parent = parent });
-    appendChild(document, parent, node_id);
-    return node_id;
-}
-
-fn appendChild(document: *Document, parent: NodeId, child: NodeId) void {
-    const last_child = document.nodes.items[parent].last_child;
-
-    document.nodes.items[child].parent = parent;
-    document.nodes.items[child].prev_sibling = last_child;
-
-    if (last_child) |last_child_id| {
-        document.nodes.items[last_child_id].next_sibling = child;
-    } else {
-        document.nodes.items[parent].first_child = child;
-    }
-
-    document.nodes.items[parent].last_child = child;
-}
-
-fn copyAttributes(allocator: std.mem.Allocator, attributes: []const html.Attribute) ![]const html.Attribute {
-    if (attributes.len == 0) return &.{};
-
-    const copied = try allocator.alloc(html.Attribute, attributes.len);
-    @memcpy(copied, attributes);
-    return copied;
-}
-
-fn closeElement(document: *const Document, stack: *std.ArrayList(NodeId), name: []const u8) void {
-    var index = stack.items.len;
-
-    while (index > 1) {
-        index -= 1;
-
-        const node_id = stack.items[index];
-        switch (document.nodes.items[node_id].kind) {
-            .element => |element| {
-                if (eqlTag(element.name, name)) {
-                    stack.shrinkRetainingCapacity(index);
-                    return;
-                }
-            },
-            else => {},
-        }
-    }
-}
-
-fn closeImpliedElements(document: *const Document, stack: *std.ArrayList(NodeId), incoming_name: []const u8) void {
-    if (eqlTag(incoming_name, "p")) {
-        closeCurrentElement(document, stack, "p");
-    } else if (eqlTag(incoming_name, "li")) {
-        closeCurrentElement(document, stack, "li");
-    } else if (eqlTag(incoming_name, "tr")) {
-        closeCurrentTableCell(document, stack);
-        closeCurrentElement(document, stack, "tr");
-    } else if (eqlTag(incoming_name, "td") or eqlTag(incoming_name, "th")) {
-        closeCurrentTableCell(document, stack);
-    }
-}
-
-fn closeCurrentTableCell(document: *const Document, stack: *std.ArrayList(NodeId)) void {
-    if (currentElementName(document, stack)) |name| {
-        if (eqlTag(name, "td") or eqlTag(name, "th")) {
-            stack.shrinkRetainingCapacity(stack.items.len - 1);
-        }
-    }
-}
-
-fn closeCurrentElement(document: *const Document, stack: *std.ArrayList(NodeId), name: []const u8) void {
-    if (currentElementName(document, stack)) |current_name| {
-        if (eqlTag(current_name, name)) {
-            stack.shrinkRetainingCapacity(stack.items.len - 1);
-        }
-    }
-}
-
-fn currentElementName(document: *const Document, stack: *const std.ArrayList(NodeId)) ?[]const u8 {
-    if (stack.items.len <= 1) return null;
-
-    const node_id = stack.items[stack.items.len - 1];
-    switch (document.nodes.items[node_id].kind) {
-        .element => |element| return element.name,
-        else => return null,
-    }
-}
-
 fn dumpNode(document: *const Document, node_id: NodeId, depth: usize, writer: *std.Io.Writer) !void {
     var i: usize = 0;
     while (i < depth) : (i += 1) {
@@ -300,6 +291,7 @@ fn dumpAttributes(attributes: []const html.Attribute, writer: *std.Io.Writer) !v
     }
 }
 
+/// Just a readable way to use `std.ascii.eqlIgnoreCase`
 fn eqlTag(a: []const u8, b: []const u8) bool {
     return std.ascii.eqlIgnoreCase(a, b);
 }
