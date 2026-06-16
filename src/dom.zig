@@ -99,6 +99,8 @@ pub const Parser = struct {
                     }
                 },
                 .tag_open => |open_tag| {
+                    closeImpliedElements(&document, &stack, open_tag.name);
+
                     const attributes = try copyAttributes(allocator, open_tag.attributes);
                     const node_id = appendNode(
                         &document,
@@ -226,6 +228,45 @@ fn closeElement(document: *const Document, stack: *std.ArrayList(NodeId), name: 
     }
 }
 
+fn closeImpliedElements(document: *const Document, stack: *std.ArrayList(NodeId), incoming_name: []const u8) void {
+    if (eqlTag(incoming_name, "p")) {
+        closeCurrentElement(document, stack, "p");
+    } else if (eqlTag(incoming_name, "li")) {
+        closeCurrentElement(document, stack, "li");
+    } else if (eqlTag(incoming_name, "tr")) {
+        closeCurrentTableCell(document, stack);
+        closeCurrentElement(document, stack, "tr");
+    } else if (eqlTag(incoming_name, "td") or eqlTag(incoming_name, "th")) {
+        closeCurrentTableCell(document, stack);
+    }
+}
+
+fn closeCurrentTableCell(document: *const Document, stack: *std.ArrayList(NodeId)) void {
+    if (currentElementName(document, stack)) |name| {
+        if (eqlTag(name, "td") or eqlTag(name, "th")) {
+            stack.shrinkRetainingCapacity(stack.items.len - 1);
+        }
+    }
+}
+
+fn closeCurrentElement(document: *const Document, stack: *std.ArrayList(NodeId), name: []const u8) void {
+    if (currentElementName(document, stack)) |current_name| {
+        if (eqlTag(current_name, name)) {
+            stack.shrinkRetainingCapacity(stack.items.len - 1);
+        }
+    }
+}
+
+fn currentElementName(document: *const Document, stack: *const std.ArrayList(NodeId)) ?[]const u8 {
+    if (stack.items.len <= 1) return null;
+
+    const node_id = stack.items[stack.items.len - 1];
+    switch (document.nodes.items[node_id].kind) {
+        .element => |element| return element.name,
+        else => return null,
+    }
+}
+
 fn dumpNode(document: *const Document, node_id: NodeId, depth: usize, writer: *std.Io.Writer) !void {
     var i: usize = 0;
     while (i < depth) : (i += 1) {
@@ -335,6 +376,88 @@ test "parse mismatched closing tags tolerantly" {
 
     const text_id = document.nodes.items[p_id].first_child.?;
     try expectText(&document, text_id, "x");
+}
+
+test "auto-close paragraphs when another paragraph starts" {
+    const allocator = std.testing.allocator;
+    const source = "<div><p>one<p>two</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    var document = try Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    var buffer: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try document.dump(&writer);
+
+    const expected =
+        \\#document
+        \\  div
+        \\    p
+        \\      #text "one"
+        \\    p
+        \\      #text "two"
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "auto-close list items when another item starts" {
+    const allocator = std.testing.allocator;
+    const source = "<ul><li>one<li>two</ul>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    var document = try Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    var buffer: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try document.dump(&writer);
+
+    const expected =
+        \\#document
+        \\  ul
+        \\    li
+        \\      #text "one"
+        \\    li
+        \\      #text "two"
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "auto-close table cells and rows" {
+    const allocator = std.testing.allocator;
+    const source = "<table><tr><td>a<td>b<tr><th>h</table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    var document = try Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try document.dump(&writer);
+
+    const expected =
+        \\#document
+        \\  table
+        \\    tr
+        \\      td
+        \\        #text "a"
+        \\      td
+        \\        #text "b"
+        \\    tr
+        \\      th
+        \\        #text "h"
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "parse void elements without pushing them on the stack" {
