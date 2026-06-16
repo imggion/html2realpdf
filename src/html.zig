@@ -86,7 +86,8 @@ const State = enum {
     AttributeValueUnquoted,
     Comment,
     Doctype,
-    Error,
+    /// Mostly used for CSS
+    RawText,
 };
 
 pub const Tokenizer = struct {
@@ -97,6 +98,18 @@ pub const Tokenizer = struct {
         value: ?[]const u8,
     ) !void {
         if (name.*) |attr_name| {
+            if (attr_name.len == 0) {
+                name.* = null;
+                return;
+            }
+
+            for (attributes.items) |attribute| {
+                if (std.ascii.eqlIgnoreCase(attribute.name, attr_name)) {
+                    name.* = null;
+                    return;
+                }
+            }
+
             try attributes.append(allocator, .{ .name = attr_name, .value = value });
             name.* = null;
         }
@@ -123,15 +136,41 @@ pub const Tokenizer = struct {
         }
     }
 
+    fn rawTextEndTagLen(source: []const u8, index: usize, name: []const u8) ?usize {
+        if (index + 2 + name.len > source.len) return null;
+        if (source[index] != '<' or source[index + 1] != '/') return null;
+        if (!std.ascii.eqlIgnoreCase(source[index + 2 .. index + 2 + name.len], name)) return null;
+
+        var i = index + 2 + name.len;
+        while (i < source.len and isHtmlWhitespace(source[i])) : (i += 1) {}
+
+        if (i >= source.len or source[i] != '>') return null;
+        return i - index + 1;
+    }
+
+    /// Jump to RawText if the opened tag is `style`. Default state is `.Text`.
+    fn enterTextOrRawText(tag_name: ?[]const u8, raw_text_tag: *?[]const u8, state: *State) void {
+        state.* = .Text;
+        if (tag_name) |name| {
+            if (std.ascii.eqlIgnoreCase(name, "style")) {
+                raw_text_tag.* = name;
+                state.* = .RawText;
+            }
+        }
+    }
+
     /// Tokenize a raw HTML and return a list of emitted tokens
     pub fn tokenizeHtml(allocator: std.mem.Allocator, html: []const u8) !std.ArrayList(Token) {
         var state: State = .Text;
         var i: usize = 0;
         var start: usize = 0;
+        var markup_start: usize = 0;
 
+        var raw_text_tag: ?[]const u8 = null;
         var current_tag_name: ?[]const u8 = null;
         var current_attrs_name: ?[]const u8 = null;
         var current_attributes = try std.ArrayList(Attribute).initCapacity(allocator, 0);
+        defer current_attributes.deinit(allocator);
         var current_token_list = try std.ArrayList(Token).initCapacity(allocator, 0);
 
         while (i < html.len) {
@@ -139,12 +178,13 @@ pub const Tokenizer = struct {
 
             switch (state) {
                 .Text => {
-                    if (c == '<') {
+                    if (c == '<' and canStartMarkup(html, i)) {
                         if (i > start) {
                             const text = html[start..i];
                             if (text.len > 0)
                                 try current_token_list.append(allocator, .{ .text = text });
                         }
+                        markup_start = i;
                         start = i + 1;
                         state = .TagOpen;
                     }
@@ -153,6 +193,7 @@ pub const Tokenizer = struct {
                 .TagOpen => {
                     switch (c) {
                         '/' => {
+                            current_tag_name = null;
                             start = i + 1;
                             state = .EndTagName;
                         },
@@ -165,11 +206,8 @@ pub const Tokenizer = struct {
                                 state = .Doctype;
                             }
                         },
-                        'a'...'z', 'A'...'Z' => {
-                            state = .TagName;
-                        },
                         else => {
-                            state = .Text;
+                            state = .TagName;
                         },
                     }
                     if (state == .TagName) start = i;
@@ -181,42 +219,36 @@ pub const Tokenizer = struct {
                         current_attributes.clearRetainingCapacity();
                     }
                     switch (c) {
-                        ' ', '\t', '\n' => {
+                        else => if (isHtmlWhitespace(c)) {
                             current_tag_name = html[start..i];
                             start = i + 1;
                             state = .BeforeAttributeName;
-                        },
-                        '>' => {
+                        } else if (c == '>') {
                             current_tag_name = html[start..i];
+                            const raw_tag_name = current_tag_name;
                             try appendTagOpen(allocator, &current_token_list, &current_attributes, &current_tag_name, false);
                             start = i + 1;
-                            state = .Text;
-                        },
-                        '/' => {
+                            enterTextOrRawText(raw_tag_name, &raw_text_tag, &state);
+                        } else if (c == '/') {
                             current_tag_name = html[start..i];
                             start = i + 1;
                             state = .SelfClosing;
                         },
-                        'a'...'z', 'A'...'Z', '0'...'9', '-' => {},
-                        else => state = .Error,
                     }
                 },
 
                 .EndTagName => {
                     switch (c) {
-                        '/' => {
-                            start = i + 1;
-                            state = .EndTagName;
-                        },
                         '>' => {
-                            const name = html[start..i];
+                            const name = current_tag_name orelse html[start..i];
                             try current_token_list.append(allocator, .{ .tag_close = name });
+                            current_tag_name = null;
                             start = i + 1;
                             state = .Text;
                         },
-                        ' ', '\t', '\n' => {},
-                        'a'...'z', 'A'...'Z', '0'...'9', '-' => {},
-                        else => state = .Error,
+                        else => if (isHtmlWhitespace(c) and current_tag_name == null) {
+                            current_tag_name = html[start..i];
+                        },
                     }
                 },
 
@@ -225,88 +257,83 @@ pub const Tokenizer = struct {
                         try appendTagOpen(allocator, &current_token_list, &current_attributes, &current_tag_name, true);
                         start = i + 1;
                         state = .Text;
+                    } else if (isHtmlWhitespace(c)) {
+                        state = .SelfClosing;
                     } else {
-                        state = .Error;
+                        state = .BeforeAttributeName;
                     }
                 },
 
                 .BeforeAttributeName => {
                     switch (c) {
-                        ' ', '\t', '\n' => {},
                         '>' => {
+                            const raw_tag_name = current_tag_name;
                             try appendTagOpen(allocator, &current_token_list, &current_attributes, &current_tag_name, false);
-                            state = .Text;
                             start = i + 1;
+                            enterTextOrRawText(raw_tag_name, &raw_text_tag, &state);
                         },
                         '/' => state = .SelfClosing,
-                        'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {
+                        else => if (isHtmlWhitespace(c)) {} else {
                             start = i;
                             state = .AttributeName;
                         },
-                        else => state = .Error,
                     }
                 },
 
                 .AttributeName => {
                     switch (c) {
-                        ' ', '\t', '\n' => {
+                        else => if (isHtmlWhitespace(c)) {
                             const name = html[start..i];
                             current_attrs_name = name;
                             start = i + 1;
                             state = .AfterAttributeName;
-                        },
-                        '=' => {
+                        } else if (c == '=') {
                             const name = html[start..i];
                             current_attrs_name = name;
                             start = i + 1;
                             state = .BeforeAttributeValue;
-                        },
-                        '>' => {
+                        } else if (c == '>') {
                             const name = html[start..i];
                             current_attrs_name = name;
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, null);
+                            const raw_tag_name = current_tag_name;
                             try appendTagOpen(allocator, &current_token_list, &current_attributes, &current_tag_name, false);
                             start = i + 1;
-                            state = .Text;
-                        },
-                        '/' => {
+                            enterTextOrRawText(raw_tag_name, &raw_text_tag, &state);
+                        } else if (c == '/') {
                             const name = html[start..i];
                             current_attrs_name = name;
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, null);
                             start = i + 1;
                             state = .SelfClosing;
                         },
-                        'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
-                        else => state = .Error,
                     }
                 },
 
                 .AfterAttributeName => {
                     switch (c) {
-                        ' ', '\t', '\n' => {},
                         '=' => state = .BeforeAttributeValue,
-                        'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {
-                            try appendAttribute(allocator, &current_attributes, &current_attrs_name, null);
-                            start = i;
-                            state = .AttributeName;
-                        },
                         '>' => {
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, null);
+                            const raw_tag_name = current_tag_name;
                             try appendTagOpen(allocator, &current_token_list, &current_attributes, &current_tag_name, false);
-                            state = .Text;
                             start = i + 1;
+                            enterTextOrRawText(raw_tag_name, &raw_text_tag, &state);
                         },
                         '/' => {
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, null);
                             state = .SelfClosing;
                         },
-                        else => state = .Error,
+                        else => if (isHtmlWhitespace(c)) {} else {
+                            try appendAttribute(allocator, &current_attributes, &current_attrs_name, null);
+                            start = i;
+                            state = .AttributeName;
+                        },
                     }
                 },
 
                 .BeforeAttributeValue => {
                     switch (c) {
-                        ' ', '\t', '\n' => {},
                         '"' => {
                             start = i + 1;
                             state = .AttributeValueDouble;
@@ -317,15 +344,16 @@ pub const Tokenizer = struct {
                         },
                         '>' => {
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, null);
+                            const raw_tag_name = current_tag_name;
                             try appendTagOpen(allocator, &current_token_list, &current_attributes, &current_tag_name, false);
-                            state = .Text;
                             start = i + 1;
+                            enterTextOrRawText(raw_tag_name, &raw_text_tag, &state);
                         },
                         '/' => {
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, null);
                             state = .SelfClosing;
                         },
-                        else => {
+                        else => if (isHtmlWhitespace(c)) {} else {
                             start = i;
                             state = .AttributeValueUnquoted;
                         },
@@ -352,26 +380,24 @@ pub const Tokenizer = struct {
 
                 .AttributeValueUnquoted => {
                     switch (c) {
-                        ' ', '\t', '\n' => {
+                        else => if (isHtmlWhitespace(c)) {
                             const value = html[start..i];
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, value);
                             start = i + 1;
                             state = .BeforeAttributeName;
-                        },
-                        '>' => {
+                        } else if (c == '>') {
                             const value = html[start..i];
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, value);
+                            const raw_tag_name = current_tag_name;
                             try appendTagOpen(allocator, &current_token_list, &current_attributes, &current_tag_name, false);
                             start = i + 1;
-                            state = .Text;
-                        },
-                        '/' => {
+                            enterTextOrRawText(raw_tag_name, &raw_text_tag, &state);
+                        } else if (c == '/') {
                             const value = html[start..i];
                             try appendAttribute(allocator, &current_attributes, &current_attrs_name, value);
                             start = i + 1;
                             state = .SelfClosing;
                         },
-                        else => {},
                     }
                 },
 
@@ -393,9 +419,24 @@ pub const Tokenizer = struct {
                         state = .Text;
                     }
                 },
-
-                .Error => {
-                    std.debug.panic("Tokenization error at character '{c}' (index {})\n", .{ c, i });
+                .RawText => {
+                    if (raw_text_tag) |tag_name| {
+                        if (c == '<') {
+                            if (rawTextEndTagLen(html, i, tag_name)) |end_len| {
+                                if (i > start) {
+                                    try current_token_list.append(
+                                        allocator,
+                                        .{ .text = html[start..i] },
+                                    );
+                                }
+                                try current_token_list.append(allocator, .{ .tag_close = tag_name });
+                                i += end_len - 1;
+                                start = i + 1;
+                                raw_text_tag = null;
+                                state = .Text;
+                            }
+                        }
+                    }
                 },
             }
             i += 1;
@@ -406,11 +447,29 @@ pub const Tokenizer = struct {
             const text = html[start..i];
             if (text.len > 0)
                 try current_token_list.append(allocator, .{ .text = text });
+        } else if (state == .RawText and i > start) {
+            try current_token_list.append(allocator, .{ .text = html[start..i] });
+        } else if (state != .Text and i > markup_start) {
+            try current_token_list.append(allocator, .{ .text = html[markup_start..i] });
         }
 
         return current_token_list;
     }
 };
+
+fn isHtmlWhitespace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C;
+}
+
+fn canStartMarkup(source: []const u8, index: usize) bool {
+    if (index + 1 >= source.len) return false;
+
+    const next = source[index + 1];
+    if (std.ascii.isAlphabetic(next) or next == '!') return true;
+    if (next == '/') return index + 2 < source.len and std.ascii.isAlphabetic(source[index + 2]);
+
+    return false;
+}
 
 pub fn dumpTokens(tokens: []const Token, writer: *std.Io.Writer) !void {
     for (tokens) |token| {
@@ -451,6 +510,9 @@ fn deinitTokens(allocator: std.mem.Allocator, tokens: *std.ArrayList(Token)) voi
     tokens.deinit(allocator);
 }
 
+// ========================================================================================
+// TESTS
+// ========================================================================================
 test "tokenize open tags with attributes" {
     const source = "<div class=\"x\" data-id=1><input disabled /></div>";
     const allocator = std.testing.allocator;
@@ -490,6 +552,157 @@ test "tokenize open tags with attributes" {
     }
 }
 
+test "keep invalid less-than as text" {
+    const source = "2 < 3";
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.items.len);
+
+    switch (tokens.items[0]) {
+        .text => |text| try std.testing.expectEqualStrings(source, text),
+        else => return error.ExpectedText,
+    }
+}
+
+test "tokenize html whitespace and permissive attribute names" {
+    const source = "<div\rdata-x=1\x0C@bad=x>ok</div>";
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    try std.testing.expectEqual(@as(usize, 3), tokens.items.len);
+
+    switch (tokens.items[0]) {
+        .tag_open => |open_tag| {
+            try std.testing.expectEqualStrings("div", open_tag.name);
+            try std.testing.expectEqual(@as(usize, 2), open_tag.attributes.len);
+            try std.testing.expectEqualStrings("data-x", open_tag.attributes[0].name);
+            try std.testing.expectEqualStrings("1", open_tag.attributes[0].value.?);
+            try std.testing.expectEqualStrings("@bad", open_tag.attributes[1].name);
+            try std.testing.expectEqualStrings("x", open_tag.attributes[1].value.?);
+        },
+        else => return error.ExpectedTagOpen,
+    }
+}
+
+test "ignore duplicate attributes" {
+    const source = "<input class=x class=y CLASS=z>";
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.items.len);
+
+    switch (tokens.items[0]) {
+        .tag_open => |open_tag| {
+            try std.testing.expectEqual(@as(usize, 1), open_tag.attributes.len);
+            try std.testing.expectEqualStrings("class", open_tag.attributes[0].name);
+            try std.testing.expectEqualStrings("x", open_tag.attributes[0].value.?);
+        },
+        else => return error.ExpectedTagOpen,
+    }
+}
+
+test "trim end tag whitespace" {
+    const source = "<div>x</div >";
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    try std.testing.expectEqual(@as(usize, 3), tokens.items.len);
+
+    switch (tokens.items[2]) {
+        .tag_close => |name| try std.testing.expectEqualStrings("div", name),
+        else => return error.ExpectedTagClose,
+    }
+}
+
+test "keep incomplete tag as text" {
+    const source = "<div class=";
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.items.len);
+
+    switch (tokens.items[0]) {
+        .text => |text| try std.testing.expectEqualStrings(source, text),
+        else => return error.ExpectedText,
+    }
+}
+
+test "tokenize style content as raw text" {
+    const source = "<style>body > p { color: red; }</style>";
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    try std.testing.expectEqual(@as(usize, 3), tokens.items.len);
+
+    switch (tokens.items[0]) {
+        .tag_open => |open_tag| try std.testing.expectEqualStrings("style", open_tag.name),
+        else => return error.ExpectedTagOpen,
+    }
+
+    switch (tokens.items[1]) {
+        .text => |text| try std.testing.expectEqualStrings("body > p { color: red; }", text),
+        else => return error.ExpectedText,
+    }
+
+    switch (tokens.items[2]) {
+        .tag_close => |name| try std.testing.expectEqualStrings("style", name),
+        else => return error.ExpectedTagClose,
+    }
+}
+
+test "do not parse less-than inside style" {
+    const source = "<style>.x::before { content: \"<\"; }</style>";
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    try std.testing.expectEqual(@as(usize, 3), tokens.items.len);
+
+    switch (tokens.items[1]) {
+        .text => |text| try std.testing.expectEqualStrings(".x::before { content: \"<\"; }", text),
+        else => return error.ExpectedText,
+    }
+}
+
+test "tokenize uppercase style as raw text" {
+    const source = "<STYLE>.x{color:red}</STYLE >";
+    const allocator = std.testing.allocator;
+
+    var tokens = try Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    try std.testing.expectEqual(@as(usize, 3), tokens.items.len);
+
+    switch (tokens.items[0]) {
+        .tag_open => |open_tag| try std.testing.expectEqualStrings("STYLE", open_tag.name),
+        else => return error.ExpectedTagOpen,
+    }
+
+    switch (tokens.items[1]) {
+        .text => |text| try std.testing.expectEqualStrings(".x{color:red}", text),
+        else => return error.ExpectedText,
+    }
+
+    switch (tokens.items[2]) {
+        .tag_close => |name| try std.testing.expectEqualStrings("STYLE", name),
+        else => return error.ExpectedTagClose,
+    }
+}
+
 test "dump tokenizer tokens" {
     const source = "<div class=\"x\" data-id=1><input disabled /></div>";
     const allocator = std.testing.allocator;
@@ -513,7 +726,7 @@ test "dump tokenizer tokens" {
 test "debug dump tokenizer tokens" {
     if (!std.testing.environ.containsUnemptyConstant("HTML2REALPDF_DEBUG_TOKENIZER")) return;
 
-    const source = "<div class=\"x\"><p>Hello <strong>world</strong></p><br/></div>";
+    const source = "<style>body > p { color: red; }.x::before { content: \"<\"; }</style><div class=\"x\"><p>Hello <strong>world</strong></p><br/></div>";
     const allocator = std.testing.allocator;
 
     var tokens = try Tokenizer.tokenizeHtml(allocator, source);

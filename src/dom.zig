@@ -429,7 +429,7 @@ test "debug dump DOM tree" {
     if (!std.testing.environ.containsUnemptyConstant("HTML2REALPDF_DEBUG_DOM")) return;
 
     const allocator = std.testing.allocator;
-    const source = "<div><p>Hello <strong>world</strong></p><br><img src=\"x.png\"></div>";
+    const source = "<style>body > p { color: red; }.x::before { content: \"<\"; }</style><div class=\"x\"><p>Hello <strong>world</strong></p><br><img src=\"x.png\"></div>";
 
     var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
     defer deinitTokens(allocator, &tokens);
