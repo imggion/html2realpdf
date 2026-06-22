@@ -70,6 +70,8 @@ pub fn build(b: *std.Build) void {
         "tokenize_html",
         "dom_tree_html",
         "dom_tree_output_len",
+        "box_tree_html",
+        "box_tree_output_len",
     };
 
     const wasm = b.addExecutable(.{
