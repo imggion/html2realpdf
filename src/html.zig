@@ -1,5 +1,12 @@
+//! Tolerant HTML tokenizer used by the parser and WASM smoke tests.
+//!
+//! Token text and tag/name/value slices point into the original input. Only the
+//! `tag_open.attributes` slices are allocator-owned, so callers must free those
+//! slices when they are done with the returned token list.
+
 const std = @import("std");
 
+/// Small fixture kept near the tokenizer so CLI and tests can share it.
 pub const html_simple =
     \\ <!DOCTYPE html>
     \\ <html>
@@ -11,6 +18,7 @@ pub const html_simple =
     \\ </html>
 ;
 
+/// Broader fixture for parser/debug work, not a conformance corpus.
 pub const html_hard =
     \\ <!DOCTYPE html>
     \\ <html lang="it">
@@ -52,17 +60,27 @@ pub const html_hard =
     \\ </html>
 ;
 
+/// Attribute names and values borrow from the input HTML.
+///
+/// The tokenizer allocates the containing slice for each open tag, but does not
+/// duplicate the bytes of individual names or values.
 pub const Attribute = struct {
     name: []const u8,
     value: ?[]const u8,
 };
 
+/// Open-tag payload kept separate from `Token` so attribute ownership is clear.
 pub const TagOpen = struct {
     name: []const u8,
     attributes: []const Attribute,
     self_closing: bool,
 };
 
+/// Token stream consumed by the DOM parser.
+///
+/// Comments and doctypes are preserved here even though the current DOM parser
+/// ignores them; keeping them at the token layer avoids losing source facts too
+/// early in the pipeline.
 pub const Token = union(enum) {
     text: []const u8,
     tag_open: TagOpen,
@@ -71,6 +89,7 @@ pub const Token = union(enum) {
     doctype: []const u8,
 };
 
+/// Explicit tokenizer states keep recovery behavior readable.
 const State = enum {
     Text,
     TagOpen,
@@ -86,11 +105,19 @@ const State = enum {
     AttributeValueUnquoted,
     Comment,
     Doctype,
-    /// Mostly used for CSS
+    /// Raw text is needed because CSS may contain `<` that is not HTML markup.
     RawText,
 };
 
+/// Namespace for tokenizer routines.
+///
+/// Keeping the state machine here, instead of spreading helpers across modules,
+/// makes HTML recovery rules easier to audit as the parser grows.
 pub const Tokenizer = struct {
+    /// Keeps the first spelling of duplicate attributes.
+    ///
+    /// Browser parsers ignore later duplicates; doing the same here prevents the
+    /// DOM builder from having to resolve conflicting attributes later.
     fn appendAttribute(
         allocator: std.mem.Allocator,
         attributes: *std.ArrayList(Attribute),
@@ -115,6 +142,10 @@ pub const Tokenizer = struct {
         }
     }
 
+    /// Transfers the temporary attribute list into a token.
+    ///
+    /// The returned token owns that slice, then the tokenizer starts a fresh list
+    /// for the next tag without copying attribute name/value bytes.
     fn appendTagOpen(
         allocator: std.mem.Allocator,
         tokens: *std.ArrayList(Token),
@@ -136,6 +167,10 @@ pub const Tokenizer = struct {
         }
     }
 
+    /// Accepts forgiving raw-text end tags such as `</STYLE >`.
+    ///
+    /// This keeps style content opaque until the matching end tag instead of
+    /// trying to parse CSS-like text as HTML markup.
     fn rawTextEndTagLen(source: []const u8, index: usize, name: []const u8) ?usize {
         if (index + 2 + name.len > source.len) return null;
         if (source[index] != '<' or source[index + 1] != '/') return null;
@@ -148,7 +183,7 @@ pub const Tokenizer = struct {
         return i - index + 1;
     }
 
-    /// Jump to RawText if the opened tag is `style`. Default state is `.Text`.
+    /// Enters raw-text mode only for tags whose body should stay opaque here.
     fn enterTextOrRawText(tag_name: ?[]const u8, raw_text_tag: *?[]const u8, state: *State) void {
         state.* = .Text;
         if (tag_name) |name| {
@@ -159,7 +194,11 @@ pub const Tokenizer = struct {
         }
     }
 
-    /// Tokenize a raw HTML and return a list of emitted tokens
+    /// Converts an HTML byte slice into tokens without owning the source bytes.
+    ///
+    /// Malformed or incomplete markup is kept as text where possible. The caller
+    /// owns the returned `ArrayList` and every `tag_open.attributes` slice inside
+    /// it.
     pub fn tokenizeHtml(allocator: std.mem.Allocator, html: []const u8) !std.ArrayList(Token) {
         var state: State = .Text;
         var i: usize = 0;
@@ -442,7 +481,7 @@ pub const Tokenizer = struct {
             i += 1;
         }
 
-        // Emit any remaining text
+        // Preserve malformed trailing markup as text instead of dropping bytes.
         if (state == .Text and i > start) {
             const text = html[start..i];
             if (text.len > 0)
@@ -457,10 +496,15 @@ pub const Tokenizer = struct {
     }
 };
 
+/// HTML's whitespace set is smaller and more precise than general Unicode space.
 fn isHtmlWhitespace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C;
 }
 
+/// Rejects `<` that is ordinary text, such as `2 < 3`.
+///
+/// This cheap guard avoids turning common text into broken tags without adding a
+/// full HTML5 tokenizer front-end.
 fn canStartMarkup(source: []const u8, index: usize) bool {
     if (index + 1 >= source.len) return false;
 
@@ -471,6 +515,7 @@ fn canStartMarkup(source: []const u8, index: usize) bool {
     return false;
 }
 
+/// Debug helper used by tests and WASM-facing diagnostics.
 pub fn dumpTokens(tokens: []const Token, writer: *std.Io.Writer) !void {
     for (tokens) |token| {
         switch (token) {

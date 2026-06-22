@@ -1,13 +1,29 @@
+//! Tolerant DOM tree builder for the HTML token stream.
+//!
+//! The tree is stored flat and linked with `NodeId` values. That mirrors the Box
+//! Tree module, avoids recursive ownership, and makes later layout phases cheap
+//! to traverse without pointer lifetime traps.
+
 const std = @import("std");
 const html = @import("html.zig");
 
+/// Stable index into `Document.nodes`.
 pub const NodeId = usize;
 
+/// Parsed document plus the source bytes it borrows from.
+///
+/// Text, tag names, and attribute name/value bytes point back into `source`.
+/// Attribute slices are copied from tokenizer tokens so the document can outlive
+/// the token list, but it still does not own the original HTML bytes.
 pub const Document = struct {
     source: []const u8,
     nodes: std.ArrayList(Node),
     root: NodeId,
 
+    /// Frees node storage and copied attribute slices.
+    ///
+    /// The caller still owns `source`; deinit only releases allocations created
+    /// by `Parser.parse`.
     pub fn deinit(self: *Document, allocator: std.mem.Allocator) void {
         for (self.nodes.items) |node| {
             if (node.kind == .element) {
@@ -19,10 +35,15 @@ pub const Document = struct {
         self.nodes.deinit(allocator);
     }
 
+    /// Compact ASCII dump used by debug targets and structural tests.
     pub fn dump(self: *const Document, writer: *std.Io.Writer) !void {
         try dumpNode(self, self.root, 0, writer);
     }
 
+    /// Adds a node and links it immediately under its parent.
+    ///
+    /// Keeping this as the only construction path preserves sibling-link
+    /// invariants during parser recovery.
     fn appendNode(
         self: *Document,
         allocator: std.mem.Allocator,
@@ -35,6 +56,8 @@ pub const Document = struct {
         return node_id;
     }
 
+    /// Maintains parent/child/sibling links in the same flat shape used later by
+    /// the Box Tree.
     fn appendChild(self: *Document, parent: NodeId, child: NodeId) void {
         const last_child = self.nodes.items[parent].last_child;
 
@@ -51,6 +74,7 @@ pub const Document = struct {
     }
 };
 
+/// One DOM node in flat storage.
 pub const Node = struct {
     kind: NodeKind,
     parent: ?NodeId = null,
@@ -60,18 +84,24 @@ pub const Node = struct {
     prev_sibling: ?NodeId = null,
 };
 
+/// Node payloads kept intentionally small for the early renderer pipeline.
 pub const NodeKind = union(enum) {
     document,
     element: Element,
     text: []const u8,
 };
 
+/// Element metadata needed by style matching and Box Tree construction.
 pub const Element = struct {
     tag: Tag,
     name: []const u8,
     attributes: []const html.Attribute,
 };
 
+/// Known tags get enum values so later phases avoid string matching hot paths.
+///
+/// Unknown tags still stay in the DOM with their original name and can be styled
+/// or rendered using fallback rules.
 pub const Tag = enum {
     h1,
     h2,
@@ -98,7 +128,12 @@ pub const Tag = enum {
     unknown,
 };
 
+/// Builds a document tree from tokenizer output.
+///
+/// The parser is deliberately forgiving: it recovers from mismatched closes,
+/// auto-closes a few common elements, and keeps still-open nodes in the tree.
 pub const Parser = struct {
+    /// Parses tokens into a flat DOM document that can outlive the token list.
     pub fn parse(allocator: std.mem.Allocator, source: []const u8, tokens: []const html.Token) !Document {
         var nodes = try std.ArrayList(Node).initCapacity(allocator, 0);
         {
@@ -158,6 +193,10 @@ pub const Parser = struct {
         return document;
     }
 
+    /// Copies only the attribute slice, not the borrowed attribute strings.
+    ///
+    /// This lets tokenizer tokens be freed immediately after parsing while DOM
+    /// elements still expose their attributes.
     fn copyAttributes(allocator: std.mem.Allocator, attributes: []const html.Attribute) ![]const html.Attribute {
         if (attributes.len == 0) return &.{};
 
@@ -166,6 +205,8 @@ pub const Parser = struct {
         return copied;
     }
 
+    /// Recovers from mismatched close tags by popping back to the first matching
+    /// open element, ignoring unmatched closes.
     fn closeElement(document: *const Document, stack: *std.ArrayList(NodeId), name: []const u8) void {
         var index = stack.items.len;
 
@@ -185,6 +226,10 @@ pub const Parser = struct {
         }
     }
 
+    /// Handles a small set of HTML implied-end-tag rules that matter for layout.
+    ///
+    /// This is not a full HTML5 tree builder; it covers common paragraphs, lists,
+    /// and table rows/cells so downstream layout sees a sane tree.
     fn closeImpliedElements(document: *const Document, stack: *std.ArrayList(NodeId), incoming_tag: Tag) void {
         switch (incoming_tag) {
             .p, .li => popCurrentIf(document, stack, incoming_tag),
@@ -201,6 +246,7 @@ pub const Parser = struct {
         }
     }
 
+    /// Pops only the current stack item, preserving the parser's tolerant shape.
     fn popCurrentIf(document: *const Document, stack: *std.ArrayList(NodeId), tag: Tag) void {
         if (stack.items.len <= 1) return;
 
@@ -216,6 +262,7 @@ pub const Parser = struct {
     }
 };
 
+/// Maps known tag names to enum values without losing unknown tag names.
 pub fn tagFromName(name: []const u8) Tag {
     if (eqlTag(name, "h1")) return .h1;
     if (eqlTag(name, "h2")) return .h2;
@@ -242,6 +289,10 @@ pub fn tagFromName(name: []const u8) Tag {
     return .unknown;
 }
 
+/// Void elements never push onto the open-element stack.
+///
+/// The tokenizer may not mark real-world void tags as self-closing, so the DOM
+/// parser keeps the HTML void-element rule here.
 pub fn isVoidElementName(name: []const u8) bool {
     return eqlTag(name, "area") or
         eqlTag(name, "base") or
@@ -291,7 +342,8 @@ fn dumpAttributes(attributes: []const html.Attribute, writer: *std.Io.Writer) !v
     }
 }
 
-/// Just a readable way to use `std.ascii.eqlIgnoreCase`
+/// Centralizes tag-name comparison so case-insensitive HTML matching stays
+/// consistent across parser helpers.
 fn eqlTag(a: []const u8, b: []const u8) bool {
     return std.ascii.eqlIgnoreCase(a, b);
 }
