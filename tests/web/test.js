@@ -39,8 +39,34 @@ const htmlHard = ` <!DOCTYPE html>
  </body>
  </html>`;
 
+const htmlWithStyles = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>DOM con CSS</title>
+  <style>
+    body > main { font-family: serif; color: #222; }
+    .invoice-title { color: #1d4ed8; margin-bottom: 12px; }
+    #total { font-weight: bold; border-top: 1px solid #111; }
+    .note::before { content: "<nota> "; }
+  </style>
+</head>
+<body>
+  <main class="invoice">
+    <h1 class="invoice-title">Fattura demo</h1>
+    <p class="note">Questo testo verifica style raw text e DOM tree.</p>
+    <table>
+      <tr><th>Voce</th><th>Prezzo</th></tr>
+      <tr><td>Consulenza</td><td>100</td></tr>
+      <tr id="total"><td>Totale</td><td>100</td></tr>
+    </table>
+  </main>
+</body>
+</html>`;
+
 const tokenizeButton = document.querySelector("#tokenize");
 const domTreeButton = document.querySelector("#dom-tree");
+const boxTreeButton = document.querySelector("#box-tree");
 const output = document.querySelector("#output");
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -51,7 +77,7 @@ function showOutput(text) {
 }
 
 async function getWasmInstance() {
-  wasmInstancePromise ??= fetch(WASM_URL).then(async (response) => {
+  wasmInstancePromise ??= fetch(WASM_URL, { cache: "no-store" }).then(async (response) => {
     if (!response.ok) {
       throw new Error(`Cannot load ${WASM_URL}: HTTP ${response.status}`);
     }
@@ -64,11 +90,20 @@ async function getWasmInstance() {
   return instance;
 }
 
+function requireWasmExports(instance, names) {
+  const missing = names.filter((name) => !instance.exports[name]);
+  if (missing.length === 0) return;
+
+  throw new Error(
+    `Missing required wasm exports: ${missing.join(", ")}. Available: ${Object.keys(instance.exports)
+      .sort()
+      .join(", ")}`,
+  );
+}
+
 function tokenizeHtml(instance, html) {
   const { alloc, free, memory, tokenize_html: tokenizeHtmlExport } = instance.exports;
-  if (!alloc || !free || !memory || !tokenizeHtmlExport) {
-    throw new Error("Missing required wasm exports: alloc, free, memory, tokenize_html");
-  }
+  requireWasmExports(instance, ["alloc", "free", "memory", "tokenize_html"]);
 
   const bytes = encoder.encode(html);
   const ptr = alloc(bytes.length);
@@ -93,11 +128,7 @@ function generateDomTree(instance, html) {
     dom_tree_output_len: domTreeOutputLenExport,
   } = instance.exports;
 
-  if (!alloc || !free || !memory || !domTreeHtmlExport || !domTreeOutputLenExport) {
-    throw new Error(
-      "Missing required wasm exports: alloc, free, memory, dom_tree_html, dom_tree_output_len",
-    );
-  }
+  requireWasmExports(instance, ["alloc", "free", "memory", "dom_tree_html", "dom_tree_output_len"]);
 
   const bytes = encoder.encode(html);
   const inputPtr = alloc(bytes.length);
@@ -112,6 +143,43 @@ function generateDomTree(instance, html) {
     const outputLen = domTreeOutputLenExport();
     if (outputPtr === 0 || outputLen === 0) {
       throw new Error("wasm DOM tree generation failed");
+    }
+
+    try {
+      const outputBytes = new Uint8Array(memory.buffer, outputPtr, outputLen);
+      return decoder.decode(outputBytes);
+    } finally {
+      free(outputPtr, outputLen);
+    }
+  } finally {
+    free(inputPtr, bytes.length);
+  }
+}
+
+function generateBoxTree(instance, html) {
+  const {
+    alloc,
+    free,
+    memory,
+    box_tree_html: boxTreeHtmlExport,
+    box_tree_output_len: boxTreeOutputLenExport,
+  } = instance.exports;
+
+  requireWasmExports(instance, ["alloc", "free", "memory", "box_tree_html", "box_tree_output_len"]);
+
+  const bytes = encoder.encode(html);
+  const inputPtr = alloc(bytes.length);
+  if (inputPtr === 0) {
+    throw new Error(`wasm alloc failed for ${bytes.length} bytes`);
+  }
+
+  try {
+    new Uint8Array(memory.buffer, inputPtr, bytes.length).set(bytes);
+
+    const outputPtr = boxTreeHtmlExport(inputPtr, bytes.length);
+    const outputLen = boxTreeOutputLenExport();
+    if (outputPtr === 0 || outputLen === 0) {
+      throw new Error("wasm Box Tree generation failed");
     }
 
     try {
@@ -148,15 +216,33 @@ domTreeButton.addEventListener("click", async () => {
 
   try {
     const instance = await getWasmInstance();
-    const domTree = generateDomTree(instance, htmlHard);
+    const domTree = generateDomTree(instance, htmlWithStyles);
 
-    console.log("html_hard input:", htmlHard);
+    console.log("html_with_styles input:", htmlWithStyles);
     console.log("wasm exports:", Object.keys(instance.exports));
     console.log("DOM tree:\n", domTree);
 
     showOutput(domTree);
   } catch (error) {
     console.error("WASM DOM tree generation failed:", error);
+    showOutput(`Errore: ${error instanceof Error ? error.message : String(error)}`);
+  }
+});
+
+boxTreeButton.addEventListener("click", async () => {
+  showOutput("");
+
+  try {
+    const instance = await getWasmInstance();
+    const boxTree = generateBoxTree(instance, htmlWithStyles);
+
+    console.log("html_with_styles input:", htmlWithStyles);
+    console.log("wasm exports:", Object.keys(instance.exports));
+    console.log("Box Tree:\n", boxTree);
+
+    showOutput(boxTree);
+  } catch (error) {
+    console.error("WASM Box Tree generation failed:", error);
     showOutput(`Errore: ${error instanceof Error ? error.message : String(error)}`);
   }
 });
