@@ -615,8 +615,8 @@ fn isNonRenderingElement(name: []const u8) bool {
 /// Reading actual image headers belongs in a later resource loader; the Box Tree
 /// should not perform filesystem or network work.
 fn fillIntrinsicSize(box: *Box, element: dom.Element) void {
-    box.intrinsic_width = parsePositiveFloat(attributeValue(element.attributes, "width"));
-    box.intrinsic_height = parsePositiveFloat(attributeValue(element.attributes, "height"));
+    box.intrinsic_width = parsePositiveFloat(getAttributeValue(element.attributes, "width"));
+    box.intrinsic_height = parsePositiveFloat(getAttributeValue(element.attributes, "height"));
 
     if (box.intrinsic_width) |width| {
         if (box.intrinsic_height) |height| {
@@ -625,7 +625,14 @@ fn fillIntrinsicSize(box: *Box, element: dom.Element) void {
     }
 }
 
-fn attributeValue(attributes: []const html.Attribute, name: []const u8) ?[]const u8 {
+fn getAttributeValue(attributes: []const html.Attribute, name: []const u8) ?[]const u8 {
+    // TODO: optimize this (TO STUDY IF IS A GOOD CHOICE)
+    // we could get a "lookup table" one time after the tokenization to use the map here
+    // instead of ciclyng everytime for every time we need to get an attribute value from
+    // the HTML.
+    // An example could be a function called: mapAttributes that inject an HashMap of attributes
+    // for every box, instead of looping everytime we loop only when we need these info for
+    // a particular Box
     for (attributes) |attribute| {
         if (std.ascii.eqlIgnoreCase(attribute.name, name)) return attribute.value;
     }
