@@ -57,6 +57,7 @@ Debug dump helpers:
 ```sh
 make test-debug-tokenizer
 make test-debug-dom
+make test-debug-box
 make test-debug
 ```
 
@@ -77,13 +78,15 @@ tests/web/index.html
 The page can:
 
 - tokenize the sample HTML and show the token count;
-- generate an ASCII DOM tree from the same HTML through the WASM module.
+- generate an ASCII DOM tree from the same HTML through the WASM module;
+- generate an ASCII Box Tree with styles through the WASM module.
 
 ## Project Layout
 
 ```text
 src/html.zig      HTML tokenizer and token debug dump
 src/dom.zig       tolerant DOM parser and ASCII tree dump
+src/box.zig       Box Tree builder and style-aware tree dump
 src/wasm.zig      WebAssembly exports
 src/main.zig      native CLI entrypoint
 src/root.zig      package root exports
