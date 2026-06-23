@@ -4,6 +4,12 @@
 //! copy, stable enough for sibling links, and avoid recursive ownership problems
 //! while `ArrayList` grows.
 
+// TOOD: separate responsibilities
+// In this file we have a function `getAttributeValue`, but this function
+// seems be part of the `html.zig` responsibilities.
+//
+// So we should divide better the responsibilities of some helpers, functions etc.
+
 const std = @import("std");
 const dom = @import("dom.zig");
 const html = @import("html.zig");
