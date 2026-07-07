@@ -523,39 +523,31 @@ pub fn defaultStyleForNode(document: *const dom.Document, node_id: dom.NodeId) S
             const display = determineElementDisplay(element);
             var style = Style{ .display = display };
 
-            switch (element.tag) {
-                .h1 => {
-                    style.font_size = 32;
-                    style.margin = .{ .top = 21.44, .bottom = 21.44 };
-                },
-                .h2 => {
-                    style.font_size = 24;
-                    style.margin = .{ .top = 19.92, .bottom = 19.92 };
-                },
-                .h3 => {
-                    style.font_size = 18.72;
-                    style.margin = .{ .top = 18.72, .bottom = 18.72 };
-                },
-                .h4 => {
-                    style.font_size = 16;
-                    style.margin = .{ .top = 21.28, .bottom = 21.28 };
-                },
-                .h5 => {
-                    style.font_size = 13.28;
-                    style.margin = .{ .top = 22.177, .bottom = 22.177 };
-                },
-                .h6 => {
-                    style.font_size = 10.72;
-                    style.margin = .{ .top = 24.977, .bottom = 24.977 };
-                },
-                .p => {
-                    style.margin = .{ .top = 16, .bottom = 16 };
-                },
-                .ul, .ol => {
-                    style.margin = .{ .top = 16, .bottom = 16 };
-                    style.padding = .{ .left = 40 };
-                },
-                else => {},
+            const heading_defaults = .{
+                .{ dom.Tag.h1, 32, 21.44, 21.44 },
+                .{ dom.Tag.h2, 24, 19.92, 19.92 },
+                .{ dom.Tag.h3, 18.72, 18.72, 18.72 },
+                .{ dom.Tag.h4, 16, 21.28, 21.28 },
+                .{ dom.Tag.h5, 13.28, 22.177, 22.177 },
+                .{ dom.Tag.h6, 10.72, 24.977, 24.977 },
+            };
+            inline for (heading_defaults) |h| {
+                if (element.tag == h[0]) {
+                    style.font_size = h[1];
+                    style.margin = .{ .top = h[2], .bottom = h[3] };
+                    break;
+                }
+            } else {
+                switch (element.tag) {
+                    .p => {
+                        style.margin = .{ .top = 16, .bottom = 16 };
+                    },
+                    .ul, .ol => {
+                        style.margin = .{ .top = 16, .bottom = 16 };
+                        style.padding = .{ .left = 40 };
+                    },
+                    else => {},
+                }
             }
             return style;
         },
@@ -652,7 +644,28 @@ fn wrapInlineRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId
     }
 
     if (!has_inline or !has_block) return;
+    try wrapChildRuns(tree, allocator, parent_id, .anonymousBlock, isInlineLevelBox);
+}
 
+/// Runs after anonymous-block normalization, wrapping orphan table cells in
+/// anonymous table-row boxes.
+///
+/// ponytail: does not wrap orphan tableRow in anonymous tableRowGroup inside table;
+/// layout can iterate both tableRow and tableRowGroup as direct children of table.
+fn wrapTableCellRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId) !void {
+    try wrapChildRuns(tree, allocator, parent_id, .anonymousTableRow, isTableWrappableBox);
+}
+
+/// Common rebuild loop for anonymous box normalization.
+/// Scans children, groups consecutive wrappable boxes under a new anonymous
+/// box of the given kind, and leaves non-wrappable boxes in place.
+fn wrapChildRuns(
+    tree: *BoxTree,
+    allocator: std.mem.Allocator,
+    parent_id: BoxId,
+    anon_kind: BoxType,
+    shouldWrap: fn (Box) bool,
+) !void {
     const old_first = tree.boxes.items[parent_id].first_child;
     var new_first: ?BoxId = null;
     var new_last: ?BoxId = null;
@@ -661,20 +674,19 @@ fn wrapInlineRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId
     tree.boxes.items[parent_id].first_child = null;
     tree.boxes.items[parent_id].last_child = null;
 
-    child = old_first;
+    var child = old_first;
     while (child) |child_id| {
         const next = tree.boxes.items[child_id].next_sibling;
 
-        if (isInlineLevelBox(tree.boxes.items[child_id])) {
+        if (shouldWrap(tree.boxes.items[child_id])) {
             if (current_run == null) {
                 const anonymous_id = try appendDetachedBox(tree, allocator, .{
-                    .kind = .anonymousBlock,
+                    .kind = anon_kind,
                     .style = tree.boxes.items[parent_id].style,
                 });
                 appendToRebuiltChildList(tree, parent_id, anonymous_id, &new_first, &new_last);
                 current_run = anonymous_id;
             }
-
             appendExistingChild(&tree.boxes, current_run.?, child_id);
         } else {
             current_run = null;
@@ -686,6 +698,10 @@ fn wrapInlineRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId
 
     tree.boxes.items[parent_id].first_child = new_first;
     tree.boxes.items[parent_id].last_child = new_last;
+}
+
+fn isTableWrappableBox(box: Box) bool {
+    return box.kind == .tableCell or isInlineLevelBox(box);
 }
 
 /// Rebuilds one parent's child list without reallocating existing boxes.
@@ -709,11 +725,6 @@ fn appendToRebuiltChildList(
     last_child.* = child_id;
 }
 
-/// Runs after anonymous-block normalization, wrapping orphan table cells in
-/// anonymous table-row boxes.
-///
-/// ponytail: does not wrap orphan tableRow in anonymous tableRowGroup inside table;
-/// layout can iterate both tableRow and tableRowGroup as direct children of table.
 fn normalizeAnonymousTables(tree: *BoxTree, allocator: std.mem.Allocator, box_id: BoxId) !void {
     var child = tree.boxes.items[box_id].first_child;
     while (child) |child_id| {
@@ -725,45 +736,6 @@ fn normalizeAnonymousTables(tree: *BoxTree, allocator: std.mem.Allocator, box_id
     if (tree.boxes.items[box_id].kind == .table or tree.boxes.items[box_id].kind == .tableRowGroup) {
         try wrapTableCellRuns(tree, allocator, box_id);
     }
-}
-
-/// Wraps consecutive tableCell and inline-level children of a table or
-/// tableRowGroup in anonymous tableRow boxes, leaving existing tableRow
-/// children unchanged.
-fn wrapTableCellRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId) !void {
-    const old_first = tree.boxes.items[parent_id].first_child;
-    var new_first: ?BoxId = null;
-    var new_last: ?BoxId = null;
-    var current_run: ?BoxId = null;
-
-    tree.boxes.items[parent_id].first_child = null;
-    tree.boxes.items[parent_id].last_child = null;
-
-    var child = old_first;
-    while (child) |child_id| {
-        const next = tree.boxes.items[child_id].next_sibling;
-        const box = tree.boxes.items[child_id];
-
-        if (box.kind == .tableCell or isInlineLevelBox(box)) {
-            if (current_run == null) {
-                const anonymous_id = try appendDetachedBox(tree, allocator, .{
-                    .kind = .anonymousTableRow,
-                    .style = tree.boxes.items[parent_id].style,
-                });
-                appendToRebuiltChildList(tree, parent_id, anonymous_id, &new_first, &new_last);
-                current_run = anonymous_id;
-            }
-            appendExistingChild(&tree.boxes, current_run.?, child_id);
-        } else {
-            current_run = null;
-            appendToRebuiltChildList(tree, parent_id, child_id, &new_first, &new_last);
-        }
-
-        child = next;
-    }
-
-    tree.boxes.items[parent_id].first_child = new_first;
-    tree.boxes.items[parent_id].last_child = new_last;
 }
 
 fn isBlockContainer(kind: BoxType) bool {

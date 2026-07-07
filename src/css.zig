@@ -1823,106 +1823,79 @@ test "parse value: positive integer" {
     try std.testing.expect(parsePositiveInteger("-1") == null);
 }
 
-test "cascade: width and height properties" {
-    const allocator = std.testing.allocator;
-    const source = "<style>div { width: 200px; height: 100px; }</style><div>box</div>";
+const CascadeTest = struct {
+    document: dom.Document,
+    styles: []box.Style,
+    arena: std.heap.ArenaAllocator,
 
+    pub fn deinit(self: *CascadeTest, allocator: std.mem.Allocator) void {
+        self.arena.deinit();
+        self.document.deinit(allocator);
+    }
+};
+
+fn cascadeTestHelper(allocator: std.mem.Allocator, source: []const u8) !CascadeTest {
     var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
     defer deinitTokens(allocator, &tokens);
+
     var document = try dom.Parser.parse(allocator, source, tokens.items);
-    defer document.deinit(allocator);
-
-    const css_text = try collectStyleText(allocator, &document);
-    defer allocator.free(css_text);
-
-    var ss = try parseStylesheet(allocator, css_text);
-    defer ss.deinit(allocator);
+    errdefer document.deinit(allocator);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const styles = try computeStyles(arena.allocator(), &document, &.{ss});
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
 
-    const style_id = document.nodes.items[document.root].first_child.?;
-    const div_id = document.nodes.items[style_id].next_sibling.?;
-    try std.testing.expectEqual(@as(?f32, 200), styles[div_id].width);
-    try std.testing.expectEqual(@as(?f32, 100), styles[div_id].height);
+    const css_text = try collectStyleText(arena_alloc, &document);
+    const ss = try parseStylesheet(arena_alloc, css_text);
+    const styles = try computeStyles(arena_alloc, &document, &.{ss});
+
+    return CascadeTest{
+        .document = document,
+        .styles = styles,
+        .arena = arena,
+    };
+}
+
+test "cascade: width and height properties" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<style>div { width: 200px; height: 100px; }</style><div>box</div>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const div_id = ct.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(@as(?f32, 200), ct.styles[div_id].width);
+    try std.testing.expectEqual(@as(?f32, 100), ct.styles[div_id].height);
 }
 
 test "cascade: border-style per side" {
     const allocator = std.testing.allocator;
-    const source = "<style>div { border-top-style: solid; border-bottom-style: dashed; }</style><div>box</div>";
-
-    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
-    defer deinitTokens(allocator, &tokens);
-    var document = try dom.Parser.parse(allocator, source, tokens.items);
-    defer document.deinit(allocator);
-
-    const css_text = try collectStyleText(allocator, &document);
-    defer allocator.free(css_text);
-
-    var ss = try parseStylesheet(allocator, css_text);
-    defer ss.deinit(allocator);
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const styles = try computeStyles(arena.allocator(), &document, &.{ss});
-
-    const style_id = document.nodes.items[document.root].first_child.?;
-    const div_id = document.nodes.items[style_id].next_sibling.?;
-    try std.testing.expectEqual(box.BorderStyle.solid, styles[div_id].border_top_style);
-    try std.testing.expectEqual(box.BorderStyle.none, styles[div_id].border_right_style);
-    try std.testing.expectEqual(box.BorderStyle.dashed, styles[div_id].border_bottom_style);
-    try std.testing.expectEqual(box.BorderStyle.none, styles[div_id].border_left_style);
+    var ct = try cascadeTestHelper(allocator, "<style>div { border-top-style: solid; border-bottom-style: dashed; }</style><div>box</div>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const div_id = ct.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(box.BorderStyle.solid, ct.styles[div_id].border_top_style);
+    try std.testing.expectEqual(box.BorderStyle.none, ct.styles[div_id].border_right_style);
+    try std.testing.expectEqual(box.BorderStyle.dashed, ct.styles[div_id].border_bottom_style);
+    try std.testing.expectEqual(box.BorderStyle.none, ct.styles[div_id].border_left_style);
 }
 
 test "cascade: text-align and line-height" {
     const allocator = std.testing.allocator;
-    const source = "<style>p { text-align: center; line-height: 1.5; }</style><p>centered</p>";
-
-    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
-    defer deinitTokens(allocator, &tokens);
-    var document = try dom.Parser.parse(allocator, source, tokens.items);
-    defer document.deinit(allocator);
-
-    const css_text = try collectStyleText(allocator, &document);
-    defer allocator.free(css_text);
-
-    var ss = try parseStylesheet(allocator, css_text);
-    defer ss.deinit(allocator);
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const styles = try computeStyles(arena.allocator(), &document, &.{ss});
-
-    const style_id = document.nodes.items[document.root].first_child.?;
-    const p_id = document.nodes.items[style_id].next_sibling.?;
-    try std.testing.expectEqual(box.TextAlign.center, styles[p_id].text_align);
-    try std.testing.expectEqual(@as(f32, 1.5), styles[p_id].line_height);
+    var ct = try cascadeTestHelper(allocator, "<style>p { text-align: center; line-height: 1.5; }</style><p>centered</p>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const p_id = ct.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(box.TextAlign.center, ct.styles[p_id].text_align);
+    try std.testing.expectEqual(@as(f32, 1.5), ct.styles[p_id].line_height);
 }
 
 test "cascade: page-break and orphans/widows" {
     const allocator = std.testing.allocator;
-    const source = "<style>div { page-break-before: always; page-break-after: avoid; orphans: 3; widows: 4; }</style><div>page</div>";
-
-    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
-    defer deinitTokens(allocator, &tokens);
-    var document = try dom.Parser.parse(allocator, source, tokens.items);
-    defer document.deinit(allocator);
-
-    const css_text = try collectStyleText(allocator, &document);
-    defer allocator.free(css_text);
-
-    var ss = try parseStylesheet(allocator, css_text);
-    defer ss.deinit(allocator);
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const styles = try computeStyles(arena.allocator(), &document, &.{ss});
-
-    const style_id = document.nodes.items[document.root].first_child.?;
-    const div_id = document.nodes.items[style_id].next_sibling.?;
-    try std.testing.expectEqual(box.PageBreak.always, styles[div_id].page_break_before);
-    try std.testing.expectEqual(box.PageBreak.avoid, styles[div_id].page_break_after);
-    try std.testing.expectEqual(@as(u32, 3), styles[div_id].orphans);
-    try std.testing.expectEqual(@as(u32, 4), styles[div_id].widows);
+    var ct = try cascadeTestHelper(allocator, "<style>div { page-break-before: always; page-break-after: avoid; orphans: 3; widows: 4; }</style><div>page</div>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const div_id = ct.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(box.PageBreak.always, ct.styles[div_id].page_break_before);
+    try std.testing.expectEqual(box.PageBreak.avoid, ct.styles[div_id].page_break_after);
+    try std.testing.expectEqual(@as(u32, 3), ct.styles[div_id].orphans);
+    try std.testing.expectEqual(@as(u32, 4), ct.styles[div_id].widows);
 }
