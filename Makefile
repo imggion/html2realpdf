@@ -19,6 +19,7 @@ test:
 	zig test src/html.zig
 	zig test src/dom.zig
 	zig test src/box.zig
+	zig test src/css.zig
 
 test-debug: test-debug-tokenizer test-debug-dom test-debug-box
 

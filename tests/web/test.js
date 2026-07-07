@@ -67,6 +67,7 @@ const htmlWithStyles = `<!DOCTYPE html>
 const tokenizeButton = document.querySelector("#tokenize");
 const domTreeButton = document.querySelector("#dom-tree");
 const boxTreeButton = document.querySelector("#box-tree");
+const cascadeTreeButton = document.querySelector("#cascade-tree");
 const output = document.querySelector("#output");
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -193,6 +194,43 @@ function generateBoxTree(instance, html) {
   }
 }
 
+function generateCascadeTree(instance, html) {
+  const {
+    alloc,
+    free,
+    memory,
+    cascade_tree_html: cascadeTreeHtmlExport,
+    cascade_tree_output_len: cascadeTreeOutputLenExport,
+  } = instance.exports;
+
+  requireWasmExports(instance, ["alloc", "free", "memory", "cascade_tree_html", "cascade_tree_output_len"]);
+
+  const bytes = encoder.encode(html);
+  const inputPtr = alloc(bytes.length);
+  if (inputPtr === 0) {
+    throw new Error(`wasm alloc failed for ${bytes.length} bytes`);
+  }
+
+  try {
+    new Uint8Array(memory.buffer, inputPtr, bytes.length).set(bytes);
+
+    const outputPtr = cascadeTreeHtmlExport(inputPtr, bytes.length);
+    const outputLen = cascadeTreeOutputLenExport();
+    if (outputPtr === 0 || outputLen === 0) {
+      throw new Error("wasm Cascade Tree generation failed");
+    }
+
+    try {
+      const outputBytes = new Uint8Array(memory.buffer, outputPtr, outputLen);
+      return decoder.decode(outputBytes);
+    } finally {
+      free(outputPtr, outputLen);
+    }
+  } finally {
+    free(inputPtr, bytes.length);
+  }
+}
+
 tokenizeButton.addEventListener("click", async () => {
   showOutput("");
 
@@ -243,6 +281,24 @@ boxTreeButton.addEventListener("click", async () => {
     showOutput(boxTree);
   } catch (error) {
     console.error("WASM Box Tree generation failed:", error);
+    showOutput(`Errore: ${error instanceof Error ? error.message : String(error)}`);
+  }
+});
+
+cascadeTreeButton.addEventListener("click", async () => {
+  showOutput("");
+
+  try {
+    const instance = await getWasmInstance();
+    const cascadeTree = generateCascadeTree(instance, htmlWithStyles);
+
+    console.log("html_with_styles input:", htmlWithStyles);
+    console.log("wasm exports:", Object.keys(instance.exports));
+    console.log("Cascade Tree:\n", cascadeTree);
+
+    showOutput(cascadeTree);
+  } catch (error) {
+    console.error("WASM Cascade Tree generation failed:", error);
     showOutput(`Errore: ${error instanceof Error ? error.message : String(error)}`);
   }
 });

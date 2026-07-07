@@ -72,6 +72,8 @@ pub fn build(b: *std.Build) void {
         "dom_tree_output_len",
         "box_tree_html",
         "box_tree_output_len",
+        "cascade_tree_html",
+        "cascade_tree_output_len",
     };
 
     const wasm = b.addExecutable(.{
