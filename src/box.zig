@@ -28,9 +28,15 @@ pub const BoxId = usize;
 pub const BoxType = enum {
     block,
     inlineBox,
+    inlineBlock,
     text,
     anonymousBlock,
     anonymousInline,
+    anonymousTableRow,
+    table,
+    tableRow,
+    tableCell,
+    tableRowGroup,
     replaced,
     lineBreak,
 
@@ -38,9 +44,15 @@ pub const BoxType = enum {
         return switch (self) {
             .block => "block",
             .inlineBox => "inline",
+            .inlineBlock => "inline-block",
             .text => "text",
             .anonymousBlock => "anonymous-block",
             .anonymousInline => "anonymous-inline",
+            .anonymousTableRow => "anonymous-table-row",
+            .table => "table",
+            .tableRow => "table-row",
+            .tableCell => "table-cell",
+            .tableRowGroup => "table-row-group",
             .replaced => "replaced",
             .lineBreak => "line-break",
         };
@@ -56,6 +68,10 @@ pub const Display = enum {
     block,
     inlineBox,
     inlineBlock,
+    table,
+    tableRow,
+    tableCell,
+    tableRowGroup,
 
     pub fn toString(self: @This()) []const u8 {
         return switch (self) {
@@ -63,6 +79,10 @@ pub const Display = enum {
             .block => "block",
             .inlineBox => "inline",
             .inlineBlock => "inline-block",
+            .table => "table",
+            .tableRow => "table-row",
+            .tableCell => "table-cell",
+            .tableRowGroup => "table-row-group",
         };
     }
 };
@@ -118,6 +138,68 @@ pub const WhiteSpace = enum {
     }
 };
 
+/// Horizontal text alignment within a block container.
+pub const TextAlign = enum {
+    left,
+    center,
+    right,
+    justify,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .left => "left",
+            .center => "center",
+            .right => "right",
+            .justify => "justify",
+        };
+    }
+};
+
+/// Box sizing model: content-box or border-box.
+pub const BoxSizing = enum {
+    contentBox,
+    borderBox,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .contentBox => "content-box",
+            .borderBox => "border-box",
+        };
+    }
+};
+
+/// Controls page breaks before/after a box.
+pub const PageBreak = enum {
+    auto,
+    always,
+    avoid,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .auto => "auto",
+            .always => "always",
+            .avoid => "avoid",
+        };
+    }
+};
+
+/// Border line style.
+pub const BorderStyle = enum {
+    none,
+    solid,
+    dashed,
+    dotted,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .solid => "solid",
+            .dashed => "dashed",
+            .dotted => "dotted",
+        };
+    }
+};
+
 /// CSS property names used by debug output and future style parsing.
 pub const StyleProperty = enum {
     fontSize,
@@ -159,9 +241,35 @@ pub const Style = struct {
     color: []const u8 = "black",
     background: ?[]const u8 = null,
 
+    width: ?f32 = null,
+    height: ?f32 = null,
+    min_width: ?f32 = null,
+    max_width: ?f32 = null,
+    min_height: ?f32 = null,
+    max_height: ?f32 = null,
+
+    line_height: f32 = 18,
+    text_align: TextAlign = .left,
+
+    box_sizing: BoxSizing = .contentBox,
+
+    page_break_before: PageBreak = .auto,
+    page_break_after: PageBreak = .auto,
+    orphans: u32 = 2,
+    widows: u32 = 2,
+
     margin: EdgeSizes = .{},
     border: EdgeSizes = .{},
     padding: EdgeSizes = .{},
+
+    border_top_style: BorderStyle = .none,
+    border_right_style: BorderStyle = .none,
+    border_bottom_style: BorderStyle = .none,
+    border_left_style: BorderStyle = .none,
+    border_top_color: []const u8 = "black",
+    border_right_color: []const u8 = "black",
+    border_bottom_color: []const u8 = "black",
+    border_left_color: []const u8 = "black",
 };
 
 /// Renderable unit produced from the DOM.
@@ -259,6 +367,7 @@ pub const Builder = struct {
         errdefer tree.deinit(allocator);
 
         try normalizeAnonymousBlocks(&tree, allocator, tree.root);
+        try normalizeAnonymousTables(&tree, allocator, tree.root);
         return tree;
     }
 };
@@ -408,15 +517,76 @@ pub fn defaultStyleForNode(document: *const dom.Document, node_id: dom.NodeId) S
     return switch (node.kind) {
         .document => .{ .display = .block },
         .text => .{ .display = .inlineBox },
-        .element => |element| .{
-            .display = if (isNonRenderingElement(element.name))
-                .none
-            else if (isDefaultBlockElement(element))
-                .block
-            else
-                .inlineBox,
+        .element => |element| {
+            if (isNonRenderingElement(element.name)) return .{ .display = .none };
+
+            const display = determineElementDisplay(element);
+            var style = Style{ .display = display };
+
+            switch (element.tag) {
+                .h1 => {
+                    style.font_size = 32;
+                    style.margin = .{ .top = 21.44, .bottom = 21.44 };
+                },
+                .h2 => {
+                    style.font_size = 24;
+                    style.margin = .{ .top = 19.92, .bottom = 19.92 };
+                },
+                .h3 => {
+                    style.font_size = 18.72;
+                    style.margin = .{ .top = 18.72, .bottom = 18.72 };
+                },
+                .h4 => {
+                    style.font_size = 16;
+                    style.margin = .{ .top = 21.28, .bottom = 21.28 };
+                },
+                .h5 => {
+                    style.font_size = 13.28;
+                    style.margin = .{ .top = 22.177, .bottom = 22.177 };
+                },
+                .h6 => {
+                    style.font_size = 10.72;
+                    style.margin = .{ .top = 24.977, .bottom = 24.977 };
+                },
+                .p => {
+                    style.margin = .{ .top = 16, .bottom = 16 };
+                },
+                .ul, .ol => {
+                    style.margin = .{ .top = 16, .bottom = 16 };
+                    style.padding = .{ .left = 40 };
+                },
+                else => {},
+            }
+            return style;
         },
     };
+}
+
+/// Maps an element to its display type using tag enum first, then name strings.
+fn determineElementDisplay(element: dom.Element) Display {
+    return switch (element.tag) {
+        .h1, .h2, .h3, .h4, .h5, .h6, .p, .div, .ul, .ol, .li, .html, .body => .block,
+        .table => .table,
+        .tr => .tableRow,
+        .td, .th => .tableCell,
+        else => determineElementDisplayByName(element.name),
+    };
+}
+
+fn determineElementDisplayByName(name: []const u8) Display {
+    if (std.ascii.eqlIgnoreCase(name, "article") or
+        std.ascii.eqlIgnoreCase(name, "aside") or
+        std.ascii.eqlIgnoreCase(name, "footer") or
+        std.ascii.eqlIgnoreCase(name, "header") or
+        std.ascii.eqlIgnoreCase(name, "main") or
+        std.ascii.eqlIgnoreCase(name, "nav") or
+        std.ascii.eqlIgnoreCase(name, "section"))
+        return .block;
+    if (std.ascii.eqlIgnoreCase(name, "thead") or
+        std.ascii.eqlIgnoreCase(name, "tbody") or
+        std.ascii.eqlIgnoreCase(name, "tfoot"))
+        return .tableRowGroup;
+    return .inlineBox;
 }
 
 /// Moves an already allocated box under a parent.
@@ -539,14 +709,71 @@ fn appendToRebuiltChildList(
     last_child.* = child_id;
 }
 
+/// Runs after anonymous-block normalization, wrapping orphan table cells in
+/// anonymous table-row boxes.
+///
+/// ponytail: does not wrap orphan tableRow in anonymous tableRowGroup inside table;
+/// layout can iterate both tableRow and tableRowGroup as direct children of table.
+fn normalizeAnonymousTables(tree: *BoxTree, allocator: std.mem.Allocator, box_id: BoxId) !void {
+    var child = tree.boxes.items[box_id].first_child;
+    while (child) |child_id| {
+        const next = tree.boxes.items[child_id].next_sibling;
+        try normalizeAnonymousTables(tree, allocator, child_id);
+        child = next;
+    }
+
+    if (tree.boxes.items[box_id].kind == .table or tree.boxes.items[box_id].kind == .tableRowGroup) {
+        try wrapTableCellRuns(tree, allocator, box_id);
+    }
+}
+
+/// Wraps consecutive tableCell and inline-level children of a table or
+/// tableRowGroup in anonymous tableRow boxes, leaving existing tableRow
+/// children unchanged.
+fn wrapTableCellRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId) !void {
+    const old_first = tree.boxes.items[parent_id].first_child;
+    var new_first: ?BoxId = null;
+    var new_last: ?BoxId = null;
+    var current_run: ?BoxId = null;
+
+    tree.boxes.items[parent_id].first_child = null;
+    tree.boxes.items[parent_id].last_child = null;
+
+    var child = old_first;
+    while (child) |child_id| {
+        const next = tree.boxes.items[child_id].next_sibling;
+        const box = tree.boxes.items[child_id];
+
+        if (box.kind == .tableCell or isInlineLevelBox(box)) {
+            if (current_run == null) {
+                const anonymous_id = try appendDetachedBox(tree, allocator, .{
+                    .kind = .anonymousTableRow,
+                    .style = tree.boxes.items[parent_id].style,
+                });
+                appendToRebuiltChildList(tree, parent_id, anonymous_id, &new_first, &new_last);
+                current_run = anonymous_id;
+            }
+            appendExistingChild(&tree.boxes, current_run.?, child_id);
+        } else {
+            current_run = null;
+            appendToRebuiltChildList(tree, parent_id, child_id, &new_first, &new_last);
+        }
+
+        child = next;
+    }
+
+    tree.boxes.items[parent_id].first_child = new_first;
+    tree.boxes.items[parent_id].last_child = new_last;
+}
+
 fn isBlockContainer(kind: BoxType) bool {
-    return kind == .block or kind == .anonymousBlock;
+    return kind == .block or kind == .anonymousBlock or kind == .inlineBlock or kind == .tableCell;
 }
 
 /// Classifies the external formatting role used by anonymous-box normalization.
 fn isInlineLevelBox(box: Box) bool {
     return switch (box.kind) {
-        .inlineBox, .text, .anonymousInline, .lineBreak => true,
+        .inlineBox, .inlineBlock, .text, .anonymousInline, .lineBreak => true,
         .replaced => box.style.display != .block,
         else => false,
     };
@@ -559,7 +786,11 @@ fn boxTypeForElement(element: dom.Element, style: Style) BoxType {
     return switch (style.display) {
         .block => .block,
         .inlineBox => .inlineBox,
-        .inlineBlock => .inlineBox,
+        .inlineBlock => .inlineBlock,
+        .table => .table,
+        .tableRow => .tableRow,
+        .tableCell => .tableCell,
+        .tableRowGroup => .tableRowGroup,
         .none => unreachable,
     };
 }
@@ -569,41 +800,6 @@ fn isReplacedElement(tag: dom.Tag) bool {
         .img => true,
         else => false,
     };
-}
-
-/// Small UA-style default list used only as a fallback before CSS exists.
-fn isDefaultBlockElement(element: dom.Element) bool {
-    return switch (element.tag) {
-        .h1,
-        .h2,
-        .h3,
-        .h4,
-        .h5,
-        .h6,
-        .p,
-        .div,
-        .ul,
-        .ol,
-        .li,
-        .table,
-        .tr,
-        .td,
-        .th,
-        .html,
-        .body,
-        => true,
-        else => isDefaultBlockElementName(element.name),
-    };
-}
-
-fn isDefaultBlockElementName(name: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(name, "article") or
-        std.ascii.eqlIgnoreCase(name, "aside") or
-        std.ascii.eqlIgnoreCase(name, "footer") or
-        std.ascii.eqlIgnoreCase(name, "header") or
-        std.ascii.eqlIgnoreCase(name, "main") or
-        std.ascii.eqlIgnoreCase(name, "nav") or
-        std.ascii.eqlIgnoreCase(name, "section");
 }
 
 /// Elements whose contents are parser data or metadata, not PDF layout input.
@@ -733,6 +929,21 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     if (style.background) |background| {
         try writer.print(" background={s}", .{background});
     }
+    if (style.width) |w| try writer.print(" width={d:.2}", .{w});
+    if (style.height) |h| try writer.print(" height={d:.2}", .{h});
+    if (style.min_width) |w| try writer.print(" min-width={d:.2}", .{w});
+    if (style.max_width) |w| try writer.print(" max-width={d:.2}", .{w});
+    if (style.line_height != 18) try writer.print(" line-height={d:.2}", .{style.line_height});
+    if (style.text_align != .left) try writer.print(" text-align={s}", .{style.text_align.toString()});
+    if (style.box_sizing != .contentBox) try writer.print(" box-sizing={s}", .{style.box_sizing.toString()});
+    if (style.page_break_before != .auto) try writer.print(" page-break-before={s}", .{style.page_break_before.toString()});
+    if (style.page_break_after != .auto) try writer.print(" page-break-after={s}", .{style.page_break_after.toString()});
+    if (style.orphans != 2) try writer.print(" orphans={d}", .{style.orphans});
+    if (style.widows != 2) try writer.print(" widows={d}", .{style.widows});
+    if (style.border_top_style != .none) try writer.print(" border-top-style={s}", .{style.border_top_style.toString()});
+    if (style.border_right_style != .none) try writer.print(" border-right-style={s}", .{style.border_right_style.toString()});
+    if (style.border_bottom_style != .none) try writer.print(" border-bottom-style={s}", .{style.border_bottom_style.toString()});
+    if (style.border_left_style != .none) try writer.print(" border-left-style={s}", .{style.border_left_style.toString()});
 
     try writeEdgeDebug("margin", box.margin, writer);
     try writeEdgeDebug("border", box.border, writer);
@@ -946,11 +1157,12 @@ test "dump Box Tree with styles" {
     styles[p_id].font_size = 18.5;
     styles[p_id].color = "red";
     styles[p_id].margin.top = 4;
+    styles[p_id].margin.bottom = 0;
 
     var tree = try Builder.build(allocator, &document, styles, div_id);
     defer tree.deinit(allocator);
 
-    var buffer: [1024]u8 = undefined;
+    var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try tree.dumpWithStyles(&document, &writer);
 
@@ -998,4 +1210,109 @@ test "debug dump Box Tree" {
     try tree.dumpWithStyles(&document, &writer);
 
     std.debug.print("\n{s}", .{writer.buffered()});
+}
+
+test "build table tree from DOM" {
+    const allocator = std.testing.allocator;
+    const source = "<table><tr><td>cell</td></tr></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const table_id = document.nodes.items[document.root].first_child.?;
+    var tree = try Builder.build(allocator, &document, &.{}, table_id);
+    defer tree.deinit(allocator);
+
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try tree.dump(&document, &writer);
+
+    const expected =
+        \\table table
+        \\  table-row tr
+        \\    table-cell td
+        \\      text "cell"
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "wrap orphan table cell in anonymous table row" {
+    const allocator = std.testing.allocator;
+    const source = "<table><td>cell</td></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const table_id = document.nodes.items[document.root].first_child.?;
+    var tree = try Builder.build(allocator, &document, &.{}, table_id);
+    defer tree.deinit(allocator);
+
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try tree.dump(&document, &writer);
+
+    const expected =
+        \\table table
+        \\  anonymous-table-row
+        \\    table-cell td
+        \\      text "cell"
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "inline-block box type distinct from inline" {
+    const allocator = std.testing.allocator;
+    const source = "<span>inline</span>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const span_id = document.nodes.items[document.root].first_child.?;
+
+    var styles = try allocator.alloc(Style, document.nodes.items.len);
+    defer allocator.free(styles);
+    for (styles, 0..) |*s, node_id| {
+        s.* = defaultStyleForNode(&document, node_id);
+    }
+    styles[span_id].display = .inlineBlock;
+
+    var tree = try Builder.build(allocator, &document, styles, span_id);
+    defer tree.deinit(allocator);
+
+    try std.testing.expectEqual(BoxType.inlineBlock, tree.boxes.items[tree.root].kind);
+}
+
+test "UA defaults set heading font-size and paragraph margins" {
+    const allocator = std.testing.allocator;
+    const source = "<h1>Title</h1><p>Text</p>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const root_id = document.root;
+
+    var tree = try Builder.build(allocator, &document, &.{}, root_id);
+    defer tree.deinit(allocator);
+
+    const h1_box = tree.boxes.items[tree.boxes.items[tree.root].first_child.?];
+    const p_box = tree.boxes.items[h1_box.next_sibling.?];
+
+    try std.testing.expectEqual(@as(f32, 32), h1_box.style.font_size);
+    try std.testing.expectEqual(@as(f32, 21.44), h1_box.style.margin.top);
+    try std.testing.expectEqual(@as(f32, 16), p_box.style.margin.top);
+    try std.testing.expectEqual(@as(f32, 16), p_box.style.margin.bottom);
 }

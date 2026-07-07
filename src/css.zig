@@ -706,6 +706,32 @@ fn applyDeclaration(style: *box.Style, name: []const u8, value: []const u8) void
         style.color = value;
     } else if (eqlProp(name, "background") or eqlProp(name, "background-color")) {
         style.background = value;
+    } else if (eqlProp(name, "width")) {
+        if (parseLength(value)) |w| style.width = w;
+    } else if (eqlProp(name, "height")) {
+        if (parseLength(value)) |h| style.height = h;
+    } else if (eqlProp(name, "min-width")) {
+        if (parseLength(value)) |w| style.min_width = w;
+    } else if (eqlProp(name, "max-width")) {
+        if (parseLength(value)) |w| style.max_width = w;
+    } else if (eqlProp(name, "min-height")) {
+        if (parseLength(value)) |h| style.min_height = h;
+    } else if (eqlProp(name, "max-height")) {
+        if (parseLength(value)) |h| style.max_height = h;
+    } else if (eqlProp(name, "line-height")) {
+        if (parseLength(value)) |lh| style.line_height = lh;
+    } else if (eqlProp(name, "text-align")) {
+        if (parseTextAlign(value)) |ta| style.text_align = ta;
+    } else if (eqlProp(name, "box-sizing")) {
+        if (parseBoxSizing(value)) |bs| style.box_sizing = bs;
+    } else if (eqlProp(name, "page-break-before")) {
+        if (parsePageBreak(value)) |pb| style.page_break_before = pb;
+    } else if (eqlProp(name, "page-break-after")) {
+        if (parsePageBreak(value)) |pb| style.page_break_after = pb;
+    } else if (eqlProp(name, "orphans")) {
+        if (parsePositiveInteger(value)) |o| style.orphans = o;
+    } else if (eqlProp(name, "widows")) {
+        if (parsePositiveInteger(value)) |w| style.widows = w;
     } else if (eqlProp(name, "margin")) {
         style.margin = parseEdges(value);
     } else if (eqlProp(name, "margin-top")) {
@@ -737,10 +763,42 @@ fn applyDeclaration(style: *box.Style, name: []const u8, value: []const u8) void
         style.border.bottom = parseFirstLength(value);
     } else if (eqlProp(name, "border-left")) {
         style.border.left = parseFirstLength(value);
-    } else if (eqlProp(name, "width")) {
-        // ponytail: stored elsewhere, no-op for now
-    } else if (eqlProp(name, "height")) {
-        // ponytail: stored elsewhere, no-op for now
+    } else if (eqlProp(name, "border-style")) {
+        if (parseBorderStyle(value)) |bs| {
+            style.border_top_style = bs;
+            style.border_right_style = bs;
+            style.border_bottom_style = bs;
+            style.border_left_style = bs;
+        }
+    } else if (eqlProp(name, "border-top-style")) {
+        if (parseBorderStyle(value)) |bs| style.border_top_style = bs;
+    } else if (eqlProp(name, "border-right-style")) {
+        if (parseBorderStyle(value)) |bs| style.border_right_style = bs;
+    } else if (eqlProp(name, "border-bottom-style")) {
+        if (parseBorderStyle(value)) |bs| style.border_bottom_style = bs;
+    } else if (eqlProp(name, "border-left-style")) {
+        if (parseBorderStyle(value)) |bs| style.border_left_style = bs;
+    } else if (eqlProp(name, "border-color")) {
+        style.border_top_color = value;
+        style.border_right_color = value;
+        style.border_bottom_color = value;
+        style.border_left_color = value;
+    } else if (eqlProp(name, "border-top-color")) {
+        style.border_top_color = value;
+    } else if (eqlProp(name, "border-right-color")) {
+        style.border_right_color = value;
+    } else if (eqlProp(name, "border-bottom-color")) {
+        style.border_bottom_color = value;
+    } else if (eqlProp(name, "border-left-color")) {
+        style.border_left_color = value;
+    } else if (eqlProp(name, "border-top-width")) {
+        if (parseLength(value)) |l| style.border.top = l;
+    } else if (eqlProp(name, "border-right-width")) {
+        if (parseLength(value)) |l| style.border.right = l;
+    } else if (eqlProp(name, "border-bottom-width")) {
+        if (parseLength(value)) |l| style.border.bottom = l;
+    } else if (eqlProp(name, "border-left-width")) {
+        if (parseLength(value)) |l| style.border.left = l;
     }
 }
 
@@ -754,6 +812,10 @@ fn parseDisplay(value: []const u8) ?box.Display {
     if (eqlProp(v, "block")) return .block;
     if (eqlProp(v, "inline")) return .inlineBox;
     if (eqlProp(v, "inline-block")) return .inlineBlock;
+    if (eqlProp(v, "table")) return .table;
+    if (eqlProp(v, "table-row")) return .tableRow;
+    if (eqlProp(v, "table-cell")) return .tableCell;
+    if (eqlProp(v, "table-row-group")) return .tableRowGroup;
     return null;
 }
 
@@ -835,6 +897,46 @@ fn parseEdges(value: []const u8) box.EdgeSizes {
         3 => .{ .top = parts[0].?, .right = parts[1].?, .bottom = parts[2].?, .left = parts[1].? },
         else => .{ .top = parts[0].?, .right = parts[1].?, .bottom = parts[2].?, .left = parts[3].? },
     };
+}
+
+fn parseTextAlign(value: []const u8) ?box.TextAlign {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "left")) return .left;
+    if (eqlProp(v, "center")) return .center;
+    if (eqlProp(v, "right")) return .right;
+    if (eqlProp(v, "justify")) return .justify;
+    return null;
+}
+
+fn parseBoxSizing(value: []const u8) ?box.BoxSizing {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "content-box")) return .contentBox;
+    if (eqlProp(v, "border-box")) return .borderBox;
+    return null;
+}
+
+fn parsePageBreak(value: []const u8) ?box.PageBreak {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "auto")) return .auto;
+    if (eqlProp(v, "always")) return .always;
+    if (eqlProp(v, "avoid")) return .avoid;
+    return null;
+}
+
+fn parseBorderStyle(value: []const u8) ?box.BorderStyle {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "none")) return .none;
+    if (eqlProp(v, "solid")) return .solid;
+    if (eqlProp(v, "dashed")) return .dashed;
+    if (eqlProp(v, "dotted")) return .dotted;
+    return null;
+}
+
+fn parsePositiveInteger(value: []const u8) ?u32 {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    const n = std.fmt.parseInt(u32, v, 10) catch return null;
+    if (n == 0) return null;
+    return n;
 }
 
 fn getAttributeValue(attributes: []const html.Attribute, name: []const u8) ?[]const u8 {
@@ -1680,4 +1782,147 @@ test "parse value: edges shorthand" {
     try std.testing.expectEqual(@as(f32, 2), e4.right);
     try std.testing.expectEqual(@as(f32, 3), e4.bottom);
     try std.testing.expectEqual(@as(f32, 4), e4.left);
+}
+
+test "parse value: table display keywords" {
+    try std.testing.expectEqual(box.Display.table, parseDisplay("table").?);
+    try std.testing.expectEqual(box.Display.tableRow, parseDisplay("table-row").?);
+    try std.testing.expectEqual(box.Display.tableCell, parseDisplay("table-cell").?);
+    try std.testing.expectEqual(box.Display.tableRowGroup, parseDisplay("table-row-group").?);
+}
+
+test "parse value: text-align" {
+    try std.testing.expectEqual(box.TextAlign.left, parseTextAlign("left").?);
+    try std.testing.expectEqual(box.TextAlign.center, parseTextAlign("center").?);
+    try std.testing.expectEqual(box.TextAlign.right, parseTextAlign("right").?);
+    try std.testing.expectEqual(box.TextAlign.justify, parseTextAlign("justify").?);
+}
+
+test "parse value: box-sizing" {
+    try std.testing.expectEqual(box.BoxSizing.contentBox, parseBoxSizing("content-box").?);
+    try std.testing.expectEqual(box.BoxSizing.borderBox, parseBoxSizing("border-box").?);
+}
+
+test "parse value: page-break" {
+    try std.testing.expectEqual(box.PageBreak.auto, parsePageBreak("auto").?);
+    try std.testing.expectEqual(box.PageBreak.always, parsePageBreak("always").?);
+    try std.testing.expectEqual(box.PageBreak.avoid, parsePageBreak("avoid").?);
+}
+
+test "parse value: border-style" {
+    try std.testing.expectEqual(box.BorderStyle.none, parseBorderStyle("none").?);
+    try std.testing.expectEqual(box.BorderStyle.solid, parseBorderStyle("solid").?);
+    try std.testing.expectEqual(box.BorderStyle.dashed, parseBorderStyle("dashed").?);
+    try std.testing.expectEqual(box.BorderStyle.dotted, parseBorderStyle("dotted").?);
+}
+
+test "parse value: positive integer" {
+    try std.testing.expectEqual(@as(u32, 3), parsePositiveInteger("3").?);
+    try std.testing.expectEqual(@as(u32, 42), parsePositiveInteger("42").?);
+    try std.testing.expect(parsePositiveInteger("0") == null);
+    try std.testing.expect(parsePositiveInteger("-1") == null);
+}
+
+test "cascade: width and height properties" {
+    const allocator = std.testing.allocator;
+    const source = "<style>div { width: 200px; height: 100px; }</style><div>box</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const css_text = try collectStyleText(allocator, &document);
+    defer allocator.free(css_text);
+
+    var ss = try parseStylesheet(allocator, css_text);
+    defer ss.deinit(allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const styles = try computeStyles(arena.allocator(), &document, &.{ss});
+
+    const style_id = document.nodes.items[document.root].first_child.?;
+    const div_id = document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(@as(?f32, 200), styles[div_id].width);
+    try std.testing.expectEqual(@as(?f32, 100), styles[div_id].height);
+}
+
+test "cascade: border-style per side" {
+    const allocator = std.testing.allocator;
+    const source = "<style>div { border-top-style: solid; border-bottom-style: dashed; }</style><div>box</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const css_text = try collectStyleText(allocator, &document);
+    defer allocator.free(css_text);
+
+    var ss = try parseStylesheet(allocator, css_text);
+    defer ss.deinit(allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const styles = try computeStyles(arena.allocator(), &document, &.{ss});
+
+    const style_id = document.nodes.items[document.root].first_child.?;
+    const div_id = document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(box.BorderStyle.solid, styles[div_id].border_top_style);
+    try std.testing.expectEqual(box.BorderStyle.none, styles[div_id].border_right_style);
+    try std.testing.expectEqual(box.BorderStyle.dashed, styles[div_id].border_bottom_style);
+    try std.testing.expectEqual(box.BorderStyle.none, styles[div_id].border_left_style);
+}
+
+test "cascade: text-align and line-height" {
+    const allocator = std.testing.allocator;
+    const source = "<style>p { text-align: center; line-height: 1.5; }</style><p>centered</p>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const css_text = try collectStyleText(allocator, &document);
+    defer allocator.free(css_text);
+
+    var ss = try parseStylesheet(allocator, css_text);
+    defer ss.deinit(allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const styles = try computeStyles(arena.allocator(), &document, &.{ss});
+
+    const style_id = document.nodes.items[document.root].first_child.?;
+    const p_id = document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(box.TextAlign.center, styles[p_id].text_align);
+    try std.testing.expectEqual(@as(f32, 1.5), styles[p_id].line_height);
+}
+
+test "cascade: page-break and orphans/widows" {
+    const allocator = std.testing.allocator;
+    const source = "<style>div { page-break-before: always; page-break-after: avoid; orphans: 3; widows: 4; }</style><div>page</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const css_text = try collectStyleText(allocator, &document);
+    defer allocator.free(css_text);
+
+    var ss = try parseStylesheet(allocator, css_text);
+    defer ss.deinit(allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const styles = try computeStyles(arena.allocator(), &document, &.{ss});
+
+    const style_id = document.nodes.items[document.root].first_child.?;
+    const div_id = document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(box.PageBreak.always, styles[div_id].page_break_before);
+    try std.testing.expectEqual(box.PageBreak.avoid, styles[div_id].page_break_after);
+    try std.testing.expectEqual(@as(u32, 3), styles[div_id].orphans);
+    try std.testing.expectEqual(@as(u32, 4), styles[div_id].widows);
 }
