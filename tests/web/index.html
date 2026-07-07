@@ -3,12 +3,36 @@
   <head>
     <meta charset="utf-8">
     <title>html2realpdf wasm test</title>
+    <style>
+      body { font-family: system-ui, sans-serif; padding: 20px; }
+      section { margin-bottom: 24px; }
+      h3 { font-size: 14px; color: #555; margin: 16px 0 8px; }
+      button { margin: 4px; padding: 6px 14px; cursor: pointer; }
+      #output {
+        background: #f5f5f5; border: 1px solid #ddd;
+        padding: 12px; margin-top: 12px;
+        white-space: pre; font-size: 12px; line-height: 1.4;
+        max-height: 500px; overflow: auto;
+      }
+    </style>
   </head>
   <body>
-    <button id="tokenize" type="button">tokenize</button>
-    <button id="dom-tree" type="button">generate dom tree</button>
-    <button id="box-tree" type="button">generate box tree</button>
-    <button id="cascade-tree" type="button">cascade dump</button>
+    <section>
+      <h3>Base pipeline</h3>
+      <button id="tokenize" type="button">tokenize</button>
+      <button id="dom-tree" type="button">dom tree</button>
+      <button id="box-tree" type="button">box tree</button>
+      <button id="cascade-tree" type="button">cascade dump</button>
+    </section>
+
+    <section>
+       <h3>Box Tree — tables and advanced layout</h3>
+      <button id="box-invoice" type="button">invoice table</button>
+      <button id="box-anon-row" type="button">anonymous table-row</button>
+      <button id="box-inline-block" type="button">inline-block cards</button>
+      <button id="cascade-invoice" type="button">cascade invoice</button>
+    </section>
+
     <pre id="output" aria-live="polite"></pre>
 
     <script type="module" src="./test.js"></script>

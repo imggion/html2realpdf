@@ -7,31 +7,31 @@ const htmlHard = ` <!DOCTYPE html>
      <title>Test Tokenizer</title>
  </head>
  <body>
-     <!-- Questo è un commento -->
-     <h1 class="title" id="main-title">Titolo Principale</h1>
+      <!-- This is a comment -->
+      <h1 class="title" id="main-title">Main Title</h1>
 
-     <div class="container" data-info="esempio">
-         <p>Paragrafo con <strong>testo in grassetto</strong> e <em>corsivo</em>.</p>
+      <div class="container" data-info="example">
+          <p>Paragraph with <strong>bold text</strong> and <em>italic</em>.</p>
 
-         <table border="1">
-             <tr>
-                 <th>Nome</th>
-                 <th>Età</th>
-             </tr>
-             <tr>
-                 <td>Mario</td>
-                 <td>25</td>
-             </tr>
-             <tr>
-                 <td>Luigi</td>
-                 <td>30</td>
-             </tr>
-         </table>
+          <table border="1">
+              <tr>
+                  <th>Name</th>
+                  <th>Age</th>
+              </tr>
+              <tr>
+                  <td>Mario</td>
+                  <td>25</td>
+              </tr>
+              <tr>
+                  <td>Luigi</td>
+                  <td>30</td>
+              </tr>
+          </table>
 
-         <img src="/image.jpg" alt="Immagine" width="100" height="auto">
-         <br/>
-         <input type="text" name="username" placeholder="Inserisci nome">
-     </div>
+          <img src="/image.jpg" alt="Image" width="100" height="auto">
+          <br/>
+          <input type="text" name="username" placeholder="Enter name">
+      </div>
 
      <footer>
          <p>Footer &copy; 2024</p>
@@ -53,14 +53,83 @@ const htmlWithStyles = `<!DOCTYPE html>
 </head>
 <body>
   <main class="invoice">
-    <h1 class="invoice-title">Fattura demo</h1>
-    <p class="note">Questo testo verifica style raw text e DOM tree.</p>
+    <h1 class="invoice-title">Invoice demo</h1>
+    <p class="note">This text verifies style raw text and DOM tree.</p>
     <table>
-      <tr><th>Voce</th><th>Prezzo</th></tr>
-      <tr><td>Consulenza</td><td>100</td></tr>
-      <tr id="total"><td>Totale</td><td>100</td></tr>
+      <tr><th>Item</th><th>Price</th></tr>
+      <tr><td>Consulting</td><td>100</td></tr>
+      <tr id="total"><td>Total</td><td>100</td></tr>
     </table>
   </main>
+</body>
+</html>`;
+
+const htmlInvoiceTable = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; }
+    .invoice { width: 600px; }
+    .invoice-title { font-size: 24px; color: #1d4ed8; text-align: center; }
+    .invoice-table { border: 1px solid #333; width: 100%; }
+    .invoice-table th { border-bottom: 2px solid #333; text-align: left; }
+    .invoice-table td { border-bottom-style: dashed; }
+    .invoice-table td { border-bottom-color: #ccc; }
+    #total td { border-top-style: solid; page-break-before: avoid; }
+    .footer { text-align: right; orphans: 3; }
+  </style>
+</head>
+<body class="invoice">
+  <h1 class="invoice-title">INVOICE</h1>
+  <table class="invoice-table">
+    <tr><th>Item</th><th>Price</th></tr>
+    <tr><td>Consulting</td><td>$100</td></tr>
+    <tr><td>Development</td><td>$250</td></tr>
+    <tr id="total"><td><strong>Total</strong></td><td>$350</td></tr>
+  </table>
+  <p class="footer">Thank you for your business</p>
+</body>
+</html>`;
+
+const htmlAnonRow = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    .bare-table { border: 1px solid red; }
+    .bare-table td { border-style: dashed; }
+  </style>
+</head>
+<body>
+  <table class="bare-table">
+    <td>cell without row</td>
+  </table>
+</body>
+</html>`;
+
+const htmlInlineBlock = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    .card { display: inline-block; width: 200px; border: 1px solid #ccc; padding: 10px; }
+    .card-title { font-size: 16px; }
+  </style>
+</head>
+<body>
+  <div>
+    <p>Before the cards</p>
+    <span class="card">
+      <span class="card-title">Card 1</span>
+      <span>content</span>
+    </span>
+    <span class="card">
+      <span class="card-title">Card 2</span>
+      <span>content</span>
+    </span>
+    <p>After the cards</p>
+  </div>
 </body>
 </html>`;
 
@@ -68,13 +137,19 @@ const tokenizeButton = document.querySelector("#tokenize");
 const domTreeButton = document.querySelector("#dom-tree");
 const boxTreeButton = document.querySelector("#box-tree");
 const cascadeTreeButton = document.querySelector("#cascade-tree");
+
+const boxInvoiceButton = document.querySelector("#box-invoice");
+const boxAnonRowButton = document.querySelector("#box-anon-row");
+const boxInlineBlockButton = document.querySelector("#box-inline-block");
+const cascadeInvoiceButton = document.querySelector("#cascade-invoice");
+
 const output = document.querySelector("#output");
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 let wasmInstancePromise;
 
-function showOutput(text) {
-  output.textContent = text;
+function showOutput(label, text) {
+  output.textContent = `--- ${label} ---\n${text}`;
 }
 
 async function getWasmInstance() {
@@ -232,7 +307,7 @@ function generateCascadeTree(instance, html) {
 }
 
 tokenizeButton.addEventListener("click", async () => {
-  showOutput("");
+  output.textContent = "";
 
   try {
     const instance = await getWasmInstance();
@@ -242,15 +317,15 @@ tokenizeButton.addEventListener("click", async () => {
     console.log("wasm exports:", Object.keys(instance.exports));
     console.log("token count:", tokenCount);
 
-    showOutput(`Token count: ${tokenCount}`);
+    showOutput("tokenize", `Token count: ${tokenCount}`);
   } catch (error) {
     console.error("WASM tokenize failed:", error);
-    showOutput(`Errore: ${error instanceof Error ? error.message : String(error)}`);
+    output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
   }
 });
 
 domTreeButton.addEventListener("click", async () => {
-  showOutput("");
+  output.textContent = "";
 
   try {
     const instance = await getWasmInstance();
@@ -260,45 +335,111 @@ domTreeButton.addEventListener("click", async () => {
     console.log("wasm exports:", Object.keys(instance.exports));
     console.log("DOM tree:\n", domTree);
 
-    showOutput(domTree);
+    showOutput("DOM tree", domTree);
   } catch (error) {
     console.error("WASM DOM tree generation failed:", error);
-    showOutput(`Errore: ${error instanceof Error ? error.message : String(error)}`);
+    output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
   }
 });
 
 boxTreeButton.addEventListener("click", async () => {
-  showOutput("");
+  output.textContent = "";
 
   try {
     const instance = await getWasmInstance();
     const boxTree = generateBoxTree(instance, htmlWithStyles);
 
     console.log("html_with_styles input:", htmlWithStyles);
-    console.log("wasm exports:", Object.keys(instance.exports));
     console.log("Box Tree:\n", boxTree);
 
-    showOutput(boxTree);
+    showOutput("Box Tree", boxTree);
   } catch (error) {
     console.error("WASM Box Tree generation failed:", error);
-    showOutput(`Errore: ${error instanceof Error ? error.message : String(error)}`);
+    output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
   }
 });
 
 cascadeTreeButton.addEventListener("click", async () => {
-  showOutput("");
+  output.textContent = "";
 
   try {
     const instance = await getWasmInstance();
     const cascadeTree = generateCascadeTree(instance, htmlWithStyles);
 
     console.log("html_with_styles input:", htmlWithStyles);
-    console.log("wasm exports:", Object.keys(instance.exports));
     console.log("Cascade Tree:\n", cascadeTree);
 
-    showOutput(cascadeTree);
+    showOutput("Cascade Tree", cascadeTree);
   } catch (error) {
     console.error("WASM Cascade Tree generation failed:", error);
-    showOutput(`Errore: ${error instanceof Error ? error.message : String(error)}`);
+    output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
+  }
+});
+
+boxInvoiceButton.addEventListener("click", async () => {
+  output.textContent = "";
+
+  try {
+    const instance = await getWasmInstance();
+    const boxTree = generateBoxTree(instance, htmlInvoiceTable);
+
+    console.log("Invoice table input:", htmlInvoiceTable);
+    console.log("Box Tree:\n", boxTree);
+
+    showOutput("Box Tree — invoice table", boxTree);
+  } catch (error) {
+    console.error("WASM Box Tree generation failed:", error);
+    output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
+  }
+});
+
+boxAnonRowButton.addEventListener("click", async () => {
+  output.textContent = "";
+
+  try {
+    const instance = await getWasmInstance();
+    const boxTree = generateBoxTree(instance, htmlAnonRow);
+
+    console.log("Anonymous row input:", htmlAnonRow);
+    console.log("Box Tree:\n", boxTree);
+
+    showOutput("Box Tree — anonymous table-row", boxTree);
+  } catch (error) {
+    console.error("WASM Box Tree generation failed:", error);
+    output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
+  }
+});
+
+boxInlineBlockButton.addEventListener("click", async () => {
+  output.textContent = "";
+
+  try {
+    const instance = await getWasmInstance();
+    const boxTree = generateBoxTree(instance, htmlInlineBlock);
+
+    console.log("Inline-block input:", htmlInlineBlock);
+    console.log("Box Tree:\n", boxTree);
+
+    showOutput("Box Tree — inline-block cards", boxTree);
+  } catch (error) {
+    console.error("WASM Box Tree generation failed:", error);
+    output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
+  }
+});
+
+cascadeInvoiceButton.addEventListener("click", async () => {
+  output.textContent = "";
+
+  try {
+    const instance = await getWasmInstance();
+    const cascadeTree = generateCascadeTree(instance, htmlInvoiceTable);
+
+    console.log("Cascade invoice input:", htmlInvoiceTable);
+    console.log("Cascade Tree:\n", cascadeTree);
+
+    showOutput("Cascade Tree — invoice", cascadeTree);
+  } catch (error) {
+    console.error("WASM Cascade Tree generation failed:", error);
+    output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
   }
 });
