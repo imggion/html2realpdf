@@ -443,3 +443,111 @@ cascadeInvoiceButton.addEventListener("click", async () => {
     output.textContent = `Errore: ${error instanceof Error ? error.message : String(error)}`;
   }
 });
+
+// ── Snapshot test runner ──────────────────────────────────────────
+
+const runWasmTestsButton = document.querySelector("#run-wasm-tests");
+const testResults = document.querySelector("#test-results");
+
+const testCases = [
+  { name: "tokenize_htmlHard", html: htmlHard, pipeline: "tokenize" },
+  { name: "dom_htmlWithStyles", html: htmlWithStyles, pipeline: "dom" },
+  { name: "box_htmlWithStyles", html: htmlWithStyles, pipeline: "box" },
+  { name: "cascade_htmlWithStyles", html: htmlWithStyles, pipeline: "cascade" },
+  { name: "box_htmlInvoiceTable", html: htmlInvoiceTable, pipeline: "box" },
+  { name: "cascade_htmlInvoiceTable", html: htmlInvoiceTable, pipeline: "cascade" },
+  { name: "box_htmlAnonRow", html: htmlAnonRow, pipeline: "box" },
+  { name: "box_htmlInlineBlock", html: htmlInlineBlock, pipeline: "box" },
+];
+
+function runPipeline(instance, html, pipeline) {
+  switch (pipeline) {
+    case "tokenize":
+      return String(tokenizeHtml(instance, html));
+    case "dom":
+      return generateDomTree(instance, html);
+    case "box":
+      return generateBoxTree(instance, html);
+    case "cascade":
+      return generateCascadeTree(instance, html);
+  }
+}
+
+function showDiff(name, expected, actual) {
+  const expLines = expected.split("\n");
+  const actLines = actual.split("\n");
+  const maxLen = Math.max(expLines.length, actLines.length);
+  let diffsShown = 0;
+  let text = `\n${name}:\n`;
+  for (let i = 0; i < maxLen && diffsShown < 5; i++) {
+    const exp = i < expLines.length ? expLines[i] : "(missing)";
+    const act = i < actLines.length ? actLines[i] : "(missing)";
+    if (exp !== act) {
+      text += `  line ${i + 1}:\n    expected: ${exp}\n    actual:   ${act}\n`;
+      diffsShown++;
+    }
+  }
+  if (diffsShown === 0 && expLines.length !== actLines.length) {
+    text += `  Length mismatch: expected ${expLines.length} lines, got ${actLines.length}\n`;
+  }
+  return text;
+}
+
+async function runWasmTests() {
+  testResults.textContent = "Loading snapshots...\n";
+
+  const instance = await getWasmInstance();
+
+  let snapshots;
+  try {
+    const response = await fetch("./snapshots.json");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    snapshots = await response.json();
+  } catch (err) {
+    testResults.textContent = `Failed to load snapshots.json: ${err.message}`;
+    return;
+  }
+
+  testResults.textContent = "";
+  let passed = 0;
+  let failed = 0;
+  const failures = [];
+
+  for (const test of testCases) {
+    const expected = snapshots[test.name];
+    if (expected === undefined) {
+      testResults.textContent += `✗ SKIP: ${test.name} — no snapshot\n`;
+      continue;
+    }
+
+    try {
+      const actual = runPipeline(instance, test.html, test.pipeline);
+      if (actual === expected) {
+        passed++;
+        testResults.textContent += `✓ PASS: ${test.name}\n`;
+      } else {
+        failed++;
+        testResults.textContent += `✗ FAIL: ${test.name}\n`;
+        failures.push({ name: test.name, expected, actual });
+      }
+    } catch (err) {
+      failed++;
+      testResults.textContent += `✗ ERROR: ${test.name} — ${err.message}\n`;
+    }
+  }
+
+  testResults.textContent += `\n${passed} passed, ${failed} failed\n`;
+
+  if (failures.length > 0) {
+    testResults.textContent += `\n--- Failure details ---`;
+    for (const f of failures) {
+      testResults.textContent += showDiff(f.name, f.expected, f.actual);
+    }
+  }
+}
+
+runWasmTestsButton.addEventListener("click", () => {
+  runWasmTests().catch((err) => {
+    testResults.textContent = `Internal error: ${err instanceof Error ? err.message : String(err)}`;
+  });
+});
