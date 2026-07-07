@@ -77,7 +77,7 @@ pub fn build(b: *std.Build) void {
     };
 
     const wasm = b.addExecutable(.{
-        .name = "html2realpdf",
+        .name = "libhtml2realpdf",
         .root_module = wasm_mod,
     });
 

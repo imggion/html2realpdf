@@ -10,7 +10,7 @@ wasm:
 	zig build wasm -Doptimize=ReleaseSmall
 
 wasm-list-exports:
-	node -e "const fs=require('fs'); WebAssembly.instantiate(fs.readFileSync('zig-out/bin/html2realpdf.wasm'), {}).then(({instance}) => console.log(Object.keys(instance.exports).sort().join('\n')));"
+	node -e "const fs=require('fs'); WebAssembly.instantiate(fs.readFileSync('zig-out/bin/libhtml2realpdf.wasm'), {}).then(({instance}) => console.log(Object.keys(instance.exports).sort().join('\n')));"
 
 run:
 	zig build run

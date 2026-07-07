@@ -1,6 +1,6 @@
 import { readFileSync } from "fs";
 
-const WASM_PATH = "zig-out/bin/html2realpdf.wasm";
+const WASM_PATH = "zig-out/bin/libhtml2realpdf.wasm";
 const SNAPSHOTS_PATH = "tests/web/snapshots.json";
 
 // Replicate the same HTML inputs and WASM glue from test.js

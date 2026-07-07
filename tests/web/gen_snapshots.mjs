@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "fs";
 
-const WASM_PATH = "zig-out/bin/html2realpdf.wasm";
+const WASM_PATH = "zig-out/bin/libhtml2realpdf.wasm";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 

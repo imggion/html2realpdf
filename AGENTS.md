@@ -23,7 +23,7 @@ Read these local docs before changing code:
 
 - `zig build` builds the default native executable into `zig-out/bin/html2realpdf`.
 - `zig build run` runs the native CLI target.
-- `zig build wasm -Doptimize=ReleaseSmall` builds `zig-out/bin/html2realpdf.wasm`.
+- `zig build wasm -Doptimize=ReleaseSmall` builds `zig-out/bin/libhtml2realpdf.wasm`.
 - `zig test src/html.zig` runs the current inline tokenizer tests.
 - `zig test src/dom.zig` runs the current inline DOM parser tests.
 - `zig test src/box.zig` runs the current inline Box Tree tests.

@@ -1,4 +1,4 @@
-const WASM_URL = "../../zig-out/bin/html2realpdf.wasm";
+const WASM_URL = "../../zig-out/bin/libhtml2realpdf.wasm";
 
 const htmlHard = ` <!DOCTYPE html>
  <html lang="it">
