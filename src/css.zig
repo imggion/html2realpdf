@@ -855,6 +855,69 @@ test "cascade: direction and logical text alignment inherit" {
     try std.testing.expectEqual(box.TextAlign.start, ct.styles[span_id].text_align);
 }
 
+test "cascade: logical box properties use final direction and shared physical priority" {
+    const allocator = std.testing.allocator;
+    const source =
+        "<style>" ++
+        "#rtl{margin-inline-start:11px;padding-inline-end:7px;border-inline-start:3px solid red;inline-size:120px;block-size:40px;direction:rtl}" ++
+        "#physical-last{direction:rtl;margin-inline-start:10px;margin-right:20px}" ++
+        "#logical-last{direction:rtl;margin-right:20px;margin-inline-start:10px}" ++
+        "#axes{margin-block:4px 8px;padding-inline:3px 9px;border-block:2px dashed blue;min-inline-size:50px;max-block-size:60px}" ++
+        "</style>" ++
+        "<div id='rtl'></div><div id='physical-last'></div><div id='logical-last'></div><div id='axes'></div>";
+    var ct = try cascadeTestHelper(allocator, source);
+    defer ct.deinit(allocator);
+
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const rtl_id = ct.document.nodes.items[style_id].next_sibling.?;
+    const physical_last_id = ct.document.nodes.items[rtl_id].next_sibling.?;
+    const logical_last_id = ct.document.nodes.items[physical_last_id].next_sibling.?;
+    const axes_id = ct.document.nodes.items[logical_last_id].next_sibling.?;
+
+    const rtl = ct.styles[rtl_id];
+    try std.testing.expectEqual(box.Direction.rtl, rtl.direction);
+    try std.testing.expectEqual(@as(f32, 11), rtl.margin.right);
+    try std.testing.expectEqual(@as(f32, 7), rtl.padding.left);
+    try std.testing.expectEqual(@as(f32, 3), rtl.border.right);
+    try std.testing.expectEqual(box.BorderStyle.solid, rtl.border_right_style);
+    try std.testing.expectEqualStrings("red", rtl.border_right_color);
+    try std.testing.expectEqual(box.Length{ .px = 120 }, rtl.width);
+    try std.testing.expectEqual(box.Length{ .px = 40 }, rtl.height);
+
+    try std.testing.expectEqual(@as(f32, 20), ct.styles[physical_last_id].margin.right);
+    try std.testing.expectEqual(@as(f32, 10), ct.styles[logical_last_id].margin.right);
+
+    const axes = ct.styles[axes_id];
+    try std.testing.expectEqual(@as(f32, 4), axes.margin.top);
+    try std.testing.expectEqual(@as(f32, 8), axes.margin.bottom);
+    try std.testing.expectEqual(@as(f32, 3), axes.padding.left);
+    try std.testing.expectEqual(@as(f32, 9), axes.padding.right);
+    try std.testing.expectEqual(@as(f32, 2), axes.border.top);
+    try std.testing.expectEqual(@as(f32, 2), axes.border.bottom);
+    try std.testing.expectEqual(box.BorderStyle.dashed, axes.border_top_style);
+    try std.testing.expectEqualStrings("blue", axes.border_bottom_color);
+    try std.testing.expectEqual(box.Length{ .px = 50 }, axes.min_width);
+    try std.testing.expectEqual(box.Length{ .px = 60 }, axes.max_height);
+}
+
+test "cascade: logical inherit keeps the parent's flow-relative side" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(
+        allocator,
+        "<div style='direction:ltr;margin-inline-start:13px;border-inline-start-color:red'>" ++
+            "<span style='display:block;direction:rtl;margin-inline-start:inherit;border-inline-start-color:inherit'></span>" ++
+            "</div>",
+    );
+    defer ct.deinit(allocator);
+
+    const parent_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const child_id = ct.document.nodes.items[parent_id].first_child.?;
+    try std.testing.expectEqual(@as(f32, 13), ct.styles[parent_id].margin.left);
+    try std.testing.expectEqual(@as(f32, 13), ct.styles[child_id].margin.right);
+    try std.testing.expectEqualStrings("red", ct.styles[parent_id].border_left_color);
+    try std.testing.expectEqualStrings("red", ct.styles[child_id].border_right_color);
+}
+
 test "cascade: CSS Text inline properties inherit as computed values" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<style>div { word-spacing: 3px; text-indent: 10%; text-transform: uppercase; word-break: break-all; overflow-wrap: anywhere; }</style>" ++

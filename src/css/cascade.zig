@@ -107,6 +107,7 @@ fn computeStylesRecursive(
         style.text_transform = ps.text_transform;
         style.word_break = ps.word_break;
         style.overflow_wrap = ps.overflow_wrap;
+        style.direction = ps.direction;
     }
 
     // Heading sizes are UA declarations, not inherited defaults. Preserve
@@ -158,6 +159,13 @@ fn computeStylesRecursive(
     try applyMatchedCustomProperties(custom_scope, stylesheets, matches.items, true, scratch);
     try applyInlineCustomProperties(custom_scope, document.nodes.items[node_id], scratch, true);
 
+    var direction_probe = style;
+    try applyMatchedDirection(&direction_probe, stylesheets, matches.items, custom_scope, node_computed_context, false, scratch);
+    try applyInlineDirection(&direction_probe, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, false);
+    try applyMatchedDirection(&direction_probe, stylesheets, matches.items, custom_scope, node_computed_context, true, scratch);
+    try applyInlineDirection(&direction_probe, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, true);
+    node_computed_context.logical_direction = direction_probe.direction;
+
     try applyMatchedDeclarations(&style, stylesheets, matches.items, custom_scope, node_computed_context, false, scratch);
     try applyInlineStyle(&style, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, false);
     try applyMatchedDeclarations(&style, stylesheets, matches.items, custom_scope, node_computed_context, true, scratch);
@@ -170,6 +178,50 @@ fn computeStylesRecursive(
     while (child) |child_id| {
         try computeStylesRecursive(document, stylesheets, styles, child_id, &style, custom_scope, scratch, computed_context);
         child = document.nodes.items[child_id].next_sibling;
+    }
+}
+
+fn applyMatchedDirection(
+    style: *box.Style,
+    stylesheets: []const Stylesheet,
+    matches: []const Match,
+    custom_scope: *const variables.Scope,
+    computed_context: computed.Context,
+    important: bool,
+    scratch: std.mem.Allocator,
+) !void {
+    for (matches) |match| {
+        const rule = stylesheets[match.stylesheet_idx].rules[match.rule_idx];
+        for (rule.declarations) |declaration| {
+            if (declaration.important != important or !std.ascii.eqlIgnoreCase(declaration.name, "direction")) continue;
+            const resolved = try variables.resolve(scratch, custom_scope, declaration.value) orelse continue;
+            try applyDeclaration(computed_context, style, declaration.name, resolved);
+        }
+    }
+}
+
+fn applyInlineDirection(
+    style: *box.Style,
+    node: dom.Node,
+    custom_scope: *const variables.Scope,
+    computed_context: computed.Context,
+    scratch: std.mem.Allocator,
+    important: bool,
+) !void {
+    const element = switch (node.kind) {
+        .element => |value| value,
+        else => return,
+    };
+    const inline_text = getAttributeValue(element.attributes, "style") orelse return;
+    if (inline_text.len == 0) return;
+
+    const wrapped = try std.fmt.allocPrint(scratch, "*{{{s}}}", .{inline_text});
+    const stylesheet = try parseStylesheet(scratch, wrapped);
+    if (stylesheet.rules.len == 0) return;
+    for (stylesheet.rules[0].declarations) |declaration| {
+        if (declaration.important != important or !std.ascii.eqlIgnoreCase(declaration.name, "direction")) continue;
+        const resolved = try variables.resolve(scratch, custom_scope, declaration.value) orelse continue;
+        try applyDeclaration(computed_context, style, declaration.name, resolved);
     }
 }
 

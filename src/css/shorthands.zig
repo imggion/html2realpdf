@@ -26,17 +26,55 @@ pub fn expand(
 ) !?Expansion {
     if (values.eqlProp(name, "margin")) return try expandQuad(allocator, "margin", value, important);
     if (values.eqlProp(name, "padding")) return try expandQuad(allocator, "padding", value, important);
+    if (values.eqlProp(name, "margin-block")) return try expandLogicalPair(allocator, "margin-block", null, value, important);
+    if (values.eqlProp(name, "margin-inline")) return try expandLogicalPair(allocator, "margin-inline", null, value, important);
+    if (values.eqlProp(name, "padding-block")) return try expandLogicalPair(allocator, "padding-block", null, value, important);
+    if (values.eqlProp(name, "padding-inline")) return try expandLogicalPair(allocator, "padding-inline", null, value, important);
     if (values.eqlProp(name, "border-width")) return try expandQuad(allocator, "border-width", value, important);
     if (values.eqlProp(name, "border-style")) return try expandQuad(allocator, "border-style", value, important);
     if (values.eqlProp(name, "border-color")) return try expandQuad(allocator, "border-color", value, important);
+    if (values.eqlProp(name, "border-block-width")) return try expandLogicalPair(allocator, "border-block", "width", value, important);
+    if (values.eqlProp(name, "border-inline-width")) return try expandLogicalPair(allocator, "border-inline", "width", value, important);
+    if (values.eqlProp(name, "border-block-style")) return try expandLogicalPair(allocator, "border-block", "style", value, important);
+    if (values.eqlProp(name, "border-inline-style")) return try expandLogicalPair(allocator, "border-inline", "style", value, important);
+    if (values.eqlProp(name, "border-block-color")) return try expandLogicalPair(allocator, "border-block", "color", value, important);
+    if (values.eqlProp(name, "border-inline-color")) return try expandLogicalPair(allocator, "border-inline", "color", value, important);
     if (values.eqlProp(name, "border")) return try expandBorder(allocator, null, value, important);
     if (values.eqlProp(name, "border-top")) return try expandBorder(allocator, "top", value, important);
     if (values.eqlProp(name, "border-right")) return try expandBorder(allocator, "right", value, important);
     if (values.eqlProp(name, "border-bottom")) return try expandBorder(allocator, "bottom", value, important);
     if (values.eqlProp(name, "border-left")) return try expandBorder(allocator, "left", value, important);
+    if (values.eqlProp(name, "border-block-start")) return try expandLogicalBorder(allocator, "block-start", false, value, important);
+    if (values.eqlProp(name, "border-block-end")) return try expandLogicalBorder(allocator, "block-end", false, value, important);
+    if (values.eqlProp(name, "border-inline-start")) return try expandLogicalBorder(allocator, "inline-start", false, value, important);
+    if (values.eqlProp(name, "border-inline-end")) return try expandLogicalBorder(allocator, "inline-end", false, value, important);
+    if (values.eqlProp(name, "border-block")) return try expandLogicalBorder(allocator, "block", true, value, important);
+    if (values.eqlProp(name, "border-inline")) return try expandLogicalBorder(allocator, "inline", true, value, important);
     if (values.eqlProp(name, "background")) return try single(allocator, "background-color", value, important);
     if (values.eqlProp(name, "text-decoration")) return try expandTextDecoration(allocator, value, important);
     return null;
+}
+
+fn expandLogicalPair(
+    allocator: std.mem.Allocator,
+    prefix: []const u8,
+    suffix: ?[]const u8,
+    value: []const u8,
+    important: bool,
+) !Expansion {
+    const components = splitComponents(value);
+    if (components.len == 0 or components.len > 2) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = true };
+    const resolved = [2][]const u8{ components.items[0], if (components.len == 1) components.items[0] else components.items[1] };
+    const sides = [_][]const u8{ "start", "end" };
+    const declarations = try allocator.alloc(Declaration, 2);
+    for (sides, resolved, 0..) |side, component, index| {
+        const name = if (suffix) |component_name|
+            try std.fmt.allocPrint(allocator, "{s}-{s}-{s}", .{ prefix, side, component_name })
+        else
+            try std.fmt.allocPrint(allocator, "{s}-{s}", .{ prefix, side });
+        declarations[index] = .{ .name = name, .value = component, .important = important };
+    }
+    return .{ .declarations = declarations, .owns_names = true };
 }
 
 fn expandTextDecoration(
@@ -172,19 +210,7 @@ fn expandBorder(
     value: []const u8,
     important: bool,
 ) !Expansion {
-    const components = splitComponents(value);
-    var width: []const u8 = "medium";
-    var style: []const u8 = "none";
-    var color: []const u8 = "currentColor";
-    for (components.slice()) |component| {
-        if (values.parseBorderStyle(component) != null) {
-            style = component;
-        } else if (isBorderWidth(component)) {
-            width = component;
-        } else {
-            color = component;
-        }
-    }
+    const components = borderComponents(value);
 
     const sides = [_][]const u8{ "top", "right", "bottom", "left" };
     const count: usize = if (side == null) 12 else 3;
@@ -192,9 +218,55 @@ fn expandBorder(
     var index: usize = 0;
     for (&sides) |candidate| {
         if (side) |selected| if (!std.mem.eql(u8, selected, candidate)) continue;
-        declarations[index] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-width", .{candidate}), .value = width, .important = important };
-        declarations[index + 1] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-style", .{candidate}), .value = style, .important = important };
-        declarations[index + 2] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-color", .{candidate}), .value = color, .important = important };
+        declarations[index] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-width", .{candidate}), .value = components.width, .important = important };
+        declarations[index + 1] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-style", .{candidate}), .value = components.style, .important = important };
+        declarations[index + 2] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-color", .{candidate}), .value = components.color, .important = important };
+        index += 3;
+    }
+    return .{ .declarations = declarations, .owns_names = true };
+}
+
+const BorderComponents = struct {
+    width: []const u8 = "medium",
+    style: []const u8 = "none",
+    color: []const u8 = "currentColor",
+};
+
+fn borderComponents(value: []const u8) BorderComponents {
+    const tokens = splitComponents(value);
+    var result = BorderComponents{};
+    for (tokens.slice()) |component| {
+        if (values.parseBorderStyle(component) != null) {
+            result.style = component;
+        } else if (isBorderWidth(component)) {
+            result.width = component;
+        } else {
+            result.color = component;
+        }
+    }
+    return result;
+}
+
+fn expandLogicalBorder(
+    allocator: std.mem.Allocator,
+    axis_or_side: []const u8,
+    both_sides: bool,
+    value: []const u8,
+    important: bool,
+) !Expansion {
+    const components = borderComponents(value);
+    const count: usize = if (both_sides) 6 else 3;
+    const declarations = try allocator.alloc(Declaration, count);
+    const sides = [_][]const u8{ "start", "end" };
+    var index: usize = 0;
+    for (sides) |side| {
+        if (!both_sides and index > 0) break;
+        const owned_logical_side = if (both_sides) try std.fmt.allocPrint(allocator, "{s}-{s}", .{ axis_or_side, side }) else null;
+        defer if (owned_logical_side) |owned| allocator.free(owned);
+        const logical_side = owned_logical_side orelse axis_or_side;
+        declarations[index] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-width", .{logical_side}), .value = components.width, .important = important };
+        declarations[index + 1] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-style", .{logical_side}), .value = components.style, .important = important };
+        declarations[index + 2] = .{ .name = try std.fmt.allocPrint(allocator, "border-{s}-color", .{logical_side}), .value = components.color, .important = important };
         index += 3;
     }
     return .{ .declarations = declarations, .owns_names = true };
@@ -274,6 +346,26 @@ test "expand border component quads with canonical longhand names" {
     try std.testing.expectEqualStrings("border-right-style", expansion.declarations[1].name);
     try std.testing.expectEqualStrings("solid", expansion.declarations[0].value);
     try std.testing.expectEqualStrings("dashed", expansion.declarations[1].value);
+}
+
+test "expand logical axis and border shorthands" {
+    const allocator = std.testing.allocator;
+    const margins = (try expand(allocator, "margin-inline", "4px 12px", false)).?;
+    defer margins.deinit(allocator);
+    try std.testing.expectEqualStrings("margin-inline-start", margins.declarations[0].name);
+    try std.testing.expectEqualStrings("margin-inline-end", margins.declarations[1].name);
+    try std.testing.expectEqualStrings("4px", margins.declarations[0].value);
+    try std.testing.expectEqualStrings("12px", margins.declarations[1].value);
+
+    const borders = (try expand(allocator, "border-block", "3px dashed rebeccapurple", true)).?;
+    defer borders.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 6), borders.declarations.len);
+    try std.testing.expectEqualStrings("border-block-start-width", borders.declarations[0].name);
+    try std.testing.expectEqualStrings("border-block-end-color", borders.declarations[5].name);
+    try std.testing.expectEqualStrings("3px", borders.declarations[0].value);
+    try std.testing.expectEqualStrings("dashed", borders.declarations[1].value);
+    try std.testing.expectEqualStrings("rebeccapurple", borders.declarations[2].value);
+    try std.testing.expect(borders.declarations[5].important);
 }
 
 test "expand text-decoration into line style color and thickness" {

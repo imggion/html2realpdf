@@ -49,6 +49,7 @@ pub const Context = struct {
     parent_style: ?*const box.Style = null,
     ua_style: ?*const box.Style = null,
     diagnostics: ?*std.ArrayList(diagnostics.Diagnostic) = null,
+    logical_direction: ?box.Direction = null,
 
     fn expressionContext(self: Context, font_size: f32) expressions.Context {
         return .{
@@ -74,17 +75,55 @@ const supported_properties = [_][]const u8{
     "vertical-align",        "white-space",          "widows",                "width",                     "word-break",          "word-spacing",
 };
 
+const logical_properties = [_][]const u8{
+    "block-size",
+    "border-block-end-color",
+    "border-block-end-style",
+    "border-block-end-width",
+    "border-block-start-color",
+    "border-block-start-style",
+    "border-block-start-width",
+    "border-inline-end-color",
+    "border-inline-end-style",
+    "border-inline-end-width",
+    "border-inline-start-color",
+    "border-inline-start-style",
+    "border-inline-start-width",
+    "inline-size",
+    "margin-block-end",
+    "margin-block-start",
+    "margin-inline-end",
+    "margin-inline-start",
+    "max-block-size",
+    "max-inline-size",
+    "min-block-size",
+    "min-inline-size",
+    "padding-block-end",
+    "padding-block-start",
+    "padding-inline-end",
+    "padding-inline-start",
+};
+
 pub fn supportsProperty(name: []const u8) bool {
     inline for (supported_properties) |property| {
+        if (eqlProp(name, property)) return true;
+    }
+    inline for (logical_properties) |property| {
         if (eqlProp(name, property)) return true;
     }
     return false;
 }
 
-pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, value: []const u8) !void {
+pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []const u8, value: []const u8) !void {
+    const logical_direction = context.logical_direction orelse style.direction;
+    const name = physicalPropertyName(property_name, logical_direction);
     const normalized = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (cssWideKeyword(normalized)) |keyword| {
-        applyCssWide(context, style, name, keyword);
+        if (isLogicalProperty(property_name)) {
+            applyLogicalCssWide(context, style, property_name, logical_direction, keyword);
+        } else {
+            applyCssWide(context, style, name, keyword);
+        }
         return;
     }
     if (eqlProp(name, "display")) {
@@ -245,6 +284,49 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
     }
 }
 
+/// The native profile currently implements horizontal-tb writing. Logical
+/// longhands therefore map block sides vertically and inline sides by the
+/// element's final computed direction.
+fn physicalPropertyName(name: []const u8, direction: box.Direction) []const u8 {
+    if (eqlProp(name, "block-size")) return "height";
+    if (eqlProp(name, "inline-size")) return "width";
+    if (eqlProp(name, "min-block-size")) return "min-height";
+    if (eqlProp(name, "max-block-size")) return "max-height";
+    if (eqlProp(name, "min-inline-size")) return "min-width";
+    if (eqlProp(name, "max-inline-size")) return "max-width";
+
+    if (eqlProp(name, "margin-block-start")) return "margin-top";
+    if (eqlProp(name, "margin-block-end")) return "margin-bottom";
+    if (eqlProp(name, "padding-block-start")) return "padding-top";
+    if (eqlProp(name, "padding-block-end")) return "padding-bottom";
+    if (eqlProp(name, "border-block-start-width")) return "border-top-width";
+    if (eqlProp(name, "border-block-end-width")) return "border-bottom-width";
+    if (eqlProp(name, "border-block-start-style")) return "border-top-style";
+    if (eqlProp(name, "border-block-end-style")) return "border-bottom-style";
+    if (eqlProp(name, "border-block-start-color")) return "border-top-color";
+    if (eqlProp(name, "border-block-end-color")) return "border-bottom-color";
+
+    const start_is_left = direction == .ltr;
+    if (eqlProp(name, "margin-inline-start")) return if (start_is_left) "margin-left" else "margin-right";
+    if (eqlProp(name, "margin-inline-end")) return if (start_is_left) "margin-right" else "margin-left";
+    if (eqlProp(name, "padding-inline-start")) return if (start_is_left) "padding-left" else "padding-right";
+    if (eqlProp(name, "padding-inline-end")) return if (start_is_left) "padding-right" else "padding-left";
+    if (eqlProp(name, "border-inline-start-width")) return if (start_is_left) "border-left-width" else "border-right-width";
+    if (eqlProp(name, "border-inline-end-width")) return if (start_is_left) "border-right-width" else "border-left-width";
+    if (eqlProp(name, "border-inline-start-style")) return if (start_is_left) "border-left-style" else "border-right-style";
+    if (eqlProp(name, "border-inline-end-style")) return if (start_is_left) "border-right-style" else "border-left-style";
+    if (eqlProp(name, "border-inline-start-color")) return if (start_is_left) "border-left-color" else "border-right-color";
+    if (eqlProp(name, "border-inline-end-color")) return if (start_is_left) "border-right-color" else "border-left-color";
+    return name;
+}
+
+fn isLogicalProperty(name: []const u8) bool {
+    inline for (logical_properties) |property| {
+        if (eqlProp(name, property)) return true;
+    }
+    return false;
+}
+
 const CssWideKeyword = enum { initial, inherit, unset, revert };
 
 fn cssWideKeyword(value: []const u8) ?CssWideKeyword {
@@ -265,6 +347,56 @@ fn applyCssWide(context: Context, style: *box.Style, name: []const u8, keyword: 
         .revert => if (inherited) context.parent_style orelse &initial else context.ua_style orelse &initial,
     };
     copyProperty(style, source, name);
+}
+
+fn applyLogicalCssWide(
+    context: Context,
+    style: *box.Style,
+    logical_name: []const u8,
+    target_direction: box.Direction,
+    keyword: CssWideKeyword,
+) void {
+    const initial = box.Style{};
+    const source = switch (keyword) {
+        .initial, .unset => &initial,
+        .inherit => context.parent_style orelse &initial,
+        .revert => context.ua_style orelse &initial,
+    };
+    const target_name = physicalPropertyName(logical_name, target_direction);
+    const source_name = physicalPropertyName(logical_name, source.direction);
+    copyMappedPhysicalProperty(style, source, target_name, source_name);
+}
+
+fn copyMappedPhysicalProperty(target: *box.Style, source: *const box.Style, target_name: []const u8, source_name: []const u8) void {
+    if (eqlProp(target_name, source_name)) {
+        copyProperty(target, source, target_name);
+        return;
+    }
+
+    if (eqlProp(target_name, "margin-left") or eqlProp(target_name, "margin-right")) {
+        const value = if (eqlProp(source_name, "margin-left")) source.margin.left else source.margin.right;
+        if (eqlProp(target_name, "margin-left")) target.margin.left = value else target.margin.right = value;
+        return;
+    }
+    if (eqlProp(target_name, "padding-left") or eqlProp(target_name, "padding-right")) {
+        const value = if (eqlProp(source_name, "padding-left")) source.padding.left else source.padding.right;
+        if (eqlProp(target_name, "padding-left")) target.padding.left = value else target.padding.right = value;
+        return;
+    }
+    if (eqlProp(target_name, "border-left-width") or eqlProp(target_name, "border-right-width")) {
+        const value = if (eqlProp(source_name, "border-left-width")) source.border.left else source.border.right;
+        if (eqlProp(target_name, "border-left-width")) target.border.left = value else target.border.right = value;
+        return;
+    }
+    if (eqlProp(target_name, "border-left-style") or eqlProp(target_name, "border-right-style")) {
+        const value = if (eqlProp(source_name, "border-left-style")) source.border_left_style else source.border_right_style;
+        if (eqlProp(target_name, "border-left-style")) target.border_left_style = value else target.border_right_style = value;
+        return;
+    }
+    if (eqlProp(target_name, "border-left-color") or eqlProp(target_name, "border-right-color")) {
+        const value = if (eqlProp(source_name, "border-left-color")) source.border_left_color else source.border_right_color;
+        if (eqlProp(target_name, "border-left-color")) target.border_left_color = value else target.border_right_color = value;
+    }
 }
 
 fn isInheritedProperty(name: []const u8) bool {
