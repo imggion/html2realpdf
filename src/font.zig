@@ -6,7 +6,9 @@
 //! one-codepoint-to-one-glyph path without changing layout ownership.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const box = @import("box.zig");
+const harfbuzz = @import("harfbuzz.zig");
 
 pub const Error = error{
     InvalidFont,
@@ -21,6 +23,8 @@ pub const Face = enum {
     bold,
     italic,
     bold_italic,
+    arabic,
+    hebrew,
 
     pub fn bytes(self: Face) []const u8 {
         return switch (self) {
@@ -28,6 +32,8 @@ pub const Face = enum {
             .bold => @embedFile("assets/fonts/NotoSans-Bold.ttf"),
             .italic => @embedFile("assets/fonts/NotoSans-Italic.ttf"),
             .bold_italic => @embedFile("assets/fonts/NotoSans-BoldItalic.ttf"),
+            .arabic => @embedFile("assets/fonts/NotoSansArabic-Regular.ttf"),
+            .hebrew => @embedFile("assets/fonts/NotoSansHebrew-Regular.ttf"),
         };
     }
 
@@ -37,9 +43,21 @@ pub const Face = enum {
             .bold => "NotoSans-Bold",
             .italic => "NotoSans-Italic",
             .bold_italic => "NotoSans-BoldItalic",
+            .arabic => "NotoSansArabic-Regular",
+            .hebrew => "NotoSansHebrew-Regular",
+        };
+    }
+
+    pub fn family(self: Face) []const u8 {
+        return switch (self) {
+            .regular, .bold, .italic, .bold_italic => "Noto Sans",
+            .arabic => "Noto Sans Arabic",
+            .hebrew => "Noto Sans Hebrew",
         };
     }
 };
+
+const built_in_face_count = @typeInfo(Face).@"enum".fields.len;
 
 pub fn faceFor(weight: box.FontWeight, style: box.FontStyle) Face {
     return switch (weight) {
@@ -83,6 +101,90 @@ pub const ResolvedFont = struct {
     }
 };
 
+pub const Direction = harfbuzz.Direction;
+pub const ShapedGlyph = harfbuzz.Glyph;
+pub const ShapedRun = harfbuzz.Run;
+pub const ShapingMode = enum { identity, harfbuzz };
+
+pub fn shape(
+    allocator: std.mem.Allocator,
+    resolved: ResolvedFont,
+    text: []const u8,
+    direction: Direction,
+) std.mem.Allocator.Error!ShapedRun {
+    if (builtin.is_test) return shapeIdentity(allocator, resolved, text, direction);
+    return harfbuzz.shape(allocator, resolved.data, resolved.metrics().units_per_em, text, direction);
+}
+
+pub const detectDirection = harfbuzz.detectDirection;
+
+pub fn shapeWithMode(
+    allocator: std.mem.Allocator,
+    resolved: ResolvedFont,
+    text: []const u8,
+    direction: Direction,
+    mode: ShapingMode,
+) std.mem.Allocator.Error!ShapedRun {
+    return switch (mode) {
+        .identity => shapeIdentity(allocator, resolved, text, direction),
+        .harfbuzz => shape(allocator, resolved, text, direction),
+    };
+}
+
+/// Baseline shaper used until the HarfBuzz backend is linked. Keeping this
+/// result in the same positioned-glyph contract makes the backend replaceable
+/// without letting layout or PDF serialization remap Unicode independently.
+pub fn shapeIdentity(
+    allocator: std.mem.Allocator,
+    resolved: ResolvedFont,
+    text: []const u8,
+    direction: Direction,
+) std.mem.Allocator.Error!ShapedRun {
+    var glyphs = try std.ArrayList(ShapedGlyph).initCapacity(allocator, text.len);
+    errdefer glyphs.deinit(allocator);
+    const metrics = resolved.metrics();
+    var index: usize = 0;
+    while (index < text.len) {
+        const cluster_start = index;
+        const sequence_length: usize = std.unicode.utf8ByteSequenceLength(text[index]) catch 1;
+        const cluster_end = @min(index + sequence_length, text.len);
+        const codepoint: u21 = std.unicode.utf8Decode(text[index..cluster_end]) catch 0xFFFD;
+        const glyph_id = metrics.glyphId(codepoint);
+        try glyphs.append(allocator, .{
+            .glyph_id = glyph_id,
+            .x_advance = metrics.advanceWidth(glyph_id),
+            .cluster_start = @intCast(cluster_start),
+            .cluster_end = @intCast(cluster_end),
+        });
+        index = cluster_end;
+    }
+    return .{ .glyphs = try glyphs.toOwnedSlice(allocator), .direction = direction };
+}
+
+pub fn shapedWidthCssPx(
+    shaped: ShapedRun,
+    text: []const u8,
+    units_per_em: u16,
+    font_size: f32,
+    letter_spacing: f32,
+    word_spacing: f32,
+) f32 {
+    var advance_units: i64 = 0;
+    var cluster_count: usize = 0;
+    var word_separator_count: usize = 0;
+    for (shaped.glyphs) |glyph| {
+        advance_units += glyph.x_advance;
+        if (!glyph.maps_cluster) continue;
+        cluster_count += 1;
+        const start: usize = glyph.cluster_start;
+        const end: usize = glyph.cluster_end;
+        if (end == start + 1 and end <= text.len and text[start] == ' ') word_separator_count += 1;
+    }
+    return @as(f32, @floatFromInt(advance_units)) * font_size / @as(f32, @floatFromInt(units_per_em)) +
+        letter_spacing * @as(f32, @floatFromInt(cluster_count)) +
+        word_spacing * @as(f32, @floatFromInt(word_separator_count));
+}
+
 pub fn resolve(
     registry: ?*const Registry,
     family_list: []const u8,
@@ -97,7 +199,7 @@ pub fn resolve(
             for (available.fonts, 0..) |registered, index| {
                 if (!std.ascii.eqlIgnoreCase(registered.family, family)) continue;
                 if (registered.weight == weight and registered.style == style) return .{
-                    .id = 4 + index,
+                    .id = built_in_face_count + index,
                     .family = registered.family,
                     .postscript_name = registered.postscript_name,
                     .data = registered.data,
@@ -109,7 +211,7 @@ pub fn resolve(
             if (fallback) |index| {
                 const registered = available.fonts[index];
                 return .{
-                    .id = 4 + index,
+                    .id = built_in_face_count + index,
                     .family = registered.family,
                     .postscript_name = registered.postscript_name,
                     .data = registered.data,
@@ -120,14 +222,36 @@ pub fn resolve(
         }
     }
 
+    var built_in_families = std.mem.splitScalar(u8, family_list, ',');
+    while (built_in_families.next()) |raw_family| {
+        const family = trimFamilyName(raw_family);
+        const face: ?Face = if (std.ascii.eqlIgnoreCase(family, "Noto Sans Arabic"))
+            .arabic
+        else if (std.ascii.eqlIgnoreCase(family, "Noto Sans Hebrew"))
+            .hebrew
+        else
+            null;
+        if (face) |selected| return resolvedBuiltIn(selected);
+    }
+
     const face = faceFor(weight, style);
+    return resolvedBuiltIn(face);
+}
+
+fn resolvedBuiltIn(face: Face) ResolvedFont {
     return .{
         .id = @intFromEnum(face),
-        .family = "Noto Sans",
+        .family = face.family(),
         .postscript_name = face.postscriptName(),
         .data = face.bytes(),
-        .weight = weight,
-        .style = style,
+        .weight = switch (face) {
+            .bold, .bold_italic => .bold,
+            else => .normal,
+        },
+        .style = switch (face) {
+            .italic, .bold_italic => .italic,
+            else => .normal,
+        },
     };
 }
 
@@ -149,7 +273,7 @@ pub fn resolveForCodepoint(
             for (available.fonts, 0..) |registered, index| {
                 if (!std.ascii.eqlIgnoreCase(registered.family, family)) continue;
                 const candidate = ResolvedFont{
-                    .id = 4 + index,
+                    .id = built_in_face_count + index,
                     .family = registered.family,
                     .postscript_name = registered.postscript_name,
                     .data = registered.data,
@@ -165,7 +289,12 @@ pub fn resolveForCodepoint(
     }
 
     const built_in = resolve(null, family_list, weight, style);
-    return if (built_in.metrics().glyphId(codepoint) != 0) built_in else null;
+    if (built_in.metrics().glyphId(codepoint) != 0) return built_in;
+    for ([_]Face{ .arabic, .hebrew }) |fallback_face| {
+        const fallback = resolvedBuiltIn(fallback_face);
+        if (fallback.metrics().glyphId(codepoint) != 0) return fallback;
+    }
+    return null;
 }
 
 fn registeredSupportsCodepoint(registered: RegisteredFont, codepoint: u21) bool {
@@ -182,17 +311,32 @@ pub fn measureWithFallback(
     weight: box.FontWeight,
     style: box.FontStyle,
     letter_spacing: f32,
-) Error!f32 {
+    shaping_mode: ShapingMode,
+) !f32 {
     var width: f32 = 0;
     var iterator = Utf8Iterator{ .bytes = text };
-    while (try iterator.next()) |codepoint| {
-        const resolved = resolveForCodepoint(registry, family_list, weight, style, codepoint) orelse continue;
-        const metrics = resolved.metrics();
-        width += @as(f32, @floatFromInt(metrics.advanceWidth(metrics.glyphId(codepoint)))) * font_size /
-            @as(f32, @floatFromInt(metrics.units_per_em));
-        width += letter_spacing;
+    var run_start: usize = 0;
+    var run_font: ?ResolvedFont = null;
+    while (true) {
+        const codepoint_start = iterator.index;
+        const codepoint = try iterator.next();
+        const resolved = if (codepoint) |value| resolveForCodepoint(registry, family_list, weight, style, value) else null;
+        if (run_font) |active| {
+            if (resolved == null or resolved.?.id != active.id) {
+                width += try measureResolvedRun(text[run_start..codepoint_start], active, font_size, letter_spacing, shaping_mode);
+                run_start = codepoint_start;
+            }
+        }
+        if (resolved) |next_font| run_font = next_font else break;
     }
     return width;
+}
+
+fn measureResolvedRun(text: []const u8, resolved: ResolvedFont, font_size: f32, letter_spacing: f32, shaping_mode: ShapingMode) !f32 {
+    const allocator = if (builtin.target.cpu.arch == .wasm32) std.heap.wasm_allocator else std.heap.page_allocator;
+    const shaped = try shapeWithMode(allocator, resolved, text, detectDirection(text), shaping_mode);
+    defer allocator.free(shaped.glyphs);
+    return shapedWidthCssPx(shaped, text, resolved.metrics().units_per_em, font_size, letter_spacing, 0);
 }
 
 fn trimFamilyName(value: []const u8) []const u8 {
@@ -616,6 +760,32 @@ test "measure UTF-8 text from TrueType advances" {
     const wide = try metrics.widthCssPx("WWWW", 16);
     try std.testing.expect(wide > narrow * 2);
     try std.testing.expect((try metrics.widthCssPx("café", 16)) > 0);
+}
+
+test "identity shaping preserves glyph advances and UTF-8 cluster ranges" {
+    const allocator = std.testing.allocator;
+    const resolved = resolve(null, "Noto Sans", .normal, .normal);
+    const shaped = try shapeIdentity(allocator, resolved, "Aé", .ltr);
+    defer allocator.free(shaped.glyphs);
+
+    try std.testing.expectEqual(@as(usize, 2), shaped.glyphs.len);
+    try std.testing.expectEqual(@as(u32, 0), shaped.glyphs[0].cluster_start);
+    try std.testing.expectEqual(@as(u32, 1), shaped.glyphs[0].cluster_end);
+    try std.testing.expectEqual(@as(u32, 1), shaped.glyphs[1].cluster_start);
+    try std.testing.expectEqual(@as(u32, 3), shaped.glyphs[1].cluster_end);
+    try std.testing.expectEqual(
+        resolved.metrics().advanceWidth(resolved.metrics().glyphId('é')),
+        @as(u16, @intCast(shaped.glyphs[1].x_advance)),
+    );
+}
+
+test "built-in script fallbacks cover Arabic and Hebrew" {
+    const arabic = resolveForCodepoint(null, "Noto Sans", .normal, .normal, 0x0645) orelse return error.TestUnexpectedResult;
+    const hebrew = resolveForCodepoint(null, "Noto Sans", .normal, .normal, 0x05E9) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Noto Sans Arabic", arabic.family);
+    try std.testing.expectEqualStrings("Noto Sans Hebrew", hebrew.family);
+    try std.testing.expect(arabic.metrics().glyphId(0x0645) != 0);
+    try std.testing.expect(hebrew.metrics().glyphId(0x05E9) != 0);
 }
 
 test "subset keeps requested and composite glyphs in a valid TrueType file" {

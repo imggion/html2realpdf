@@ -95,7 +95,7 @@ pub fn layoutWithOptions(
             .rect = .{
                 .x = @max(content_x - style.font_size * 1.25, containing.x),
                 .y = content_y,
-                .width = intrinsic.measureText(state.font_registry, marker, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing),
+                .width = intrinsic.measureText(state.font_registry, state.shaping_mode, marker, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing),
                 .height = @max(style.line_height, style.font_size * 1.2),
             },
             .text = marker,

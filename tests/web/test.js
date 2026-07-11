@@ -875,6 +875,22 @@ async function verifySelectorPageBreak() {
   }
 }
 
+async function verifyWebTypographyProfile() {
+  const renderer = await getPackageRenderer();
+  const pdf = await renderer.render("<p>office مرحبا שלום</p>", {
+    cssProfile: "web",
+    page: { format: "a4", margin: 36, unit: "pt" },
+  });
+  try {
+    const source = decoder.decode(pdf.toUint8Array());
+    if (!/<\w{4}> <006600660069>/.test(source)) throw new Error("OpenType ffi ligature cluster is missing from ToUnicode");
+    if (!source.includes("HREALP+NotoSansArabic-Regular")) throw new Error("Arabic fallback was not embedded");
+    if (!source.includes("HREALP+NotoSansHebrew-Regular")) throw new Error("Hebrew fallback was not embedded");
+  } finally {
+    pdf.dispose();
+  }
+}
+
 tokenizeButton.addEventListener("click", async () => {
   output.textContent = "";
 
@@ -1284,6 +1300,15 @@ async function runWasmTests() {
   } catch (err) {
     failed++;
     testResults.textContent += `✗ ERROR: selector_page_break — ${err.message}\n`;
+  }
+
+  try {
+    await verifyWebTypographyProfile();
+    passed++;
+    testResults.textContent += "✓ PASS: web_opentype_typography\n";
+  } catch (err) {
+    failed++;
+    testResults.textContent += `✗ ERROR: web_opentype_typography — ${err.message}\n`;
   }
 
   try {

@@ -42,6 +42,7 @@ pub fn layout(
         .fragments = try std.ArrayList(Fragment).initCapacity(allocator, tree.boxes.items.len),
         .page_height = options.page_height,
         .font_registry = options.font_registry,
+        .shaping_mode = options.shaping_mode,
     };
     errdefer state.fragments.deinit(allocator);
 
@@ -66,6 +67,7 @@ const State = struct {
     fragments: std.ArrayList(Fragment),
     page_height: ?f32,
     font_registry: ?*const font.Registry,
+    shaping_mode: font.ShapingMode,
     next_line_id: usize = 0,
 
     const BlockLayoutOptions = struct {

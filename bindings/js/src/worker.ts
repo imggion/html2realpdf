@@ -2,7 +2,7 @@
 
 import { WasmBridge } from "./wasm.js";
 import type { NormalizedPage } from "./page.js";
-import type { FontRegistration, PdfMetadata } from "./types.js";
+import type { CssProfile, FontRegistration, PdfMetadata } from "./types.js";
 
 interface InitMessage {
   type: "init";
@@ -16,6 +16,7 @@ interface RenderMessage {
   html: string;
   page: NormalizedPage;
   metadata?: PdfMetadata;
+  cssProfile?: CssProfile;
 }
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
@@ -37,7 +38,7 @@ scope.addEventListener("message", (event: MessageEvent<InitMessage | RenderMessa
     return;
   }
 
-  bridgePromise.then((bridge) => bridge.render(message.html, message.page, message.metadata)).then(
+  bridgePromise.then((bridge) => bridge.render(message.html, message.page, message.metadata, message.cssProfile)).then(
     (result) => {
       scope.postMessage(
         { type: "render-result", id: message.id, bytes: result.bytes, pageCount: result.pageCount, diagnostics: result.diagnostics },

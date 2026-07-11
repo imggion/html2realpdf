@@ -18,7 +18,9 @@ The browser package is published as `@imggion/html2realpdf`.
   rows;
 - A4, Letter, landscape, custom page sizes, forced breaks, `break-inside`,
   orphans, and widows;
-- selectable Unicode text with Noto Sans or registered TTF fonts;
+- selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
+- HarfBuzz OpenType shaping, kerning, ligatures, and positioned RTL runs in the
+  `web` and `strict` profiles while `document` remains byte-stable;
 - JPEG pass-through, transparent PNG soft masks, vector backgrounds/borders,
   and live link annotations;
 - uniform `border-radius` fills and borders emitted as native PDF Bézier paths;
@@ -41,6 +43,7 @@ pipeline-stage support matrix.
 import { renderPdf } from "@imggion/html2realpdf";
 
 const pdf = await renderPdf(document.querySelector("#invoice")!, {
+  cssProfile: "web",
   page: { format: "a4", margin: [15, 12], unit: "mm" },
   metadata: { title: "Invoice 2026-001", author: "Example Ltd" },
 });
@@ -164,12 +167,12 @@ cards, live canvas pixels, inline SVG, links, lists, and closed details state.
 
 ```text
 HTML -> tokenizer -> flat DOM -> CSS cascade -> flat Box Tree
-     -> block/inline/table layout -> pagination -> display list
+     -> font fallback/OpenType shaping -> block/inline/table layout -> pagination -> display list
      -> PDF writer -> WASM result handle -> Worker/TypeScript API
 ```
 
 Core modules live under `src/`: `html.zig`, `dom.zig`, `css.zig`, `box.zig`,
-`font.zig`, `layout.zig`, `pagination.zig`, `display_list.zig`, `image.zig`,
+`font.zig`, `harfbuzz.zig`, `layout.zig`, `pagination.zig`, `display_list.zig`, `image.zig`,
 `pdf.zig`, `render.zig`, and `wasm.zig`. The npm package lives in
 `bindings/js/`; framework-agnostic browser verification lives in `tests/web/`
 and the explicit React integration fixture lives in `tests/react/`.
@@ -180,4 +183,6 @@ Project code is MIT licensed. Bundled Noto Sans font software is distributed
 under the SIL Open Font License 1.1; see `assets/fonts/OFL.txt` and the copy
 included in the npm package. The vendored PDF.js display layer used only by the
 optional in-page preview is distributed under Apache License 2.0; its license
-is included in `dist/vendor/PDFJS-LICENSE.txt`.
+is included in `dist/vendor/PDFJS-LICENSE.txt`. HarfBuzz is distributed under
+its Old MIT license, included in `assets/harfbuzz/COPYING` and
+`dist/vendor/HARFBUZZ-LICENSE.txt`.

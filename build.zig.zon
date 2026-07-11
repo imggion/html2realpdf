@@ -32,6 +32,10 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
+        .harfbuzz = .{
+            .url = "https://github.com/harfbuzz/harfbuzz/releases/download/14.2.1/harfbuzz-14.2.1.tar.xz",
+            .hash = "N-V-__8AAKG-6AVY4JsSAhtXCED0b5XiG_xTS7hKLa3gG7i1",
+        },
         // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
         //.example = .{
         //    // When updating this field to a new URL, be sure to delete the corresponding
@@ -75,6 +79,7 @@
         "build.zig.zon",
         "src",
         "assets/fonts/OFL.txt",
+        "assets/harfbuzz/COPYING",
         "LICENSE",
         "README.md",
     },

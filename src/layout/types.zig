@@ -32,6 +32,7 @@ pub const Fragment = struct {
     line_id: ?usize = null,
     inline_container_line_id: ?usize = null,
     text: ?[]const u8 = null,
+    shaped: ?font.ShapedRun = null,
     leading_space: bool = false,
     font_size: f32 = 16,
     font_family: []const u8 = "Noto Sans",
@@ -77,6 +78,7 @@ pub const Options = struct {
     content_width: f32,
     page_height: ?f32 = null,
     font_registry: ?*const font.Registry = null,
+    shaping_mode: font.ShapingMode = .identity,
 };
 
 pub fn borderPaint(style: box.Style) BorderPaint {

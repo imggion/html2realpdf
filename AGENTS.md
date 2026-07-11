@@ -12,7 +12,7 @@ Read these local docs before changing code:
 
 ## Repo Summary
 
-- Zig/WebAssembly HTML-to-real-PDF renderer named `html2realpdf`; the pipeline now includes tokenizer, tolerant flat DOM, CSS cascade, flat Box Tree, layout, pagination, display list, TrueType font handling, image resources, PDF 1.7 output, and a typed npm wrapper.
+- Zig/WebAssembly HTML-to-real-PDF renderer named `html2realpdf`; the pipeline now includes tokenizer, tolerant flat DOM, CSS cascade, flat Box Tree, HarfBuzz OpenType shaping for web/strict, layout, pagination, display list, TrueType font handling, image resources, PDF 1.7 output, and a typed npm wrapper.
 - Zig version is `0.16.0`; use the 0.16 docs: https://ziglang.org/documentation/0.16.0/ and stdlib docs: https://ziglang.org/documentation/0.16.0/std/.
 - Active renderer source lives in `src/`; the npm package lives in `bindings/js/`; browser and snapshot verification live in `tests/web/`; the real React-ref integration fixture lives in `tests/react/`.
 - `build.zig` defines the native executable from `src/main.zig`, the package/root module from `src/root.zig`, and the wasm executable from `src/wasm.zig`; reusable parser/tree modules are exported from `src/root.zig`.
@@ -33,6 +33,8 @@ Read these local docs before changing code:
 - HTML-string stylesheets are inert and must resolve through `resourceResolver`; Element/ref alternate-media snapshots preserve ancestor selectors, live controls, canvas pixels, and open shadow roots.
 - CSS rgba/hex-alpha colors remain native vectors and use PDF ExtGState rather than flattening; supported shorthands expand into physical longhands before computed-value application.
 - Registered font families may declare Unicode ranges; inline layout resolves and measures fallback per codepoint, then emits distinct selectable PDF text runs for each resolved face.
+- Web/strict typography carries HarfBuzz glyph advances, offsets, direction, and UTF-8 clusters through layout and PDF. Built-in Arabic and Hebrew fallback faces are available; the document profile retains identity shaping for byte-stable baselines.
+- `tests/assets/fonts/Html2RealPdfEmojiFixture.ttf` is the registered-fallback canary; regenerate it only through `scripts/build_emoji_fixture.sh` so its source and output checksums remain reproducible.
 
 ## Commands
 
@@ -49,6 +51,7 @@ Read these local docs before changing code:
 - `make test-browser` runs the browser harness and mounted React-ref preview on Chromium, Firefox, and WebKit.
 - `make baseline` intentionally regenerates versioned PDF/PNG baselines; `make test-baseline` checks current PDF bytes against their digests.
 - `make test-release` runs Zig, package, React-build, snapshot, browser E2E, and PDF baseline suites.
+- `make test-harfbuzz` runs the native linked OpenType shaping gate; it is also part of `make test`.
 - `zig fmt --check build.zig src/*.zig src/css/*.zig src/layout/*.zig src/paint/*.zig` checks Zig formatting.
 - `make debug`, `make release`, `make wasm`, `make run`, `make react`, `make test`, `make test-react`, and `make clean` wrap common commands.
 - `make test-debug-tokenizer` prints a tokenizer dump through the debug-only tokenizer test.

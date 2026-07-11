@@ -7,6 +7,7 @@ zig-out/
 
 # Legacy cache directory (pre-0.16.0)
 zig-cache/
+zig-pkg/
 
 # Package manager lock file
 build.zig.lock

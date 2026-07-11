@@ -28,6 +28,10 @@ await copyFile(
   new URL("../dist/NotoSans-OFL.txt", import.meta.url),
 );
 await copyFile(
+  new URL("../../../assets/harfbuzz/COPYING", import.meta.url),
+  new URL("../dist/vendor/HARFBUZZ-LICENSE.txt", import.meta.url),
+);
+await copyFile(
   new URL("../node_modules/pdfjs-dist/build/pdf.min.mjs", import.meta.url),
   new URL("../dist/vendor/pdf.min.mjs", import.meta.url),
 );

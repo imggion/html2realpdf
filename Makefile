@@ -1,4 +1,4 @@
-.PHONY: debug release wasm run react baseline test test-format test-js test-react test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
+.PHONY: debug release wasm run react baseline test test-harfbuzz test-format test-js test-react test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
 
 debug:
 	zig build -Doptimize=Debug
@@ -37,6 +37,10 @@ test:
 	zig test src/render.zig
 	zig test src/css/properties.zig
 	zig test src/layout/fragmentation.zig
+	zig build test-harfbuzz
+
+test-harfbuzz:
+	zig build test-harfbuzz
 
 test-format:
 	zig fmt --check build.zig src/*.zig src/css/*.zig src/layout/*.zig src/paint/*.zig
@@ -85,6 +89,8 @@ help:
 	@echo "  make react    Start the React ref integration app"
 	@echo "  make baseline Capture versioned PDF and PNG baselines"
 	@echo "  make test     Run tests"
+	@echo "  make test-harfbuzz"
+	@echo "                Run the linked native OpenType shaping gate"
 	@echo "  make test-format"
 	@echo "                Check all Zig facade and phase-module formatting"
 	@echo "  make test-react"

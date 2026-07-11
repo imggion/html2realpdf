@@ -274,7 +274,7 @@ pub fn Cursor(comptime State: type) type {
             const ellipsis = "…";
             const ellipsis_width = self.measureStyledText(ellipsis, style);
             const line_end = self.start_x + self.width;
-            self.trimLineToFit(line_end - ellipsis_width);
+            try self.trimLineToFit(line_end - ellipsis_width);
 
             var leading_space = requested_leading_space and self.has_content;
             var consumed = if (leading_space) self.spaceWidth(style) else 0;
@@ -295,12 +295,12 @@ pub fn Cursor(comptime State: type) type {
                 leading_space = false;
             }
 
-            self.trimLineToFit(line_end - ellipsis_width);
+            try self.trimLineToFit(line_end - ellipsis_width);
             try self.appendTextFragment(box_id, ellipsis, ellipsis_width, false, style, link_url);
             self.truncated = true;
         }
 
-        fn trimLineToFit(self: *Self, target_x: f32) void {
+        fn trimLineToFit(self: *Self, target_x: f32) !void {
             while (self.x > target_x and self.state.fragments.items.len > self.line_start_fragment) {
                 const last_index = self.state.fragments.items.len - 1;
                 var fragment = &self.state.fragments.items[last_index];
@@ -324,7 +324,7 @@ pub fn Cursor(comptime State: type) type {
                 }
 
                 var text = fragment.text.?;
-                while (text.len > 0 and fragment.rect.x + self.measureFragmentText(fragment.*, text) > target_x) {
+                while (text.len > 0 and fragment.rect.x + try self.measureFragmentText(fragment.*, text) > target_x) {
                     text = text[0..previousCodepointStart(text)];
                 }
                 if (text.len == 0) {
@@ -332,21 +332,29 @@ pub fn Cursor(comptime State: type) type {
                     self.state.fragments.items.len = last_index;
                     continue;
                 }
-                const width = self.measureFragmentText(fragment.*, text);
+                const width = try self.measureFragmentText(fragment.*, text);
                 fragment.text = text;
+                const resolved = font.resolve(self.state.font_registry, fragment.font_family, fragment.font_weight, fragment.font_style);
+                fragment.shaped = try font.shapeWithMode(self.state.allocator, resolved, text, font.detectDirection(text), self.state.shaping_mode);
                 fragment.rect.width = width;
                 self.x = fragment.rect.x + width;
             }
             self.has_content = self.state.fragments.items.len > self.line_start_fragment;
         }
 
-        fn measureFragmentText(self: *Self, fragment: types.Fragment, text: []const u8) f32 {
+        fn measureFragmentText(self: *Self, fragment: types.Fragment, text: []const u8) !f32 {
             const resolved = font.resolve(self.state.font_registry, fragment.font_family, fragment.font_weight, fragment.font_style);
-            var width = (resolved.metrics().widthCssPx(text, fragment.font_size) catch 0) +
-                fragment.letter_spacing * @as(f32, @floatFromInt(countCodepoints(text))) +
-                fragment.word_spacing * @as(f32, @floatFromInt(countWordSeparators(text)));
+            const shaped = try font.shapeWithMode(self.state.allocator, resolved, text, font.detectDirection(text), self.state.shaping_mode);
+            var width = font.shapedWidthCssPx(
+                shaped,
+                text,
+                resolved.metrics().units_per_em,
+                fragment.font_size,
+                fragment.letter_spacing,
+                fragment.word_spacing,
+            );
             if (fragment.leading_space) {
-                width += intrinsic.measureText(self.state.font_registry, " ", fragment.font_family, fragment.font_size, fragment.font_weight, fragment.font_style, fragment.letter_spacing) +
+                width += intrinsic.measureText(self.state.font_registry, self.state.shaping_mode, " ", fragment.font_family, fragment.font_size, fragment.font_weight, fragment.font_style, fragment.letter_spacing) +
                     fragment.word_spacing;
             }
             return width;
@@ -395,11 +403,17 @@ pub fn Cursor(comptime State: type) type {
         ) !void {
             const line_height = @max(style.line_height, style.font_size * 1.2);
             self.line_height = @max(self.line_height, line_height);
-            var width = (resolved.metrics().widthCssPx(text, style.font_size) catch 0) +
-                style.letter_spacing * @as(f32, @floatFromInt(countCodepoints(text))) +
-                style.word_spacing * @as(f32, @floatFromInt(countWordSeparators(text)));
+            const shaped = try font.shapeWithMode(self.state.allocator, resolved, text, font.detectDirection(text), self.state.shaping_mode);
+            var width = font.shapedWidthCssPx(
+                shaped,
+                text,
+                resolved.metrics().units_per_em,
+                style.font_size,
+                style.letter_spacing,
+                style.word_spacing,
+            );
             if (leading_space) {
-                width += intrinsic.measureText(self.state.font_registry, " ", resolved.family, style.font_size, style.font_weight, style.font_style, style.letter_spacing);
+                width += intrinsic.measureText(self.state.font_registry, self.state.shaping_mode, " ", resolved.family, style.font_size, style.font_weight, style.font_style, style.letter_spacing);
                 width += style.word_spacing;
             }
             try self.state.fragments.append(self.state.allocator, .{
@@ -408,6 +422,7 @@ pub fn Cursor(comptime State: type) type {
                 .rect = .{ .x = self.x, .y = self.line_y, .width = width, .height = line_height },
                 .line_id = self.line_id,
                 .text = text,
+                .shaped = shaped,
                 .leading_space = leading_space,
                 .font_size = style.font_size,
                 .font_family = resolved.family,
@@ -428,7 +443,7 @@ pub fn Cursor(comptime State: type) type {
         }
 
         fn measureStyledText(self: *Self, text: []const u8, style: box.Style) f32 {
-            return intrinsic.measureText(self.state.font_registry, text, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing) +
+            return intrinsic.measureText(self.state.font_registry, self.state.shaping_mode, text, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing) +
                 style.word_spacing * @as(f32, @floatFromInt(countWordSeparators(text)));
         }
 

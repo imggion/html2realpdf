@@ -4,11 +4,13 @@ const std = @import("std");
 const geometry = @import("../geometry.zig");
 const pagination = @import("../pagination.zig");
 const box = @import("../box.zig");
+const font = @import("../font.zig");
 
 pub const TextRun = struct {
     position: geometry.Point,
     width: f32 = 0,
     text: []const u8,
+    shaped: ?font.ShapedRun = null,
     leading_space: bool = false,
     line_id: ?usize = null,
     font_size: f32,

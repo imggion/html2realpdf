@@ -37,6 +37,7 @@ const JsonRenderOptions = struct {
     marginBottomPoints: f32 = 0,
     marginLeftPoints: f32 = 0,
     metadata: ?JsonMetadata = null,
+    cssProfile: renderer.CssProfile = .document,
 };
 
 const PdfContext = struct {
@@ -346,6 +347,7 @@ fn renderPdfWithJson(
         },
         .metadata = metadata,
         .font_registry = if (context != null) &registry else null,
+        .css_profile = value.cssProfile,
     });
 }
 

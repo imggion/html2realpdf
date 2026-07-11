@@ -20,7 +20,7 @@ test("browser harness passes structural, complex fixture, and PDF.js preview che
   ).toMatch(/passed|failed/);
 
   const results = await page.locator("#test-results").innerText();
-  expect(results).toContain("22 passed, 0 failed");
+  expect(results).toContain("23 passed, 0 failed");
   expect(await page.locator("html").getAttribute("data-test-status"), results).toBe("passed");
   expect(failures, failures.join("\n")).toEqual([]);
 });

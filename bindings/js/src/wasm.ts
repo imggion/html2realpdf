@@ -1,6 +1,6 @@
 import { WasmRenderError } from "./errors.js";
 import type { NormalizedPage } from "./page.js";
-import type { Diagnostic, FontRegistration, PdfMetadata } from "./types.js";
+import type { CssProfile, Diagnostic, FontRegistration, PdfMetadata } from "./types.js";
 
 const EXPECTED_ABI_VERSION = 1;
 
@@ -89,7 +89,7 @@ export class WasmBridge {
     }
   }
 
-  render(html: string, page: NormalizedPage, metadata?: PdfMetadata): WasmRenderResult {
+  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile: CssProfile = "document"): WasmRenderResult {
     if (this.disposed) throw new WasmRenderError("WASM bridge has been disposed", -15);
     const input = this.encoder.encode(html);
     const renderOptions = this.encoder.encode(JSON.stringify({
@@ -99,6 +99,7 @@ export class WasmBridge {
       marginRightPoints: page.marginRightPoints,
       marginBottomPoints: page.marginBottomPoints,
       marginLeftPoints: page.marginLeftPoints,
+      cssProfile,
       metadata: metadata ? {
         ...metadata,
         keywords: Array.isArray(metadata.keywords) ? metadata.keywords.join(", ") : metadata.keywords,

@@ -18,6 +18,8 @@ const diagnostics = @import("diagnostics.zig");
 pub const Diagnostic = diagnostics.Diagnostic;
 pub const serializeDiagnostics = diagnostics.serialize;
 
+pub const CssProfile = enum { document, web, strict };
+
 pub const Options = struct {
     page_format: pagination.PageFormat = .a4,
     orientation: pagination.Orientation = .portrait,
@@ -26,6 +28,7 @@ pub const Options = struct {
     custom_page_height_points: ?f32 = null,
     metadata: pdf.Metadata = .{},
     font_registry: ?*const font.Registry = null,
+    css_profile: CssProfile = .document,
 };
 
 pub const Error = error{
@@ -94,6 +97,7 @@ pub fn renderHtml(
         .content_width = page_spec.contentWidthCssPx(),
         .page_height = page_spec.contentHeightCssPx(),
         .font_registry = options.font_registry,
+        .shaping_mode = if (options.css_profile == .document) .identity else .harfbuzz,
     });
     defer laid_out.deinit(arena);
 

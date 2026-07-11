@@ -39,6 +39,7 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
                     .position = .{ .x = fragment.rect.x, .y = fragment.rect.y },
                     .width = fragment.rect.width,
                     .text = fragment.text orelse "",
+                    .shaped = fragment.shaped,
                     .leading_space = fragment.leading_space,
                     .line_id = fragment.line_id,
                     .font_size = fragment.font_size,

@@ -30,13 +30,16 @@ pub const Options = struct {
 };
 
 const GlyphMapping = struct {
+    cid: u16,
     glyph_id: u16,
-    codepoint: u21,
+    unicode: []const u8,
 };
 
 const UsedFont = struct {
     resolved: font.ResolvedFont,
     glyphs: std.ArrayList(GlyphMapping),
+    next_custom_cid: u32,
+    uses_custom_cids: bool = false,
 };
 
 const FontUsage = struct {
@@ -63,10 +66,18 @@ const FontUsage = struct {
             const run = page_command.command.text;
             const used_index = try self.ensureFont(run);
             const metrics = self.fonts.items[used_index].resolved.metrics();
-            if (run.leading_space) try self.add(used_index, metrics.glyphId(' '), ' ');
-            var iterator = font.Utf8Iterator{ .bytes = run.text };
-            while (try iterator.next()) |codepoint| {
-                try self.add(used_index, metrics.glyphId(codepoint), codepoint);
+            if (run.leading_space) _ = try self.add(used_index, metrics.glyphId(' '), " ");
+            if (run.shaped) |shaped| {
+                for (shaped.glyphs) |glyph| {
+                    _ = try self.add(used_index, glyph.glyph_id, glyphUnicode(run.text, glyph));
+                }
+            } else {
+                var iterator = font.Utf8Iterator{ .bytes = run.text };
+                while (true) {
+                    const start = iterator.index;
+                    const codepoint = try iterator.next() orelse break;
+                    _ = try self.add(used_index, metrics.glyphId(codepoint), run.text[start..iterator.index]);
+                }
             }
         }
     }
@@ -76,7 +87,11 @@ const FontUsage = struct {
         for (self.fonts.items, 0..) |used, index| if (used.resolved.id == resolved.id) return index;
         var glyphs = try std.ArrayList(GlyphMapping).initCapacity(self.allocator, 32);
         errdefer glyphs.deinit(self.allocator);
-        try self.fonts.append(self.allocator, .{ .resolved = resolved, .glyphs = glyphs });
+        try self.fonts.append(self.allocator, .{
+            .resolved = resolved,
+            .glyphs = glyphs,
+            .next_custom_cid = resolved.metrics().glyph_count,
+        });
         return self.fonts.items.len - 1;
     }
 
@@ -86,16 +101,61 @@ const FontUsage = struct {
         unreachable;
     }
 
-    fn add(self: *FontUsage, used_index: usize, glyph_id: u16, codepoint: u21) !void {
-        for (self.fonts.items[used_index].glyphs.items) |mapping| {
-            if (mapping.glyph_id == glyph_id) return;
+    fn add(self: *FontUsage, used_index: usize, glyph_id: u16, unicode: []const u8) !u16 {
+        var used = &self.fonts.items[used_index];
+        for (used.glyphs.items) |mapping| {
+            if (mapping.glyph_id == glyph_id and std.mem.eql(u8, mapping.unicode, unicode)) return mapping.cid;
         }
-        try self.fonts.items[used_index].glyphs.append(self.allocator, .{
+
+        var cid = glyph_id;
+        for (used.glyphs.items) |mapping| {
+            if (mapping.cid != cid) continue;
+            if (used.next_custom_cid > std.math.maxInt(u16)) return error.TooManyGlyphMappings;
+            cid = @intCast(used.next_custom_cid);
+            used.next_custom_cid += 1;
+            used.uses_custom_cids = true;
+            break;
+        }
+        try used.glyphs.append(self.allocator, .{
+            .cid = cid,
             .glyph_id = glyph_id,
-            .codepoint = codepoint,
+            .unicode = unicode,
         });
+        return cid;
+    }
+
+    fn cidFor(self: *const FontUsage, used_index: usize, glyph_id: u16, unicode: []const u8) u16 {
+        for (self.fonts.items[used_index].glyphs.items) |mapping| {
+            if (mapping.glyph_id == glyph_id and std.mem.eql(u8, mapping.unicode, unicode)) return mapping.cid;
+        }
+        unreachable;
+    }
+
+    fn customMapCount(self: *const FontUsage) usize {
+        var count: usize = 0;
+        for (self.fonts.items) |used| if (used.uses_custom_cids) {
+            count += 1;
+        };
+        return count;
+    }
+
+    fn customMapObjectId(self: *const FontUsage, used_index: usize) ?usize {
+        if (!self.fonts.items[used_index].uses_custom_cids) return null;
+        var ordinal: usize = 0;
+        for (self.fonts.items[0..used_index]) |used| if (used.uses_custom_cids) {
+            ordinal += 1;
+        };
+        return 3 + self.fonts.items.len * font_object_span + ordinal;
     }
 };
+
+fn glyphUnicode(text: []const u8, glyph: font.ShapedGlyph) []const u8 {
+    if (!glyph.maps_cluster) return "";
+    const start: usize = glyph.cluster_start;
+    const end: usize = glyph.cluster_end;
+    if (start > end or end > text.len) return "";
+    return text[start..end];
+}
 
 const AlphaUsage = struct {
     values: std.ArrayList(f32),
@@ -157,7 +217,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     defer alpha_usage.deinit(allocator);
     try alpha_usage.collect(allocator, list);
 
-    const first_page_id = 3 + font_usage.fonts.items.len * font_object_span;
+    const first_page_id = 3 + font_usage.fonts.items.len * font_object_span + font_usage.customMapCount();
     const page_object_count = first_page_id - 1 + list.page_count * 2;
     const annotation_count = countLinkAnnotations(list);
     const first_annotation_id = page_object_count + 1;
@@ -192,6 +252,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
             fontObjectBase(used_index),
             used.resolved,
             used.glyphs.items,
+            font_usage.customMapObjectId(used_index),
         );
     }
 
@@ -387,6 +448,19 @@ fn pageContent(
                 const baseline = page_height - margins.top - (run.position.y + run.font_size * metrics.ascentRatio()) * scale;
                 try writeAlphaState(writer, alpha_usage, run.color.alpha);
                 try writeFillColor(writer, run.color);
+                if (requiresPositionedGlyphs(&font_usage.fonts.items[used_font_index], run)) {
+                    try writePositionedTextRun(
+                        writer,
+                        font_usage,
+                        used_font_index,
+                        run,
+                        font_size_points,
+                        x,
+                        baseline,
+                        scale,
+                    );
+                    continue;
+                }
                 try writer.print("BT /F{d} {d:.3} Tf {d:.3} Tc 1 0 0 1 {d:.3} {d:.3} Tm ", .{
                     used_font_index + 1,
                     font_size_points,
@@ -395,7 +469,7 @@ fn pageContent(
                     baseline,
                 });
                 try beginTextGlyphs(writer, run.word_spacing);
-                try writeTextRunGlyphs(writer, metrics, run);
+                try writeTextRunGlyphs(writer, font_usage, used_font_index, run);
 
                 var previous_run = run;
                 while (command_index + 1 < list.commands.items.len) {
@@ -412,7 +486,7 @@ fn pageContent(
                         !colorsEqual(next_run.color, run.color) or
                         @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) > 0.1) break;
 
-                    try writeTextRunGlyphs(writer, metrics, next_run);
+                    try writeTextRunGlyphs(writer, font_usage, used_font_index, next_run);
                     previous_run = next_run;
                     command_index += 1;
                 }
@@ -684,6 +758,7 @@ fn writeEmbeddedFontObjects(
     object_base: usize,
     resolved: font.ResolvedFont,
     usage: []const GlyphMapping,
+    cid_to_gid_object_id: ?usize,
 ) !void {
     const metrics = resolved.metrics();
     const name = try std.fmt.allocPrint(output.allocator, "HREALP+{s}", .{resolved.postscript_name});
@@ -725,11 +800,19 @@ fn writeEmbeddedFontObjects(
 
     try beginObject(output, offsets, object_base + 2);
     try output.writer.print(
-        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{s} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {d} 0 R /CIDToGIDMap /Identity /DW 600 /W [0 [",
+        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{s} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {d} 0 R /CIDToGIDMap ",
         .{ name, object_base + 1 },
     );
-    for (0..metrics.glyph_count) |glyph_id| {
-        try output.writer.print(" {d}", .{pdfAdvance(metrics.advanceWidth(@intCast(glyph_id)), metrics.units_per_em)});
+    if (cid_to_gid_object_id) |map_object_id| {
+        try output.writer.print("{d} 0 R", .{map_object_id});
+    } else {
+        try output.writer.writeAll("/Identity");
+    }
+    try output.writer.writeAll(" /DW 600 /W [0 [");
+    const width_count: usize = if (cid_to_gid_object_id != null) maxCid(usage) + 1 else metrics.glyph_count;
+    for (0..width_count) |cid| {
+        const glyph_id = glyphForCid(usage, @intCast(cid));
+        try output.writer.print(" {d}", .{pdfAdvance(metrics.advanceWidth(glyph_id), metrics.units_per_em)});
     }
     try output.writer.writeAll(" ]] >>\nendobj\n");
 
@@ -740,6 +823,43 @@ fn writeEmbeddedFontObjects(
         "<< /Type /Font /Subtype /Type0 /BaseFont /{s} /Encoding /Identity-H /DescendantFonts [{d} 0 R] /ToUnicode {d} 0 R >>\nendobj\n",
         .{ name, object_base + 2, object_base + 3 },
     );
+
+    if (cid_to_gid_object_id) |map_object_id| {
+        try writeCidToGidMapObject(output, offsets, map_object_id, usage);
+    }
+}
+
+fn maxCid(usage: []const GlyphMapping) usize {
+    var maximum: u16 = 0;
+    for (usage) |mapping| maximum = @max(maximum, mapping.cid);
+    return maximum;
+}
+
+fn glyphForCid(usage: []const GlyphMapping, cid: u16) u16 {
+    for (usage) |mapping| if (mapping.cid == cid) return mapping.glyph_id;
+    return cid;
+}
+
+fn writeCidToGidMapObject(
+    output: *std.Io.Writer.Allocating,
+    offsets: []usize,
+    object_id: usize,
+    usage: []const GlyphMapping,
+) !void {
+    const cid_count = maxCid(usage) + 1;
+    const mapping = try output.allocator.alloc(u8, cid_count * 2);
+    defer output.allocator.free(mapping);
+    for (0..cid_count) |cid| {
+        const glyph_id = glyphForCid(usage, @intCast(cid));
+        mapping[cid * 2] = @truncate(glyph_id >> 8);
+        mapping[cid * 2 + 1] = @truncate(glyph_id);
+    }
+    const compressed = try image_decoder.compressZlib(output.allocator, mapping);
+    defer output.allocator.free(compressed);
+    try beginObject(output, offsets, object_id);
+    try output.writer.print("<< /Length {d} /Filter /FlateDecode >>\nstream\n", .{compressed.len});
+    try output.writer.writeAll(compressed);
+    try output.writer.writeAll("\nendstream\nendobj\n");
 }
 
 fn writeToUnicodeObject(
@@ -771,8 +891,8 @@ fn writeToUnicodeObject(
         const count = @min(usage.len - start, 100);
         try writer.print("{d} beginbfchar\n", .{count});
         for (usage[start .. start + count]) |mapping| {
-            try writer.print("<{X:0>4}> <", .{mapping.glyph_id});
-            try writeUnicodeHex(writer, mapping.codepoint);
+            try writer.print("<{X:0>4}> <", .{mapping.cid});
+            try writeUnicodeTextHex(writer, mapping.unicode);
             try writer.writeAll(">\n");
         }
         try writer.writeAll("endbfchar\n");
@@ -792,10 +912,14 @@ fn writeToUnicodeObject(
     try output.writer.writeAll("\nendstream\nendobj\n");
 }
 
-fn writeGlyphHex(writer: *std.Io.Writer, metrics: font.Metrics, text: []const u8) !void {
+fn writeGlyphHex(writer: *std.Io.Writer, usage: *const FontUsage, used_index: usize, text: []const u8) !void {
+    const metrics = usage.fonts.items[used_index].resolved.metrics();
     var iterator = font.Utf8Iterator{ .bytes = text };
-    while (try iterator.next()) |codepoint| {
-        try writer.print("{X:0>4}", .{metrics.glyphId(codepoint)});
+    while (true) {
+        const start = iterator.index;
+        const codepoint = try iterator.next() orelse break;
+        const cid = usage.cidFor(used_index, metrics.glyphId(codepoint), text[start..iterator.index]);
+        try writer.print("{X:0>4}", .{cid});
     }
 }
 
@@ -810,27 +934,114 @@ fn endTextGlyphs(writer: *std.Io.Writer, word_spacing: f32) !void {
 /// Emit explicit TJ adjustments after word separators. Type 0 fonts use
 /// two-byte character codes, so PDF's `Tw` operator cannot reliably identify
 /// U+0020; TJ keeps spacing deterministic for every embedded font subset.
-fn writeTextRunGlyphs(writer: *std.Io.Writer, metrics: font.Metrics, run: display_list.TextRun) !void {
+fn writeTextRunGlyphs(
+    writer: *std.Io.Writer,
+    usage: *const FontUsage,
+    used_index: usize,
+    run: display_list.TextRun,
+) !void {
     if (run.leading_space) {
-        try writeGlyphHex(writer, metrics, " ");
+        try writeGlyphHex(writer, usage, used_index, " ");
         try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
+    }
+
+    if (run.shaped) |shaped| {
+        for (shaped.glyphs) |glyph| {
+            const unicode = glyphUnicode(run.text, glyph);
+            try writer.print("{X:0>4}", .{usage.cidFor(used_index, glyph.glyph_id, unicode)});
+            if (unicode.len == 1 and unicode[0] == ' ') {
+                try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
+            }
+        }
+        return;
     }
 
     var iterator = font.Utf8Iterator{ .bytes = run.text };
     var chunk_start: usize = 0;
     while (try iterator.next()) |codepoint| {
         if (codepoint != ' ' or run.word_spacing == 0) continue;
-        try writeGlyphHex(writer, metrics, run.text[chunk_start..iterator.index]);
+        try writeGlyphHex(writer, usage, used_index, run.text[chunk_start..iterator.index]);
         try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
         chunk_start = iterator.index;
     }
-    try writeGlyphHex(writer, metrics, run.text[chunk_start..]);
+    try writeGlyphHex(writer, usage, used_index, run.text[chunk_start..]);
 }
 
 fn writeWordSpacingAdjustment(writer: *std.Io.Writer, word_spacing: f32, font_size: f32) !void {
     if (word_spacing == 0) return;
     const adjustment = -word_spacing * 1000 / @max(font_size, 0.001);
     try writer.print("> {d:.3} <", .{adjustment});
+}
+
+fn requiresPositionedGlyphs(used: *const UsedFont, run: display_list.TextRun) bool {
+    const shaped = run.shaped orelse return false;
+    if (shaped.direction == .rtl) return true;
+    const metrics = used.resolved.metrics();
+    for (shaped.glyphs) |glyph| {
+        if (glyph.x_advance != metrics.advanceWidth(glyph.glyph_id) or
+            glyph.y_advance != 0 or glyph.x_offset != 0 or glyph.y_offset != 0 or !glyph.maps_cluster) return true;
+    }
+    return false;
+}
+
+fn writePositionedTextRun(
+    writer: *std.Io.Writer,
+    usage: *const FontUsage,
+    used_index: usize,
+    run: display_list.TextRun,
+    font_size_points: f32,
+    origin_x_points: f32,
+    baseline_points: f32,
+    css_to_points: f32,
+) !void {
+    const shaped = run.shaped orelse return;
+    const used = &usage.fonts.items[used_index];
+    const metrics = used.resolved.metrics();
+    const units_to_css = run.font_size / @as(f32, @floatFromInt(metrics.units_per_em));
+
+    try writer.writeAll("/Span << /ActualText <FEFF");
+    if (run.leading_space) try writeUnicodeTextHex(writer, " ");
+    try writeUnicodeTextHex(writer, run.text);
+    try writer.writeAll("> >> BDC\n");
+
+    var cursor_x_css: f32 = 0;
+    var cursor_y_css: f32 = 0;
+    if (run.leading_space) {
+        const glyph_id = metrics.glyphId(' ');
+        const cid = usage.cidFor(used_index, glyph_id, " ");
+        try writePositionedGlyph(writer, used_index, font_size_points, origin_x_points, baseline_points, cid);
+        cursor_x_css += @as(f32, @floatFromInt(metrics.advanceWidth(glyph_id))) * units_to_css + run.letter_spacing + run.word_spacing;
+    }
+
+    for (shaped.glyphs) |glyph| {
+        const unicode = glyphUnicode(run.text, glyph);
+        const cid = usage.cidFor(used_index, glyph.glyph_id, unicode);
+        const glyph_x = origin_x_points + (cursor_x_css + @as(f32, @floatFromInt(glyph.x_offset)) * units_to_css) * css_to_points;
+        const glyph_y = baseline_points + (cursor_y_css + @as(f32, @floatFromInt(glyph.y_offset)) * units_to_css) * css_to_points;
+        try writePositionedGlyph(writer, used_index, font_size_points, glyph_x, glyph_y, cid);
+        cursor_x_css += @as(f32, @floatFromInt(glyph.x_advance)) * units_to_css;
+        cursor_y_css += @as(f32, @floatFromInt(glyph.y_advance)) * units_to_css;
+        if (glyph.maps_cluster) cursor_x_css += run.letter_spacing;
+        if (unicode.len == 1 and unicode[0] == ' ') cursor_x_css += run.word_spacing;
+    }
+    try writer.writeAll("EMC\n");
+}
+
+fn writePositionedGlyph(
+    writer: *std.Io.Writer,
+    used_index: usize,
+    font_size_points: f32,
+    x: f32,
+    y: f32,
+    cid: u16,
+) !void {
+    try writer.print("BT /F{d} {d:.3} Tf 0 Tc 1 0 0 1 {d:.3} {d:.3} Tm <{X:0>4}> Tj ET\n", .{
+        used_index + 1,
+        font_size_points,
+        x,
+        y,
+        cid,
+    });
 }
 
 fn writeUnicodeHex(writer: *std.Io.Writer, codepoint: u21) !void {
@@ -842,6 +1053,11 @@ fn writeUnicodeHex(writer: *std.Io.Writer, codepoint: u21) !void {
     const high: u16 = @intCast(0xD800 + (scalar >> 10));
     const low: u16 = @intCast(0xDC00 + (scalar & 0x3FF));
     try writer.print("{X:0>4}{X:0>4}", .{ high, low });
+}
+
+fn writeUnicodeTextHex(writer: *std.Io.Writer, text: []const u8) !void {
+    var iterator = font.Utf8Iterator{ .bytes = text };
+    while (try iterator.next()) |codepoint| try writeUnicodeHex(writer, codepoint);
 }
 
 fn pdfMetric(value: i16, units_per_em: u16) i32 {
@@ -991,13 +1207,72 @@ test "write word spacing with Type 0 font TJ adjustments" {
         .word_spacing = 4,
         .color = geometry.Color.black,
     };
-    const metrics = font.resolve(null, run.font_family, run.font_weight, run.font_style).metrics();
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .text = run } });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = @import("pagination.zig").PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var usage = try FontUsage.init(allocator, null);
+    defer usage.deinit(allocator);
+    try usage.collect(&list);
     try beginTextGlyphs(&output.writer, run.word_spacing);
-    try writeTextRunGlyphs(&output.writer, metrics, run);
+    try writeTextRunGlyphs(&output.writer, &usage, 0, run);
     try endTextGlyphs(&output.writer, run.word_spacing);
     const content = output.written();
     try std.testing.expect(std.mem.count(u8, content, "<") >= 2);
     try std.testing.expect(std.mem.indexOf(u8, content, ">] TJ ET") != null);
+}
+
+test "map shaped ligature clusters and conflicting glyph Unicode through custom CIDs" {
+    const pagination = @import("pagination.zig");
+    const allocator = std.testing.allocator;
+    const resolved = font.resolve(null, "Noto Sans", .normal, .normal);
+    const glyph_id = resolved.metrics().glyphId('f');
+    const ligature_glyphs = [_]font.ShapedGlyph{.{
+        .glyph_id = glyph_id,
+        .x_advance = resolved.metrics().advanceWidth(glyph_id),
+        .cluster_start = 0,
+        .cluster_end = 2,
+    }};
+    const plain_glyphs = [_]font.ShapedGlyph{.{
+        .glyph_id = glyph_id,
+        .x_advance = resolved.metrics().advanceWidth(glyph_id),
+        .cluster_start = 0,
+        .cluster_end = 1,
+    }};
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 2);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .text = .{
+        .position = .{ .x = 10, .y = 10 },
+        .text = "fi",
+        .shaped = .{ .glyphs = &ligature_glyphs },
+        .font_size = 16,
+        .color = geometry.Color.black,
+    } } });
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .text = .{
+        .position = .{ .x = 20, .y = 10 },
+        .text = "f",
+        .shaped = .{ .glyphs = &plain_glyphs },
+        .font_size = 16,
+        .color = geometry.Color.black,
+    } } });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    const bytes = try write(allocator, &list);
+    defer allocator.free(bytes);
+
+    var expected_ligature = std.Io.Writer.Allocating.init(allocator);
+    defer expected_ligature.deinit();
+    try expected_ligature.writer.print("<{X:0>4}> <00660069>", .{glyph_id});
+    try std.testing.expect(std.mem.indexOf(u8, bytes, expected_ligature.written()) != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/CIDToGIDMap /Identity") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/CIDToGIDMap ") != null);
 }
 
 test "wrap clipped paint commands in PDF graphics state" {

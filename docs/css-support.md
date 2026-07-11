@@ -33,8 +33,8 @@ coverage. A dash means the stage is not applicable or not implemented.
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |
 | color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `currentColor`, and native PDF alpha via ExtGState |
-| font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | built-in Noto Sans and registered TTF faces |
-| line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | per-glyph registered font fallback and multi-font runs; shaping and kerning pending |
+| font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | four Noto Sans Latin faces plus built-in Arabic/Hebrew fallbacks and registered TTF faces |
+| line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | web/strict use HarfBuzz OpenType shaping, kerning, ligatures, positioned clusters, and per-glyph fallback; document keeps its byte-stable identity shaper |
 | `word-spacing` | Y | Y | Y | Y | Y | Y | Y | U+0020 spacing is measured in layout and emitted with Type 0 font `TJ` adjustments |
 | `text-indent` | Y | Y | Y | Y | Y | Y | Y | lengths and percentages on the first formatted line |
 | `text-transform` | Y | Y | Y | Y | Y | Y | Y | none, uppercase, lowercase, capitalize; locale-aware Unicode case mapping pending |
@@ -72,9 +72,10 @@ Playwright E2E make the matrix verifiable.
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
 - Flexbox, Grid, floats, positioned/sticky layout, stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
-- complete Unicode shaping, bidi, ligatures, kerning, locale-aware case
-  conversion, and Unicode line segmentation; fallback faces must currently be
-  registered in the CSS family chain with their covered ranges;
+- full Unicode bidi paragraph segmentation, locale-aware case conversion, and
+  Unicode line segmentation; Arabic and Hebrew have built-in shaped fallbacks,
+  while emoji and other scripts require a registered embeddable TTF fallback;
+  the package test suite registers a deterministic monochrome emoji fixture;
 - CSS Fragmentation fragmentainers, `@page`, named pages, and margin boxes.
 
 These features are not silently represented as screenshots. Canvas and SVG
@@ -89,7 +90,7 @@ the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
 ## Verification gates
 
 - `make test` runs focused Zig parser, cascade, layout, pagination, display-list,
-  and PDF tests.
+  and PDF tests plus a native linked-HarfBuzz shaping gate.
 - `make test-web-snapshots` checks stable WASM structural output and a real PDF
   result handle in Node.
 - `make test-browser` runs the browser harness and mounted React-ref preview on

@@ -93,7 +93,7 @@ real-PDF rendering model.
 
 The alpha supports report-oriented block/inline/table layout, common CSS box
 model properties, A4/Letter/custom pages, pagination controls, links, JPEG,
-transparent PNG, uniform rounded fills/borders, Noto Sans, and registered
+transparent PNG, uniform rounded fills/borders, Noto Sans Latin/Arabic/Hebrew, and registered
 embeddable TTF fonts. `border-radius` currently accepts one uniform absolute
 radius; per-corner, elliptical, and clipping behavior remain outside the alpha
 profile. Flexbox, Grid,
@@ -109,6 +109,8 @@ be promoted to errors with `strict: true`.
 - Project code is MIT licensed.
 - Bundled Noto Sans font software is licensed under SIL OFL 1.1; the license is
   included as `dist/NotoSans-OFL.txt`.
+- HarfBuzz is licensed under the Old MIT license; the license is included as
+  `dist/vendor/HARFBUZZ-LICENSE.txt`.
 - The dynamically loaded PDF.js display layer used by `preview()` is licensed
   under Apache License 2.0; its license is included in
   `dist/vendor/PDFJS-LICENSE.txt`.

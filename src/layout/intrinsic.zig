@@ -52,6 +52,7 @@ pub fn resolveReplacedSize(
 
 pub fn measureText(
     registry: ?*const font.Registry,
+    shaping_mode: font.ShapingMode,
     text: []const u8,
     family: []const u8,
     font_size: f32,
@@ -59,7 +60,7 @@ pub fn measureText(
     style: box.FontStyle,
     letter_spacing: f32,
 ) f32 {
-    return font.measureWithFallback(registry, text, family, font_size, weight, style, letter_spacing) catch 0;
+    return font.measureWithFallback(registry, text, family, font_size, weight, style, letter_spacing, shaping_mode) catch 0;
 }
 
 test "resolve replaced sizes from preferred and intrinsic ratios" {
