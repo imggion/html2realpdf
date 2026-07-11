@@ -561,6 +561,7 @@ pub const Style = struct {
 pub const Box = struct {
     kind: BoxType,
     node: ?dom.NodeId = null,
+    language: []const u8 = "",
 
     parent: ?BoxId = null,
     first_child: ?BoxId = null,
@@ -696,6 +697,7 @@ const BuildState = struct {
                     return try self.appendBox(.{
                         .kind = .lineBreak,
                         .node = node_id,
+                        .language = self.languageForElement(element, parent_box),
                         .style = style,
                     }, parent_box);
                 }
@@ -703,6 +705,7 @@ const BuildState = struct {
                 var box = Box{
                     .kind = boxTypeForElement(element, style),
                     .node = node_id,
+                    .language = self.languageForElement(element, parent_box),
                     .style = style,
                     .margin = style.margin,
                     .border = style.border,
@@ -743,9 +746,15 @@ const BuildState = struct {
         return try self.appendBox(.{
             .kind = .text,
             .node = node_id,
+            .language = if (parent_box) |box_id| self.boxes.items[box_id].language else "",
             .style = style,
             .text = text,
         }, parent_box);
+    }
+
+    fn languageForElement(self: *const BuildState, element: dom.Element, parent_box: ?BoxId) []const u8 {
+        return getAttributeValue(element.attributes, "lang") orelse
+            if (parent_box) |box_id| self.boxes.items[box_id].language else "";
     }
 
     /// Accepts sparse style arrays while CSS cascade is still a separate concern.
@@ -1683,6 +1692,24 @@ test "text boxes do not inherit vertical-align from table cells" {
     for (tree.boxes.items) |candidate| {
         if (candidate.kind != .text) continue;
         try std.testing.expect(candidate.style.vertical_align == .baseline);
+        return;
+    }
+    return error.TestExpectedEqual;
+}
+
+test "text boxes inherit the nearest HTML language" {
+    const allocator = std.testing.allocator;
+    const source = "<div lang='tr'><span>iyi</span></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    var tree = try Builder.build(allocator, &document, &.{}, document.root);
+    defer tree.deinit(allocator);
+
+    for (tree.boxes.items) |candidate| {
+        if (candidate.kind != .text) continue;
+        try std.testing.expectEqualStrings("tr", candidate.language);
         return;
     }
     return error.TestExpectedEqual;

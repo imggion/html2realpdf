@@ -90,6 +90,8 @@
         "assets/harfbuzz/COPYING",
         "assets/sheenbidi/LICENSE",
         "assets/libunibreak/LICENCE",
+        "assets/unicode/LICENSE.txt",
+        "scripts/generate_unicode_case.py",
         "LICENSE",
         "README.md",
     },

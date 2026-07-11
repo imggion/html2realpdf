@@ -483,6 +483,41 @@ test "apply text transform indent word spacing and emergency word breaks" {
     try std.testing.expectApproxEqAbs(@as(f32, 10), spaced_width.? - normal_width.?, 0.01);
 }
 
+test "apply full Unicode and language-sensitive text transforms" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<p lang='de' style='margin:0;text-transform:uppercase'>straße</p>" ++
+        "<p lang='tr' style='margin:0;text-transform:uppercase'>iyi</p>" ++
+        "<p lang='el' style='margin:0;text-transform:lowercase'>ΟΣ</p>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300 });
+    defer result.deinit(allocator);
+
+    var saw_german = false;
+    var saw_turkish = false;
+    var saw_greek = false;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        saw_german = saw_german or std.mem.eql(u8, text, "STRASSE");
+        saw_turkish = saw_turkish or std.mem.eql(u8, text, "İYİ");
+        saw_greek = saw_greek or std.mem.eql(u8, text, "ος");
+    }
+    try std.testing.expect(saw_german);
+    try std.testing.expect(saw_turkish);
+    try std.testing.expect(saw_greek);
+}
+
 test "align mixed inline font baselines and vertical-align offsets" {
     const html = @import("html.zig");
     const css = @import("css.zig");

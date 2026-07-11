@@ -30,6 +30,7 @@ test:
 	zig test src/geometry.zig
 	zig test src/image.zig
 	zig test src/font.zig
+	zig test src/unicode_case.zig
 	zig test src/layout.zig
 	zig test src/pagination.zig
 	zig test src/display_list.zig

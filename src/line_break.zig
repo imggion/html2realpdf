@@ -17,6 +17,7 @@ pub const Opportunity = enum(u8) {
 
 extern fn set_linebreaks_utf8([*]const u8, usize, ?[*:0]const u8, [*]u8) void;
 extern fn set_graphemebreaks_utf8([*]const u8, usize, ?[*:0]const u8, [*]u8) void;
+extern fn set_wordbreaks_utf8([*]const u8, usize, ?[*:0]const u8, [*]u8) void;
 
 /// Return one break classification per UTF-8 code unit. A permitted entry at
 /// index `i` means the line may end after byte `i`.
@@ -61,6 +62,42 @@ pub fn graphemeBoundariesForLayout(
         boundaries[end - 1] = true;
         index = end;
     }
+    return boundaries;
+}
+
+/// Return a byte-indexed mask whose true entries are UAX #29 word boundaries
+/// after that byte. The language argument is reserved for backend tailoring.
+pub fn wordBoundaries(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    language: ?[*:0]const u8,
+) std.mem.Allocator.Error![]bool {
+    if (text.len == 0) return &.{};
+    const raw = try allocator.alloc(u8, text.len);
+    defer allocator.free(raw);
+    set_wordbreaks_utf8(text.ptr, text.len, language, raw.ptr);
+    const boundaries = try allocator.alloc(bool, text.len);
+    for (raw, boundaries) |value, *boundary| boundary.* = value == 0;
+    return boundaries;
+}
+
+pub fn wordBoundariesForLayout(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    language: ?[*:0]const u8,
+) std.mem.Allocator.Error![]bool {
+    if (!builtin.is_test) return wordBoundaries(allocator, text, language);
+    if (text.len == 0) return &.{};
+    const boundaries = try allocator.alloc(bool, text.len);
+    @memset(boundaries, false);
+    var index: usize = 0;
+    while (index < text.len) {
+        const sequence_length = std.unicode.utf8ByteSequenceLength(text[index]) catch 1;
+        const end = @min(index + sequence_length, text.len);
+        boundaries[end - 1] = text[index] == ' ' or text[index] == '-' or text[index] == '/';
+        index = end;
+    }
+    boundaries[text.len - 1] = true;
     return boundaries;
 }
 

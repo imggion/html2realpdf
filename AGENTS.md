@@ -46,6 +46,7 @@ Read these local docs before changing code:
 - `zig test src/dom.zig` runs the current inline DOM parser tests.
 - `zig test src/box.zig` runs the current inline Box Tree tests.
 - `zig test src/render.zig` runs the complete renderer/PDF pipeline tests.
+- `zig test src/unicode_case.zig` verifies Unicode 17 full and language-sensitive case mappings.
 - `npm --prefix bindings/js test` builds the WASM/package and runs the Node package tests.
 - `node tests/web/verify_snapshots.mjs` verifies WASM structural snapshots and PDF handles.
 - `make test-react` builds the React integration fixture; `make react` starts its Vite development server after rebuilding WASM and bindings.

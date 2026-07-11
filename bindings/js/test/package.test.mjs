@@ -34,9 +34,11 @@ test("package carries third-party runtime licenses", async () => {
   const harfbuzzLicense = await readFile(new URL("../dist/vendor/HARFBUZZ-LICENSE.txt", import.meta.url), "utf8");
   const sheenbidiLicense = await readFile(new URL("../dist/vendor/SHEENBIDI-LICENSE.txt", import.meta.url), "utf8");
   const libunibreakLicense = await readFile(new URL("../dist/vendor/LIBUNIBREAK-LICENSE.txt", import.meta.url), "utf8");
+  const unicodeLicense = await readFile(new URL("../dist/vendor/UNICODE-LICENSE.txt", import.meta.url), "utf8");
   assert.match(harfbuzzLicense, /HarfBuzz is licensed/);
   assert.match(sheenbidiLicense, /Apache License/);
   assert.match(libunibreakLicense, /Permission is granted/);
+  assert.match(unicodeLicense, /UNICODE LICENSE V3/);
 });
 
 test("page options normalize A4, Letter, orientation, units, and margins", () => {
@@ -210,6 +212,37 @@ test("web profile shapes ligatures and built-in RTL script fallbacks in WASM", a
     assert.match(pdf, /<\w{4}> <006600660069>/);
     assert.match(pdf, /HREALP\+NotoSansArabic-Regular/);
     assert.match(pdf, /HREALP\+NotoSansHebrew-Regular/);
+  } finally {
+    if (result !== 0) exports.pdf_result_free(result);
+    exports.free(htmlPointer, html.length);
+    exports.free(optionsPointer, options.length);
+  }
+});
+
+test("WASM applies full and language-sensitive Unicode text transforms", async () => {
+  const wasm = await readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url));
+  const { instance } = await WebAssembly.instantiate(wasm, {});
+  const exports = instance.exports;
+  const encoder = new TextEncoder();
+  const html = encoder.encode("<p lang='tr' style='text-transform:uppercase'>iyi</p><p style='text-transform:uppercase'>straße</p>");
+  const options = encoder.encode(JSON.stringify({
+    pageWidthPoints: 595.2756,
+    pageHeightPoints: 841.8898,
+    cssProfile: "web",
+  }));
+  const htmlPointer = exports.alloc(html.length);
+  const optionsPointer = exports.alloc(options.length);
+  let result = 0;
+  try {
+    new Uint8Array(exports.memory.buffer, htmlPointer, html.length).set(html);
+    new Uint8Array(exports.memory.buffer, optionsPointer, options.length).set(options);
+    result = exports.render_html_to_pdf_with_json_options(htmlPointer, html.length, optionsPointer, options.length);
+    assert.equal(exports.pdf_result_status(result), 0);
+    const pointer = exports.pdf_result_data_ptr(result);
+    const length = exports.pdf_result_data_len(result);
+    const pdf = new TextDecoder("latin1").decode(new Uint8Array(exports.memory.buffer, pointer, length));
+    assert.match(pdf, /<\w{4}> <0130>/);
+    assert.match(pdf, /<\w{4}> <0053>/);
   } finally {
     if (result !== 0) exports.pdf_result_free(result);
     exports.free(htmlPointer, html.length);

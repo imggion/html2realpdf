@@ -8,6 +8,7 @@ const types = @import("types.zig");
 const font = @import("../font.zig");
 const bidi = @import("../bidi.zig");
 const line_break = @import("../line_break.zig");
+const unicode_case = @import("../unicode_case.zig");
 
 pub fn Cursor(comptime State: type) type {
     return struct {
@@ -57,7 +58,7 @@ pub fn Cursor(comptime State: type) type {
             const link_url = self.state.linkForBox(box_id) orelse inherited_link;
             if (source.style.page_break_before == .always) self.forcePageBreak();
             switch (source.kind) {
-                .text => if (source.text) |text| try self.layoutText(box_id, text, effective_source.style, link_url),
+                .text => if (source.text) |text| try self.layoutText(box_id, text, source.language, effective_source.style, link_url),
                 .lineBreak => self.newLine(),
                 .replaced => try self.layoutAtomic(box_id, effective_source, link_url),
                 .inlineBlock => try self.layoutInlineBlock(box_id, effective_source),
@@ -93,8 +94,8 @@ pub fn Cursor(comptime State: type) type {
             self.pending_space = false;
         }
 
-        fn layoutText(self: *Self, box_id: box.BoxId, text: []const u8, style: box.Style, link_url: ?[]const u8) !void {
-            const transformed = try self.transformText(text, style.text_transform);
+        fn layoutText(self: *Self, box_id: box.BoxId, text: []const u8, language: []const u8, style: box.Style, link_url: ?[]const u8) !void {
+            const transformed = try self.transformText(text, language, style.text_transform);
             switch (style.white_space) {
                 .normal => try self.layoutCollapsedText(box_id, transformed, style, link_url, true),
                 .nowrap => try self.layoutCollapsedText(box_id, transformed, style, link_url, false),
@@ -617,47 +618,23 @@ pub fn Cursor(comptime State: type) type {
             return self.measureStyledText(" ", style);
         }
 
-        fn transformText(self: *Self, text: []const u8, transform: box.TextTransform) ![]const u8 {
+        fn transformText(self: *Self, text: []const u8, language: []const u8, transform: box.TextTransform) ![]const u8 {
             if (transform == .none) {
-                self.updateCapitalizeBoundary(text);
+                try unicode_case.updateCapitalizeState(self.state.allocator, text, &self.capitalize_next);
                 return text;
             }
-            const transformed = try self.state.allocator.dupe(u8, text);
-            for (transformed) |*byte| {
-                if (byte.* >= 0x80) {
-                    self.capitalize_next = false;
-                    continue;
-                }
-                const is_letter = std.ascii.isAlphabetic(byte.*);
+            return unicode_case.transform(
+                self.state.allocator,
+                text,
                 switch (transform) {
                     .none => unreachable,
-                    .uppercase => if (is_letter) {
-                        byte.* = std.ascii.toUpper(byte.*);
-                    },
-                    .lowercase => if (is_letter) {
-                        byte.* = std.ascii.toLower(byte.*);
-                    },
-                    .capitalize => if (is_letter and self.capitalize_next) {
-                        byte.* = std.ascii.toUpper(byte.*);
-                    },
-                }
-                if (is_letter or std.ascii.isDigit(byte.*)) {
-                    self.capitalize_next = false;
-                } else if (isHtmlWhitespace(byte.*) or byte.* == '-' or byte.* == '/') {
-                    self.capitalize_next = true;
-                }
-            }
-            return transformed;
-        }
-
-        fn updateCapitalizeBoundary(self: *Self, text: []const u8) void {
-            for (text) |byte| {
-                if (byte >= 0x80 or std.ascii.isAlphanumeric(byte)) {
-                    self.capitalize_next = false;
-                } else if (isHtmlWhitespace(byte) or byte == '-' or byte == '/') {
-                    self.capitalize_next = true;
-                }
-            }
+                    .uppercase => .uppercase,
+                    .lowercase => .lowercase,
+                    .capitalize => .capitalize,
+                },
+                language,
+                &self.capitalize_next,
+            );
         }
 
         fn layoutAtomic(self: *Self, box_id: box.BoxId, source: box.Box, link_url: ?[]const u8) !void {

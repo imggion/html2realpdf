@@ -172,7 +172,7 @@ HTML -> tokenizer -> flat DOM -> CSS cascade -> flat Box Tree
 ```
 
 Core modules live under `src/`: `html.zig`, `dom.zig`, `css.zig`, `box.zig`,
-`font.zig`, `harfbuzz.zig`, `layout.zig`, `pagination.zig`, `display_list.zig`, `image.zig`,
+`font.zig`, `harfbuzz.zig`, `unicode_case.zig`, `layout.zig`, `pagination.zig`, `display_list.zig`, `image.zig`,
 `pdf.zig`, `render.zig`, and `wasm.zig`. The npm package lives in
 `bindings/js/`; framework-agnostic browser verification lives in `tests/web/`
 and the explicit React integration fixture lives in `tests/react/`.
@@ -189,4 +189,6 @@ its Old MIT license, included in `assets/harfbuzz/COPYING` and
 License 2.0, included in `assets/sheenbidi/LICENSE` and
 `dist/vendor/SHEENBIDI-LICENSE.txt`. libunibreak is distributed under the zlib
 license, included in `assets/libunibreak/LICENCE` and
-`dist/vendor/LIBUNIBREAK-LICENSE.txt`.
+`dist/vendor/LIBUNIBREAK-LICENSE.txt`. Generated Unicode case-mapping data is
+derived from Unicode 17.0.0 under Unicode License V3, included in
+`assets/unicode/LICENSE.txt` and `dist/vendor/UNICODE-LICENSE.txt`.

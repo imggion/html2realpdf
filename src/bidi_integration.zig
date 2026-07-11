@@ -77,4 +77,20 @@ pub fn main(init: std.process.Init) !void {
         previous_line = fragment.line_id;
     }
     if (first_grapheme == null or !std.mem.eql(u8, first_grapheme.?, "a\u{301}") or grapheme_lines < 2) return error.GraphemeWrapMismatch;
+
+    const case_source = "<p lang='fr' style='text-transform:capitalize'>élan—vital</p>" ++
+        "<p lang='tr' style='text-transform:uppercase'><span>iyi</span></p>";
+    const case_tokens = try html.Tokenizer.tokenizeHtml(allocator, case_source);
+    var case_document = try dom.Parser.parse(allocator, case_source, case_tokens.items);
+    const case_styles = try css.styleArrayFromDocument(allocator, &case_document);
+    var case_tree = try box.Builder.build(allocator, &case_document, case_styles, case_document.root);
+    const case_result = try layout.layout(allocator, &case_tree, &case_document, .{
+        .content_width = 400,
+        .shaping_mode = .harfbuzz,
+    });
+    var case_text = try std.ArrayList(u8).initCapacity(allocator, 32);
+    for (case_result.fragments.items) |fragment| {
+        if (fragment.text) |fragment_text| try case_text.appendSlice(allocator, fragment_text);
+    }
+    if (!std.mem.eql(u8, case_text.items, "Élan—VitalİYİ")) return error.UnicodeCaseMappingMismatch;
 }

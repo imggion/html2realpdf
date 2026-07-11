@@ -40,3 +40,15 @@ test "extended grapheme boundaries keep combining marks and emoji ZWJ together" 
     }
     try std.testing.expect(boundaries[emoji_start + "👩‍💻".len - 1]);
 }
+
+test "word boundaries preserve letters within words and separate whitespace" {
+    const allocator = std.testing.allocator;
+    const text = "hello world";
+    const boundaries = try line_break.wordBoundaries(allocator, text, null);
+    defer allocator.free(boundaries);
+
+    try std.testing.expect(!boundaries[0]);
+    try std.testing.expect(boundaries["hello".len - 1]);
+    try std.testing.expect(boundaries["hello ".len - 1]);
+    try std.testing.expect(boundaries[text.len - 1]);
+}

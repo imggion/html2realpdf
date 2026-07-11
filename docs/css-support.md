@@ -38,7 +38,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `word-spacing` | Y | Y | Y | Y | Y | Y | Y | U+0020 spacing is measured in layout and emitted with Type 0 font `TJ` adjustments |
 | `direction` / bidi | Y | Y | Y | Y | Y | Y | Y | web/strict use SheenBidi UAX #9 paragraph levels and L2 visual reordering; `ltr` and `rtl` base directions |
 | `text-indent` | Y | Y | Y | Y | Y | Y | Y | lengths and percentages on the first formatted line |
-| `text-transform` | Y | Y | Y | Y | Y | Y | Y | none, uppercase, lowercase, capitalize; locale-aware Unicode case mapping pending |
+| `text-transform` | Y | Y | Y | Y | Y | Y | Y | Unicode 17 full mappings for uppercase, lowercase, and capitalize; conditional Lithuanian, Turkish, and Azeri casing follows inherited `lang` |
 | `word-break` / `overflow-wrap` | Y | Y | Y | Y | Y | Y | Y | UAX #14 legal opportunities, CJK keep-all, and extended-grapheme emergency wrapping for break-all, break-word, and anywhere |
 | `overflow` / `text-overflow` | Y | Y | Y | Y | Y | Y | Y | visible plus rectangular padding-edge clipping for hidden/clip/auto/scroll; selectable single-line ellipsis |
 | `vertical-align` / inline baselines | Y | Y | Y | Y | Y | Y | Y | mixed text font metrics, keyword alignment, and length-percentage offsets; replaced and inline-block baselines pending |
@@ -73,7 +73,7 @@ Playwright E2E make the matrix verifiable.
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
 - Flexbox, Grid, floats, positioned/sticky layout, stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
-- CSS `unicode-bidi` isolate/override modes and locale-aware case conversion;
+- CSS `unicode-bidi` isolate/override modes and language-specific case tailoring beyond Unicode `SpecialCasing.txt`;
   Arabic and Hebrew have built-in shaped fallbacks, while emoji and other
   scripts require a registered embeddable TTF fallback;
   the package test suite registers a deterministic monochrome emoji fixture;

@@ -40,6 +40,10 @@ await copyFile(
   new URL("../dist/vendor/LIBUNIBREAK-LICENSE.txt", import.meta.url),
 );
 await copyFile(
+  new URL("../../../assets/unicode/LICENSE.txt", import.meta.url),
+  new URL("../dist/vendor/UNICODE-LICENSE.txt", import.meta.url),
+);
+await copyFile(
   new URL("../node_modules/pdfjs-dist/build/pdf.min.mjs", import.meta.url),
   new URL("../dist/vendor/pdf.min.mjs", import.meta.url),
 );
