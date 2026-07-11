@@ -668,6 +668,9 @@ test "parse dimensions preserve percentages and normalize absolute units" {
     try std.testing.expectEqual(box.Length{ .percent = 1 }, parseDimension("100%", 16).?);
     try std.testing.expectEqual(box.Length{ .px = 32 }, parseDimension("2em", 16).?);
     try std.testing.expectApproxEqAbs(@as(f32, 96), parseDimension("25.4mm", 16).?.px, 0.001);
+    try std.testing.expect(parseDimension("min-content", 16).? == .minContent);
+    try std.testing.expect(parseDimension("max-content", 16).? == .maxContent);
+    try std.testing.expect(parseDimension("fit-content", 16).? == .fitContent);
 }
 
 test "parse value: display keywords" {
@@ -811,6 +814,17 @@ test "cascade: width and height properties" {
     const div_id = ct.document.nodes.items[style_id].next_sibling.?;
     try std.testing.expectEqual(box.Length{ .px = 200 }, ct.styles[div_id].width);
     try std.testing.expectEqual(box.Length{ .px = 100 }, ct.styles[div_id].height);
+}
+
+test "cascade: preserve fit-content length-percentage limit" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='width:fit-content(calc(50% - 10px))'>box</div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    switch (ct.styles[div_id].width) {
+        .fitContent => |limit| try std.testing.expectApproxEqAbs(@as(f32, 140), limit.?.resolve(300).?, 0.001),
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "cascade: border-style per side" {

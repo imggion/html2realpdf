@@ -71,7 +71,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "vertical-align", .stage = full, .notes = "text baselines; web/strict add replaced and inline-block baselines" },
     .{ .name = "white-space", .stage = layout },
     .{ .name = "widows", .stage = layout },
-    .{ .name = "width", .stage = layout, .notes = "typed calc/min/max/clamp and viewport units" },
+    .{ .name = "width", .stage = layout, .notes = "typed calc/min/max/clamp, min-content/max-content/fit-content, and viewport units" },
     .{ .name = "word-break", .stage = full, .notes = "UAX #14 normal, break-all, and CJK keep-all with extended grapheme boundaries" },
     .{ .name = "word-spacing", .stage = full, .notes = "PDF Type 0 TJ adjustments" },
 };

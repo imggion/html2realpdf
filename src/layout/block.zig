@@ -44,6 +44,10 @@ pub fn layoutWithOptions(
     const available_outer_width = @max(containing.width - margin.left - margin.right, 1);
     const horizontal_non_content = border.left + border.right + padding.left + padding.right;
     const vertical_non_content = border.top + border.bottom + padding.top + padding.bottom;
+    const inline_sizes = if (style.width.usesIntrinsicSizing() or style.min_width.usesIntrinsicSizing() or style.max_width.usesIntrinsicSizing())
+        try state.measureIntrinsicInline(box_id)
+    else
+        intrinsic.InlineSizes{};
     const specified_content_height = intrinsic.resolveContentDimensionOptional(style.height, containing_height, vertical_non_content, style.box_sizing);
     const replaced_size = if (source.kind == .replaced) intrinsic.resolveReplacedSize(
         style,
@@ -59,13 +63,27 @@ pub fn layoutWithOptions(
     else if (replaced_size) |size|
         size.width
     else
-        intrinsic.resolveContentDimension(style.width, available_outer_width, horizontal_non_content, style.box_sizing) orelse @max(available_outer_width - horizontal_non_content, 1);
+        intrinsic.resolveContentInlineDimension(style.width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes) orelse @max(available_outer_width - horizontal_non_content, 1);
     if (!options.fill_available_width) {
-        if (intrinsic.resolveContentDimension(style.min_width, available_outer_width, horizontal_non_content, style.box_sizing)) |minimum| requested_content_width = @max(requested_content_width, minimum);
-        if (intrinsic.resolveContentDimension(style.max_width, available_outer_width, horizontal_non_content, style.box_sizing)) |maximum| requested_content_width = @min(requested_content_width, maximum);
+        const minimum = intrinsic.resolveContentInlineDimension(style.min_width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes);
+        const maximum = intrinsic.resolveContentInlineDimension(style.max_width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes);
+        if (state.web_sizing) {
+            if (maximum) |value| requested_content_width = @min(requested_content_width, value);
+            if (minimum) |value| requested_content_width = @max(requested_content_width, value);
+        } else {
+            if (minimum) |value| requested_content_width = @max(requested_content_width, value);
+            if (maximum) |value| requested_content_width = @min(requested_content_width, value);
+        }
     }
-    const content_width = @max(@min(requested_content_width, available_outer_width - horizontal_non_content), 1);
-    const outer_width = @min(content_width + horizontal_non_content, available_outer_width);
+    const may_overflow_inline = state.web_sizing and !options.fill_available_width and (!style.width.isAuto() or !style.min_width.isAuto());
+    const content_width = if (may_overflow_inline)
+        @max(requested_content_width, 1)
+    else
+        @max(@min(requested_content_width, available_outer_width - horizontal_non_content), 1);
+    const outer_width = if (may_overflow_inline)
+        content_width + horizontal_non_content
+    else
+        @min(content_width + horizontal_non_content, available_outer_width);
     var outer_y = cursor_y.* + margin.top;
 
     const fragment_id = state.fragments.items.len;

@@ -26,7 +26,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | Property or group | P | C | V | L | Paint | Page | T | Current limit |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | --- |
 | `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, and table roles |
-| width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`, `min()`, `max()`, `clamp()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
+| width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`/`min()`/`max()`/`clamp()`, `min-content`/`max-content`/`fit-content()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
 | `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic-ratio fallback for replaced elements |
 | `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
 | margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; adjacent block margin collapse |

@@ -15,6 +15,11 @@ const html = `
     <p lang="el" style="text-transform: lowercase">Greek final sigma: ΟΣ.</p>
     <p><strong>Bold</strong>, <em>italic</em>, vector background and border.</p>
     <p><a href="https://example.com/docs">Real PDF link annotation</a></p>
+    <section style="width: 320px; padding: 12px; background: #f1f5f9">
+      <div style="width: min-content; margin-bottom: 8px; padding: 6px; background: #fee2e2">alpha longestword beta</div>
+      <div style="width: max-content; margin-bottom: 8px; padding: 6px; background: #dcfce7">alpha longestword beta</div>
+      <div style="width: fit-content(140px); padding: 6px; background: #dbeafe">alpha longestword beta</div>
+    </section>
   </article>
 `;
 const input = new TextEncoder().encode(html);

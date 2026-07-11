@@ -98,6 +98,9 @@ pub fn parseLength(value: []const u8) ?f32 {
 pub fn parseDimension(value: []const u8, font_size: f32) ?box.Length {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (eqlProp(v, "auto")) return .auto;
+    if (eqlProp(v, "min-content")) return .minContent;
+    if (eqlProp(v, "max-content")) return .maxContent;
+    if (eqlProp(v, "fit-content")) return .{ .fitContent = null };
     if (v.len == 0) return null;
 
     var end: usize = 0;
@@ -127,8 +130,19 @@ pub fn parseDimensionWithContext(
     context: expressions.Context,
 ) !?box.Length {
     if (parseDimension(value, context.font_size)) |simple| return simple;
+    const normalized = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (startsWithIgnoreCase(normalized, "fit-content(") and normalized[normalized.len - 1] == ')') {
+        const argument = std.mem.trim(u8, normalized["fit-content(".len .. normalized.len - 1], " \t\n\r\x0C");
+        if (argument.len == 0) return null;
+        const limit = try expressions.parse(allocator, store, argument, context) orelse return null;
+        return .{ .fitContent = .{ .expression = limit } };
+    }
     const reference = try expressions.parse(allocator, store, value, context) orelse return null;
     return .{ .expression = reference };
+}
+
+fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
+    return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
 }
 
 pub fn parseLineHeight(value: []const u8, font_size: f32) ?f32 {

@@ -224,6 +224,10 @@ const State = struct {
         return false;
     }
 
+    pub fn measureIntrinsicInline(self: *State, box_id: box.BoxId) std.mem.Allocator.Error!intrinsic.InlineSizes {
+        return intrinsic.measureBoxInline(self.allocator, self.tree, box_id, self.font_registry, self.shaping_mode);
+    }
+
     pub fn layoutTable(
         self: *State,
         table_id: box.BoxId,
@@ -1125,6 +1129,56 @@ test "web sizing resolves percentage heights only through definite containing bl
     try std.testing.expectApproxEqAbs(@as(f32, 90), definite_calc.?, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 60), indefinite_percent.?, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 50), absolute_calc.?, 0.01);
+}
+
+test "web sizing measures min max fit content and shrink-to-fit inline blocks" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='width:min-content;background:#ff0000'>alpha longestword beta</div>" ++
+        "<div style='width:max-content;background:#00ff00'>alpha longestword beta</div>" ++
+        "<div style='width:fit-content(100px);background:#0000ff'>alpha longestword beta</div>" ++
+        "<p style='margin:0'><span style='display:inline-block;background:#ff00ff'>tiny words</span></p>" ++
+        "<div style='width:50px;min-width:120px;max-width:80px;background:#00ffff'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 140, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    const text_style = styles[document.nodes.items[document.root].first_child.?];
+    const min_expected = intrinsic.measureText(null, .identity, "longestword", text_style.font_family, text_style.font_size, text_style.font_weight, text_style.font_style, text_style.letter_spacing);
+    const max_expected = intrinsic.measureText(null, .identity, "alpha longestword beta", text_style.font_family, text_style.font_size, text_style.font_weight, text_style.font_style, text_style.letter_spacing);
+    const inline_expected = intrinsic.measureText(null, .identity, "tiny words", text_style.font_family, text_style.font_size, text_style.font_weight, text_style.font_style, text_style.letter_spacing);
+    try std.testing.expect(min_expected < 100 and max_expected > 140);
+
+    var min_width: ?f32 = null;
+    var max_width: ?f32 = null;
+    var fit_width: ?f32 = null;
+    var inline_width: ?f32 = null;
+    var constrained_width: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const background = fragment.background orelse continue;
+        if (background.red == 1 and background.green == 0 and background.blue == 0) min_width = fragment.rect.width;
+        if (background.green == 1 and background.red == 0 and background.blue == 0) max_width = fragment.rect.width;
+        if (background.blue == 1 and background.red == 0 and background.green == 0) fit_width = fragment.rect.width;
+        if (background.red == 1 and background.blue == 1 and background.green == 0) inline_width = fragment.rect.width;
+        if (background.green == 1 and background.blue == 1 and background.red == 0) constrained_width = fragment.rect.width;
+    }
+
+    try std.testing.expectApproxEqAbs(min_expected, min_width.?, 0.01);
+    try std.testing.expectApproxEqAbs(max_expected, max_width.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), fit_width.?, 0.01);
+    try std.testing.expectApproxEqAbs(inline_expected, inline_width.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), constrained_width.?, 0.01);
 }
 
 test "adjacent block margins collapse instead of adding" {

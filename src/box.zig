@@ -467,11 +467,36 @@ pub const EdgeSizes = struct {
 
 /// A layout dimension that must retain its percentage until a containing size
 /// is known. Absolute CSS units are normalized to CSS pixels by the cascade.
+pub const FitContentLimit = union(enum) {
+    px: f32,
+    percent: f32,
+    expression: expressions.Reference,
+
+    pub fn resolve(self: FitContentLimit, reference: f32) ?f32 {
+        return switch (self) {
+            .px => |value| value,
+            .percent => |ratio| reference * ratio,
+            .expression => |value| value.resolve(reference),
+        };
+    }
+
+    pub fn dependsOnPercentage(self: FitContentLimit) bool {
+        return switch (self) {
+            .px => false,
+            .percent => true,
+            .expression => |value| value.dependsOnPercentage(),
+        };
+    }
+};
+
 pub const Length = union(enum) {
     auto,
     px: f32,
     percent: f32,
     expression: expressions.Reference,
+    minContent,
+    maxContent,
+    fitContent: ?FitContentLimit,
 
     pub fn resolve(self: Length, reference: f32) ?f32 {
         return switch (self) {
@@ -479,7 +504,19 @@ pub const Length = union(enum) {
             .px => |value| value,
             .percent => |ratio| reference * ratio,
             .expression => |value| value.resolve(reference),
+            .minContent, .maxContent, .fitContent => null,
         };
+    }
+
+    pub fn usesIntrinsicSizing(self: Length) bool {
+        return switch (self) {
+            .minContent, .maxContent, .fitContent => true,
+            else => false,
+        };
+    }
+
+    pub fn isAuto(self: Length) bool {
+        return self == .auto;
     }
 };
 
@@ -1330,6 +1367,9 @@ fn writeLengthDebug(name: []const u8, length: Length, writer: *std.Io.Writer) !v
         .px => |value| try writer.print(" {s}={d:.2}", .{ name, value }),
         .percent => |ratio| try writer.print(" {s}={d:.2}%", .{ name, ratio * 100 }),
         .expression => try writer.print(" {s}=<calc>", .{name}),
+        .minContent => try writer.print(" {s}=min-content", .{name}),
+        .maxContent => try writer.print(" {s}=max-content", .{name}),
+        .fitContent => try writer.print(" {s}=fit-content", .{name}),
     }
 }
 

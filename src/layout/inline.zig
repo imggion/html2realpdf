@@ -712,17 +712,41 @@ pub fn Cursor(comptime State: type) type {
 
         fn layoutInlineBlock(self: *Self, box_id: box.BoxId, source: box.Box) !void {
             const horizontal_edges = source.margin.left + source.margin.right + source.border.left + source.border.right + source.padding.left + source.padding.right;
-            const requested_content = source.style.width.resolve(self.width) orelse @max(self.width - (self.x - self.start_x) - horizontal_edges, 1);
+            const horizontal_non_content = source.border.left + source.border.right + source.padding.left + source.padding.right;
+            const available_content = @max(self.width - (self.x - self.start_x) - horizontal_edges, 1);
+            const needs_intrinsic = self.state.web_sizing or source.style.width.usesIntrinsicSizing() or source.style.min_width.usesIntrinsicSizing() or source.style.max_width.usesIntrinsicSizing();
+            const inline_sizes = if (needs_intrinsic) try self.state.measureIntrinsicInline(box_id) else intrinsic.InlineSizes{};
+            var requested_content = intrinsic.resolveContentInlineDimension(source.style.width, self.width, horizontal_non_content, source.style.box_sizing, inline_sizes) orelse if (self.state.web_sizing)
+                @min(inline_sizes.max_content, @max(inline_sizes.min_content, available_content))
+            else
+                available_content;
+            const minimum = intrinsic.resolveContentInlineDimension(source.style.min_width, self.width, horizontal_non_content, source.style.box_sizing, inline_sizes);
+            const maximum = intrinsic.resolveContentInlineDimension(source.style.max_width, self.width, horizontal_non_content, source.style.box_sizing, inline_sizes);
+            if (self.state.web_sizing) {
+                if (maximum) |value| requested_content = @min(requested_content, value);
+                if (minimum) |value| requested_content = @max(requested_content, value);
+            } else {
+                if (minimum) |value| requested_content = @max(requested_content, value);
+                if (maximum) |value| requested_content = @min(requested_content, value);
+            }
             const expected_outer_width = requested_content + horizontal_edges;
             if (self.has_content and self.x + expected_outer_width > self.start_x + self.width) self.newLine();
 
             const fragment_start = self.state.fragments.items.len;
             var nested_cursor_y = self.line_y;
-            const rect = try self.state.layoutBlock(
-                box_id,
-                .{ .x = self.x, .y = self.line_y, .width = expected_outer_width },
-                &nested_cursor_y,
-            );
+            const rect = if (self.state.web_sizing)
+                try self.state.layoutBlockWithOptions(
+                    box_id,
+                    .{ .x = self.x, .y = self.line_y, .width = expected_outer_width },
+                    &nested_cursor_y,
+                    .{ .fill_available_width = true },
+                )
+            else
+                try self.state.layoutBlock(
+                    box_id,
+                    .{ .x = self.x, .y = self.line_y, .width = expected_outer_width },
+                    &nested_cursor_y,
+                );
             var baseline: ?f32 = null;
             if (self.state.atomic_inline_baselines and source.style.overflow == .visible) {
                 for (self.state.fragments.items[fragment_start..]) |fragment| {
