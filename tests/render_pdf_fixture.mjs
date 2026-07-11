@@ -29,6 +29,7 @@ const html = `
       <caption style="caption-side: bottom; padding: 5px; color: #475569">Caption below the grid</caption>
     </table>
     <section style="width: 400px; margin-top: 16px; padding: 8px; border: 1px solid #94a3b8">
+      <div style="box-sizing: border-box; width: 128px; aspect-ratio: 16/9; margin-bottom: 8px; padding: 8px; background: #fef3c7">16 / 9 card</div>
       <div style="float: left; width: 72px; height: 54px; margin-right: 10px; padding: 6px; background: #fee2e2">Left float</div>
       <div style="float: right; width: 66px; height: 42px; margin-left: 10px; padding: 6px; background: #dcfce7">Right float</div>
       <p style="margin: 0">Text occupies the live band between both floats while remaining native selectable PDF text.</p>

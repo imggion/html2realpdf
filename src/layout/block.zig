@@ -216,6 +216,10 @@ pub fn layoutWithOptions(
     var content_height = @max(child_cursor_y - content_y, 0);
     if (specified_content_height) |height| {
         content_height = if (state.web_sizing) height else @max(content_height, height);
+    } else if (state.web_sizing and source.kind != .replaced) {
+        if (intrinsic.contentBlockSizeFromAspectRatio(style, content_width, horizontal_non_content, vertical_non_content)) |ratio_height| {
+            content_height = ratio_height;
+        }
     }
     if (intrinsic.resolveContentDimensionOptional(style.min_height, containing_height, vertical_non_content, style.box_sizing)) |minimum| content_height = @max(content_height, minimum);
     if (intrinsic.resolveContentDimensionOptional(style.max_height, containing_height, vertical_non_content, style.box_sizing)) |maximum| content_height = @min(content_height, maximum);

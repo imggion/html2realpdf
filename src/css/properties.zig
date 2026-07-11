@@ -31,7 +31,7 @@ const layout = Stage{ .parsed = true, .cascaded = true, .computed = true, .laid_
 const computed_only = Stage{ .parsed = true, .cascaded = true, .computed = true, .tested = true };
 
 pub const document_profile = [_]PropertySupport{
-    .{ .name = "aspect-ratio", .stage = layout, .notes = "preferred ratio and intrinsic ratio fallback for replaced elements" },
+    .{ .name = "aspect-ratio", .stage = layout, .notes = "preferred ratio, replaced intrinsic fallback, and Web non-replaced auto block sizing" },
     .{ .name = "background-color", .stage = full },
     .{ .name = "border", .stage = full, .notes = "uniform radius only" },
     .{ .name = "border-collapse", .stage = layout },

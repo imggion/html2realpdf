@@ -56,6 +56,27 @@ pub fn resolveContentInlineDimension(
     return contentBoxValue(resolved, non_content, sizing);
 }
 
+/// Transfers a non-replaced box's preferred ratio into its auto block axis.
+/// The ratio operates on the box selected by `box-sizing`, then returns the
+/// content-box height consumed by block layout.
+pub fn contentBlockSizeFromAspectRatio(
+    style: box.Style,
+    content_width: f32,
+    horizontal_non_content: f32,
+    vertical_non_content: f32,
+) ?f32 {
+    const ratio = style.aspect_ratio.resolve(null) orelse return null;
+    const ratio_width = switch (style.box_sizing) {
+        .contentBox => content_width,
+        .borderBox => content_width + horizontal_non_content,
+    };
+    const ratio_height = ratio_width / ratio;
+    return switch (style.box_sizing) {
+        .contentBox => @max(ratio_height, 0),
+        .borderBox => @max(ratio_height - vertical_non_content, 0),
+    };
+}
+
 fn contentBoxValue(resolved: f32, non_content: f32, sizing: box.BoxSizing) f32 {
     return switch (sizing) {
         .contentBox => @max(resolved, 0),
@@ -347,4 +368,15 @@ test "clamp intrinsic inline sizing keywords" {
     try std.testing.expectApproxEqAbs(@as(f32, 220), resolveContentInlineDimension(.maxContent, 150, 0, .contentBox, sizes).?, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 150), resolveContentInlineDimension(.{ .fitContent = null }, 150, 0, .contentBox, sizes).?, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 100), resolveContentInlineDimension(.{ .fitContent = .{ .px = 100 } }, 150, 0, .contentBox, sizes).?, 0.001);
+}
+
+test "transfer preferred aspect ratio through content and border boxes" {
+    const content_style = box.Style{ .aspect_ratio = .{ .ratio = 16.0 / 9.0, .use_intrinsic = false } };
+    try std.testing.expectApproxEqAbs(@as(f32, 90), contentBlockSizeFromAspectRatio(content_style, 160, 30, 30).?, 0.01);
+
+    const border_style = box.Style{
+        .box_sizing = .borderBox,
+        .aspect_ratio = .{ .ratio = 16.0 / 9.0, .use_intrinsic = false },
+    };
+    try std.testing.expectApproxEqAbs(@as(f32, 60), contentBlockSizeFromAspectRatio(border_style, 130, 30, 30).?, 0.01);
 }

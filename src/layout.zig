@@ -1235,6 +1235,41 @@ test "border-box dimensions include padding and borders" {
     return error.TestExpectedEqual;
 }
 
+test "Web non-replaced boxes transfer aspect ratio into auto height" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='width:160px;aspect-ratio:16/9'></div>" ++
+        "<div style='box-sizing:border-box;width:160px;aspect-ratio:16/9;padding:10px;border:5px solid'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 400, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var boxes: [2]geometry.Rect = undefined;
+    var count: usize = 0;
+    for (result.fragments.items) |fragment| {
+        if (fragment.source_box == tree.root) continue;
+        if (tree.boxes.items[fragment.source_box].kind != .block) continue;
+        boxes[count] = fragment.rect;
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expectApproxEqAbs(@as(f32, 160), boxes[0].width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 90), boxes[0].height, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 160), boxes[1].width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 90), boxes[1].height, 0.01);
+}
+
 test "web sizing resolves percentage heights only through definite containing blocks" {
     const html = @import("html.zig");
     const css = @import("css.zig");
