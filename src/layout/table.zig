@@ -313,6 +313,11 @@ fn tableCellOuterWidthHint(cell: box.Box, table_width: f32) ?f32 {
             const content_width = resolveContentDimension(cell.style.width, table_width, horizontal_edges, cell.style.box_sizing) orelse return null;
             return content_width + horizontal_edges;
         },
+        .expression => {
+            const horizontal_edges = cell.border.left + cell.border.right + cell.padding.left + cell.padding.right;
+            const content_width = resolveContentDimension(cell.style.width, table_width, horizontal_edges, cell.style.box_sizing) orelse return null;
+            return content_width + horizontal_edges;
+        },
     };
 }
 

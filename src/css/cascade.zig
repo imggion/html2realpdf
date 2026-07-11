@@ -7,6 +7,9 @@ const html = @import("../html.zig");
 const syntax = @import("syntax.zig");
 const selectors = @import("selectors.zig");
 const computed = @import("computed.zig");
+const expressions = @import("expressions.zig");
+const variables = @import("variables.zig");
+const diagnostics = @import("../diagnostics.zig");
 
 const Stylesheet = syntax.Stylesheet;
 const Specificity = syntax.Specificity;
@@ -33,15 +36,41 @@ const Match = struct {
     specificity: Specificity,
 };
 
+pub const Context = struct {
+    viewport_width: f32 = 800,
+    viewport_height: f32 = 600,
+    root_font_size: f32 = 16,
+    diagnostics: ?*std.ArrayList(diagnostics.Diagnostic) = null,
+};
+
 pub fn computeStyles(
     arena: std.mem.Allocator,
     document: *const dom.Document,
     stylesheets: []const Stylesheet,
 ) ![]box.Style {
+    return computeStylesWithContext(arena, document, stylesheets, .{});
+}
+
+pub fn computeStylesWithContext(
+    arena: std.mem.Allocator,
+    document: *const dom.Document,
+    stylesheets: []const Stylesheet,
+    context: Context,
+) ![]box.Style {
     const styles = try arena.alloc(box.Style, document.nodes.items.len);
     @memset(styles, box.Style{});
+    const expression_store = try arena.create(expressions.Store);
+    expression_store.* = try expressions.Store.init(arena);
+    const computed_context = computed.Context{
+        .allocator = arena,
+        .expression_store = expression_store,
+        .root_font_size = context.root_font_size,
+        .viewport_width = context.viewport_width,
+        .viewport_height = context.viewport_height,
+        .diagnostics = context.diagnostics,
+    };
 
-    try computeStylesRecursive(document, stylesheets, styles, document.root, null, arena);
+    try computeStylesRecursive(document, stylesheets, styles, document.root, null, null, arena, computed_context);
 
     return styles;
 }
@@ -52,7 +81,9 @@ fn computeStylesRecursive(
     styles: []box.Style,
     node_id: dom.NodeId,
     parent_style: ?*const box.Style,
+    parent_scope: ?*const variables.Scope,
     scratch: std.mem.Allocator,
+    computed_context: computed.Context,
 ) !void {
     const ua_style = box.defaultStyleForNode(document, node_id);
     var style = ua_style;
@@ -102,17 +133,27 @@ fn computeStylesRecursive(
 
     std.mem.sort(Match, matches.items, {}, compareMatchBySpecificity);
 
-    applyMatchedDeclarations(&style, stylesheets, matches.items, false);
-    applyInlineStyle(&style, document.nodes.items[node_id], scratch, false);
-    applyMatchedDeclarations(&style, stylesheets, matches.items, true);
-    applyInlineStyle(&style, document.nodes.items[node_id], scratch, true);
+    var node_computed_context = computed_context;
+    node_computed_context.parent_style = parent_style;
+    node_computed_context.ua_style = &ua_style;
+
+    const custom_scope = try variables.Scope.create(scratch, parent_scope);
+    try applyMatchedCustomProperties(custom_scope, stylesheets, matches.items, false, scratch);
+    try applyInlineCustomProperties(custom_scope, document.nodes.items[node_id], scratch, false);
+    try applyMatchedCustomProperties(custom_scope, stylesheets, matches.items, true, scratch);
+    try applyInlineCustomProperties(custom_scope, document.nodes.items[node_id], scratch, true);
+
+    try applyMatchedDeclarations(&style, stylesheets, matches.items, custom_scope, node_computed_context, false, scratch);
+    try applyInlineStyle(&style, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, false);
+    try applyMatchedDeclarations(&style, stylesheets, matches.items, custom_scope, node_computed_context, true, scratch);
+    try applyInlineStyle(&style, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, true);
 
     styles[node_id] = style;
 
     const node = document.nodes.items[node_id];
     var child = node.first_child;
     while (child) |child_id| {
-        try computeStylesRecursive(document, stylesheets, styles, child_id, &style, scratch);
+        try computeStylesRecursive(document, stylesheets, styles, child_id, &style, custom_scope, scratch, computed_context);
         child = document.nodes.items[child_id].next_sibling;
     }
 }
@@ -121,17 +162,33 @@ fn applyMatchedDeclarations(
     style: *box.Style,
     stylesheets: []const Stylesheet,
     matches: []const Match,
+    custom_scope: *const variables.Scope,
+    computed_context: computed.Context,
     important: bool,
-) void {
+    scratch: std.mem.Allocator,
+) !void {
     for (matches) |match| {
         const rule = stylesheets[match.stylesheet_idx].rules[match.rule_idx];
         for (rule.declarations) |declaration| {
-            if (declaration.important == important) applyDeclaration(style, declaration.name, declaration.value);
+            if (declaration.important != important or isCustomProperty(declaration.name)) continue;
+            if (!computed.supportsProperty(declaration.name)) {
+                try reportUnsupportedProperty(computed_context.allocator, computed_context, declaration.name);
+                continue;
+            }
+            const resolved = try variables.resolve(scratch, custom_scope, declaration.value) orelse continue;
+            try applyDeclaration(computed_context, style, declaration.name, resolved);
         }
     }
 }
 
-fn applyInlineStyle(style: *box.Style, node: dom.Node, scratch: std.mem.Allocator, important: bool) void {
+fn applyInlineStyle(
+    style: *box.Style,
+    node: dom.Node,
+    custom_scope: *const variables.Scope,
+    computed_context: computed.Context,
+    scratch: std.mem.Allocator,
+    important: bool,
+) !void {
     const element = switch (node.kind) {
         .element => |value| value,
         else => return,
@@ -139,13 +196,83 @@ fn applyInlineStyle(style: *box.Style, node: dom.Node, scratch: std.mem.Allocato
     const inline_text = getAttributeValue(element.attributes, "style") orelse return;
     if (inline_text.len == 0) return;
 
-    const wrapped = std.fmt.allocPrint(scratch, "*{{{s}}}", .{inline_text}) catch return;
-    const stylesheet = parseStylesheet(scratch, wrapped) catch return;
+    const wrapped = try std.fmt.allocPrint(scratch, "*{{{s}}}", .{inline_text});
+    const stylesheet = try parseStylesheet(scratch, wrapped);
     if (stylesheet.rules.len == 0) return;
 
     for (stylesheet.rules[0].declarations) |declaration| {
-        if (declaration.important == important) applyDeclaration(style, declaration.name, declaration.value);
+        if (declaration.important != important or isCustomProperty(declaration.name)) continue;
+        if (!computed.supportsProperty(declaration.name)) {
+            try reportUnsupportedProperty(computed_context.allocator, computed_context, declaration.name);
+            continue;
+        }
+        const resolved = try variables.resolve(scratch, custom_scope, declaration.value) orelse continue;
+        try applyDeclaration(computed_context, style, declaration.name, resolved);
     }
+}
+
+fn reportUnsupportedProperty(
+    allocator: std.mem.Allocator,
+    context: computed.Context,
+    property: []const u8,
+) !void {
+    const collector = context.diagnostics orelse return;
+    for (collector.items) |existing| {
+        if (existing.property) |reported| {
+            if (std.ascii.eqlIgnoreCase(reported, property)) return;
+        }
+    }
+    const message = try std.fmt.allocPrint(allocator, "Unsupported CSS property was ignored: {s}", .{property});
+    try collector.append(allocator, .{
+        .code = "UNSUPPORTED_CSS_PROPERTY",
+        .severity = .warning,
+        .message = message,
+        .property = property,
+        .phase = .computed,
+    });
+}
+
+fn applyMatchedCustomProperties(
+    scope: *variables.Scope,
+    stylesheets: []const Stylesheet,
+    matches: []const Match,
+    important: bool,
+    scratch: std.mem.Allocator,
+) !void {
+    for (matches) |match| {
+        const rule = stylesheets[match.stylesheet_idx].rules[match.rule_idx];
+        for (rule.declarations) |declaration| {
+            if (declaration.important == important and isCustomProperty(declaration.name)) {
+                try scope.set(scratch, declaration.name, declaration.value);
+            }
+        }
+    }
+}
+
+fn applyInlineCustomProperties(
+    scope: *variables.Scope,
+    node: dom.Node,
+    scratch: std.mem.Allocator,
+    important: bool,
+) !void {
+    const element = switch (node.kind) {
+        .element => |value| value,
+        else => return,
+    };
+    const inline_text = getAttributeValue(element.attributes, "style") orelse return;
+    if (inline_text.len == 0) return;
+    const wrapped = try std.fmt.allocPrint(scratch, "*{{{s}}}", .{inline_text});
+    const stylesheet = try parseStylesheet(scratch, wrapped);
+    if (stylesheet.rules.len == 0) return;
+    for (stylesheet.rules[0].declarations) |declaration| {
+        if (declaration.important == important and isCustomProperty(declaration.name)) {
+            try scope.set(scratch, declaration.name, declaration.value);
+        }
+    }
+}
+
+fn isCustomProperty(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "--");
 }
 
 fn compareMatchBySpecificity(_: void, a: Match, b: Match) bool {
@@ -280,17 +407,25 @@ pub fn styleArrayFromDocument(
     arena: std.mem.Allocator,
     document: *const dom.Document,
 ) ![]box.Style {
+    return styleArrayFromDocumentWithContext(arena, document, .{});
+}
+
+pub fn styleArrayFromDocumentWithContext(
+    arena: std.mem.Allocator,
+    document: *const dom.Document,
+    context: Context,
+) ![]box.Style {
     const css_text = collectStyleText(arena, document) catch &.{};
     if (css_text.len == 0) {
-        return computeStyles(arena, document, &.{});
+        return computeStylesWithContext(arena, document, &.{}, context);
     }
 
     const stylesheet = parseStylesheet(arena, css_text) catch {
-        return computeStyles(arena, document, &.{});
+        return computeStylesWithContext(arena, document, &.{}, context);
     };
     // The stylesheet borrows arena memory for the complete render lifetime.
 
-    return computeStyles(arena, document, &.{stylesheet});
+    return computeStylesWithContext(arena, document, &.{stylesheet}, context);
 }
 
 // ---------------------------------------------------------------

@@ -13,6 +13,10 @@ const pagination = @import("pagination.zig");
 const display_list = @import("display_list.zig");
 const pdf = @import("pdf.zig");
 const font = @import("font.zig");
+const diagnostics = @import("diagnostics.zig");
+
+pub const Diagnostic = diagnostics.Diagnostic;
+pub const serializeDiagnostics = diagnostics.serialize;
 
 pub const Options = struct {
     page_format: pagination.PageFormat = .a4,
@@ -34,9 +38,11 @@ pub const Error = error{
 pub const Result = struct {
     bytes: []u8,
     page_count: usize,
+    diagnostics_json: []u8,
 
     pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
         allocator.free(self.bytes);
+        allocator.free(self.diagnostics_json);
         self.* = undefined;
     }
 };
@@ -49,22 +55,13 @@ pub fn renderHtml(
     var arena_state = std.heap.ArenaAllocator.init(output_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    var diagnostic_list = try std.ArrayList(diagnostics.Diagnostic).initCapacity(arena, 0);
 
     var tokens = try html.Tokenizer.tokenizeHtml(arena, source);
     defer tokens.deinit(arena);
 
     var document = try dom.Parser.parse(arena, source, tokens.items);
     defer document.deinit(arena);
-
-    const styles = try css.styleArrayFromDocument(arena, &document);
-    for (styles) |style| {
-        if (!style.layout_supported) return Error.UnsupportedDisplayLayout;
-        if (style.position != .static) return Error.UnsupportedPositionedLayout;
-        if (style.float_direction != .none) return Error.UnsupportedFloatLayout;
-    }
-    var tree = try box.Builder.build(arena, &document, styles, document.root);
-    defer tree.deinit(arena);
-    try validateGlyphCoverage(&tree, options.font_registry);
 
     const page_spec = if (options.custom_page_width_points != null and options.custom_page_height_points != null)
         pagination.PageSpec{
@@ -78,6 +75,20 @@ pub fn renderHtml(
             options.orientation,
             options.margins_points,
         );
+
+    const styles = try css.styleArrayFromDocumentWithContext(arena, &document, .{
+        .viewport_width = page_spec.contentWidthCssPx(),
+        .viewport_height = page_spec.contentHeightCssPx(),
+        .diagnostics = &diagnostic_list,
+    });
+    for (styles) |style| {
+        if (!style.layout_supported) return Error.UnsupportedDisplayLayout;
+        if (style.position != .static) return Error.UnsupportedPositionedLayout;
+        if (style.float_direction != .none) return Error.UnsupportedFloatLayout;
+    }
+    var tree = try box.Builder.build(arena, &document, styles, document.root);
+    defer tree.deinit(arena);
+    try validateGlyphCoverage(&tree, options.font_registry);
 
     var laid_out = try layout.layout(arena, &tree, &document, .{
         .content_width = page_spec.contentWidthCssPx(),
@@ -97,10 +108,13 @@ pub fn renderHtml(
         .font_registry = options.font_registry,
     });
     const owned_pdf = try output_allocator.dupe(u8, temporary_pdf);
+    errdefer output_allocator.free(owned_pdf);
+    const diagnostics_json = try diagnostics.serialize(output_allocator, diagnostic_list.items);
 
     return .{
         .bytes = owned_pdf,
         .page_count = pages.page_count,
+        .diagnostics_json = diagnostics_json,
     };
 }
 
@@ -150,6 +164,20 @@ test "reject positioned and floating layout instead of silently misrendering" {
         Error.MissingGlyph,
         renderHtml(allocator, "<p>Unsupported emoji 😀</p>", .{}),
     );
+}
+
+test "return structured diagnostics for ignored CSS declarations" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<p style=\"filter:blur(2px); color:#123456\">diagnostic</p>",
+        .{},
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, result.diagnostics_json, "\"code\":\"UNSUPPORTED_CSS_PROPERTY\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.diagnostics_json, "\"property\":\"filter\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.diagnostics_json, "\"phase\":\"computed\"") != null);
 }
 
 test "render anchor elements as PDF link annotations" {

@@ -445,13 +445,13 @@ const CssParser = struct {
 
     fn parseDeclaration(self: *CssParser) ?Declaration {
         self.skipWsAndComments();
-        if (!cssIdentStart(self.peek())) {
+        if (!self.startsDeclarationName()) {
             self.skipMalformedDeclaration();
             return null;
         }
 
         const name_start = self.pos;
-        const name = self.parseIdent();
+        const name = self.parseDeclarationName();
         if (name.len == 0) {
             self.skipMalformedDeclaration();
             return null;
@@ -520,6 +520,19 @@ const CssParser = struct {
         if (!important) important = self.consumeTrailingImportant();
 
         return Declaration{ .name = name, .value = parsed_value.value, .important = important };
+    }
+
+    fn startsDeclarationName(self: *const CssParser) bool {
+        if (cssIdentStart(self.peek())) return true;
+        return self.peek() == '-' and self.pos + 1 < self.input.len and
+            (self.input[self.pos + 1] == '-' or cssIdentStart(self.input[self.pos + 1]));
+    }
+
+    fn parseDeclarationName(self: *CssParser) []const u8 {
+        const start = self.pos;
+        if (!self.startsDeclarationName()) return "";
+        while (!self.eof() and cssIdentChar(self.peek())) _ = self.next();
+        return self.input[start..self.pos];
     }
 
     fn consumeTrailingImportant(self: *CssParser) bool {

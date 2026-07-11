@@ -14,7 +14,8 @@ label "CSS3".
 - **web** is the staged `0.2+` profile. Its foundations exist as separate CSS
   and formatting-context modules, but Flexbox, Grid, positioned layout, floats,
   and web effects are not enabled yet.
-- **strict** is planned as a diagnostic policy, not a separate layout engine.
+- **strict** uses the same layout engine and turns unsupported CSS into an
+  immediate error at the browser snapshot boundary.
 
 ## Reading the matrix
 
@@ -25,11 +26,11 @@ coverage. A dash means the stage is not applicable or not implemented.
 | Property or group | P | C | V | L | Paint | Page | T | Current limit |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | --- |
 | `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, and table roles |
-| width/height/min/max | Y | Y | Y | Y | - | Y | Y | px, %, absolute units, em/rem, auto |
+| width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, percentages, `calc()`, `min()`, `max()`, `clamp()`, viewport and font-relative units |
 | margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; adjacent block margin collapse |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |
-| color/background color | Y | Y | Y | Y | Y | Y | Y | named and hexadecimal colors; no alpha cascade yet |
+| color/background color | Y | Y | Y | Y | Y | Y | Y | named/hex colors and `currentColor`; alpha still flattens before PDF paint |
 | font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | built-in Noto Sans and registered TTF faces |
 | line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | no shaping, kerning, or per-glyph fallback yet |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
@@ -43,6 +44,11 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `float` | Y | Y | Y | - | - | - | Y | only none renders; others fail clearly |
 | selectors | Y | Y | - | - | - | - | Y | type, class, ID, universal, compound, descendant, child |
 | `!important`, inheritance, source order | Y | Y | Y | - | - | - | Y | author origin and inline style ordering |
+| CSS-wide keywords | Y | Y | Y | - | - | - | Y | `initial`, `inherit`, `unset`, `revert` |
+| custom properties / `var()` | Y | Y | Y | - | - | - | Y | inherited scopes, nested fallback, cycle detection |
+| browser pseudo-elements | Y | Y | Y | Y | Y | Y | Y | `::before`/`::after` strings and `attr()` become synthetic nodes; counters pending |
+| browser media/viewport snapshot | Y | Y | Y | - | - | - | Y | deterministic viewport; explicit `screen` or `print` selection |
+| open Shadow DOM snapshot | Y | Y | Y | Y | Y | Y | Y | opt-in composed-tree flattening with slots |
 
 The machine-readable property inventory lives in
 `src/css/properties.zig`. Structural snapshots, Zig tests, Node ABI tests, and
@@ -50,9 +56,9 @@ Playwright E2E make the matrix verifiable.
 
 ## Explicitly unsupported in the current profile
 
-- custom properties and `var()`;
-- `calc()`, `min()`, `max()`, `clamp()`, viewport units, and typed alpha;
-- pseudo-elements and generated content;
+- typed alpha/compositing and non-color typed values such as angles,
+  transforms, and images;
+- generated counters and complex pseudo-element `content` values;
 - Flexbox, Grid, floats, positioned/sticky layout, stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
 - complete Unicode shaping, bidi, ligatures, and per-glyph font fallback;
@@ -61,6 +67,11 @@ Playwright E2E make the matrix verifiable.
 These features are not silently represented as screenshots. Canvas and SVG
 resources are captured as scoped image resources; normal text, links, borders,
 and fills remain native PDF content.
+
+Unsupported declarations found by the Zig/native path are returned through the
+WASM result handle as owned structured diagnostics. Browser snapshots attach
+the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
+"ignore"`; subtree raster fallback is not enabled yet.
 
 ## Verification gates
 
@@ -73,4 +84,3 @@ and fills remain native PDF content.
 - `make test-baseline` regenerates the versioned PDF fixtures in memory and
   compares their SHA-256 digests with the committed visual baseline manifest.
 - `make test-release` runs all of the above plus package and React builds.
-

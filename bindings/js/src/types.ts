@@ -5,6 +5,15 @@ export type HtmlSource = string | Element | RefLike<Element>;
 export type LengthUnit = "pt" | "px" | "mm" | "cm" | "in";
 export type PageFormat = "a4" | "letter" | readonly [width: number, height: number];
 export type PageOrientation = "portrait" | "landscape";
+export type CssProfile = "document" | "web" | "strict";
+export type MediaType = "screen" | "print";
+export type UnsupportedCssPolicy = "warn" | "error" | "ignore";
+export type FallbackPolicy = "error" | "rasterize-subtree";
+
+export interface ViewportOptions {
+  width: number;
+  height: number;
+}
 export type Margin = number | readonly [vertical: number, horizontal: number] | readonly [top: number, left: number, bottom: number, right: number];
 
 export interface PageOptions {
@@ -26,6 +35,10 @@ export interface Diagnostic {
   code: string;
   severity: "warning" | "error";
   message: string;
+  property?: string;
+  nodePath?: string;
+  phase?: "snapshot" | "parse" | "cascade" | "computed" | "layout" | "fragmentation" | "paint" | "pdf";
+  fallback?: string;
 }
 
 export interface ResourceRequest {
@@ -55,6 +68,12 @@ export interface RenderOptions {
   page?: PageOptions;
   filename?: string;
   strict?: boolean;
+  cssProfile?: CssProfile;
+  mediaType?: MediaType;
+  viewport?: ViewportOptions;
+  unsupportedCss?: UnsupportedCssPolicy;
+  fallback?: FallbackPolicy;
+  includeShadowDom?: boolean;
   baseUrl?: string | URL;
   resourcePolicy?: "error" | "omit";
   resourceResolver?: ResourceResolver;

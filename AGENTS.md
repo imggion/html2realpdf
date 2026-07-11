@@ -24,6 +24,7 @@ Read these local docs before changing code:
 - The browser fixture set includes portrait reports and an A4 landscape presentation deck; keep both available from `tests/web/index.html` and in automated browser verification.
 - `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
 - The browser package is framework-agnostic; React refs are supported structurally without a React dependency.
+- Browser snapshots support deterministic screen/print media, explicit viewports, computed pseudo-elements, and opt-in open Shadow DOM flattening; native/WASM warnings use owned structured diagnostics.
 
 ## Commands
 

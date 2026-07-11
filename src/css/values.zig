@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const box = @import("../box.zig");
+const expressions = @import("expressions.zig");
 
 pub fn eqlProp(a: []const u8, b: []const u8) bool {
     return std.ascii.eqlIgnoreCase(a, b);
@@ -116,6 +117,17 @@ pub fn parseDimension(value: []const u8, font_size: f32) ?box.Length {
     if (eqlProp(unit, "cm")) return .{ .px = number * 96 / 2.54 };
     if (eqlProp(unit, "mm")) return .{ .px = number * 96 / 25.4 };
     return null;
+}
+
+pub fn parseDimensionWithContext(
+    allocator: std.mem.Allocator,
+    store: *expressions.Store,
+    value: []const u8,
+    context: expressions.Context,
+) !?box.Length {
+    if (parseDimension(value, context.font_size)) |simple| return simple;
+    const reference = try expressions.parse(allocator, store, value, context) orelse return null;
+    return .{ .expression = reference };
 }
 
 pub fn parseLineHeight(value: []const u8, font_size: f32) ?f32 {

@@ -20,6 +20,12 @@ pub const PropertySupport = struct {
     notes: []const u8 = "",
 };
 
+pub const FeatureSupport = struct {
+    name: []const u8,
+    stage: Stage,
+    notes: []const u8 = "",
+};
+
 const full = Stage{ .parsed = true, .cascaded = true, .computed = true, .laid_out = true, .painted = true, .paginated = true, .tested = true };
 const layout = Stage{ .parsed = true, .cascaded = true, .computed = true, .laid_out = true, .paginated = true, .tested = true };
 const computed_only = Stage{ .parsed = true, .cascaded = true, .computed = true, .tested = true };
@@ -33,7 +39,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "break-after", .stage = layout },
     .{ .name = "break-before", .stage = layout },
     .{ .name = "break-inside", .stage = layout },
-    .{ .name = "color", .stage = full },
+    .{ .name = "color", .stage = full, .notes = "currentColor supported; alpha compositing pending" },
     .{ .name = "display", .stage = layout, .notes = "block inline inline-block and table roles" },
     .{ .name = "float", .stage = computed_only, .notes = "non-none rejected by renderer" },
     .{ .name = "font-family", .stage = full },
@@ -55,12 +61,28 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "text-decoration", .stage = full, .notes = "underline and line-through" },
     .{ .name = "white-space", .stage = layout },
     .{ .name = "widows", .stage = layout },
-    .{ .name = "width", .stage = layout },
+    .{ .name = "width", .stage = layout, .notes = "typed calc/min/max/clamp and viewport units" },
+};
+
+pub const web_foundations = [_]FeatureSupport{
+    .{ .name = "browser-media-snapshot", .stage = computed_only, .notes = "deterministic viewport and screen/print selection" },
+    .{ .name = "css-wide-keywords", .stage = computed_only, .notes = "initial inherit unset revert" },
+    .{ .name = "custom-properties", .stage = computed_only, .notes = "var fallback inheritance and cycle detection" },
+    .{ .name = "math-functions", .stage = layout, .notes = "calc min max clamp with contextual percentages" },
+    .{ .name = "pseudo-elements", .stage = full, .notes = "browser ::before/::after strings and attr; counters pending" },
+    .{ .name = "shadow-dom", .stage = full, .notes = "opt-in open shadow root and slot flattening" },
 };
 
 test "document profile entries are sorted and uniquely named" {
     const std = @import("std");
     for (document_profile[1..], document_profile[0 .. document_profile.len - 1]) |current, previous| {
+        try std.testing.expect(std.mem.order(u8, previous.name, current.name) == .lt);
+    }
+}
+
+test "web foundation entries are sorted and uniquely named" {
+    const std = @import("std");
+    for (web_foundations[1..], web_foundations[0 .. web_foundations.len - 1]) |current, previous| {
         try std.testing.expect(std.mem.order(u8, previous.name, current.name) == .lt);
     }
 }

@@ -601,6 +601,126 @@ async function verifyDomSnapshotFidelity() {
   }
 }
 
+async function verifyComputedVariablesAndPseudoElements() {
+  const { buildId, distUrl } = await getPackageBuild();
+  const { snapshotSource } = await import(new URL(`${buildId}/snapshot.js`, distUrl).href);
+  const style = document.createElement("style");
+  style.textContent = `
+    .computed-profile-fixture { --accent: rgb(14, 116, 144); --gutter: 20px; width: calc(240px - var(--gutter)); color: var(--accent); }
+    .computed-profile-fixture::before { content: "Prefix " attr(data-code) " \\2192 "; font-weight: 700; color: var(--accent); }
+    .computed-profile-fixture::after { content: " suffix"; }
+  `;
+  const fixture = document.createElement("div");
+  fixture.className = "computed-profile-fixture";
+  fixture.dataset.code = "A17";
+  fixture.textContent = "content";
+  document.head.append(style);
+  document.body.append(fixture);
+
+  try {
+    const snapshot = await snapshotSource(fixture, { resourcePolicy: "error", enableLinks: true });
+    const template = document.createElement("template");
+    template.innerHTML = snapshot.html;
+    const root = template.content.firstElementChild;
+    const before = root?.querySelector("[data-html2realpdf-pseudo='before']");
+    const after = root?.querySelector("[data-html2realpdf-pseudo='after']");
+    if (root?.style.width !== "220px") throw new Error(`computed calc/var width was ${root?.style.width || "missing"}`);
+    if (root?.style.color !== "rgb(14, 116, 144)") throw new Error("computed custom-property color was not canonicalized");
+    if (before?.textContent !== "Prefix A17 →") throw new Error(`::before content was not materialized: ${before?.textContent}`);
+    if (after?.textContent !== " suffix") throw new Error("::after content was not materialized");
+    if ((before instanceof HTMLElement ? before.style.fontWeight : "") !== "700") throw new Error("::before computed style was not captured");
+  } finally {
+    fixture.remove();
+    style.remove();
+  }
+}
+
+async function verifyRequestedMediaAndViewport() {
+  const { buildId, distUrl } = await getPackageBuild();
+  const { snapshotSource } = await import(new URL(`${buildId}/snapshot.js`, distUrl).href);
+  const source = `
+    <style>
+      .media-probe { color: rgb(10, 20, 30); width: 100px; transition: width 30s linear; }
+      @media print { .media-probe { color: rgb(200, 10, 20); } }
+      @media screen { .media-probe { color: rgb(10, 20, 30); } }
+      @media (min-width: 900px) { .media-probe { width: 321px; } }
+    </style>
+    <div class="media-probe">media probe</div>
+  `;
+
+  const print = await snapshotSource(source, {
+    resourcePolicy: "error",
+    mediaType: "print",
+    viewport: { width: 1000, height: 700 },
+  });
+  const screen = await snapshotSource(source, {
+    resourcePolicy: "error",
+    mediaType: "screen",
+    viewport: { width: 800, height: 700 },
+  });
+  const printTemplate = document.createElement("template");
+  const screenTemplate = document.createElement("template");
+  printTemplate.innerHTML = print.html;
+  screenTemplate.innerHTML = screen.html;
+  const printProbe = printTemplate.content.querySelector(".media-probe");
+  const screenProbe = screenTemplate.content.querySelector(".media-probe");
+  if (printProbe?.style.color !== "rgb(200, 10, 20)") throw new Error(`print media was not selected: ${printProbe?.style.color}`);
+  if (screenProbe?.style.color !== "rgb(10, 20, 30)") throw new Error(`screen media was not selected: ${screenProbe?.style.color}`);
+  if (printProbe?.style.width !== "321px") throw new Error(`1000px viewport did not activate min-width query: ${printProbe?.style.width}`);
+  if (screenProbe?.style.width !== "100px") throw new Error(`800px viewport unexpectedly activated min-width query: ${screenProbe?.style.width}`);
+  if (printProbe?.style.transition) throw new Error("transition leaked into the immutable computed snapshot");
+}
+
+async function verifyShadowDomOptIn() {
+  const { buildId, distUrl } = await getPackageBuild();
+  const { snapshotSource } = await import(new URL(`${buildId}/snapshot.js`, distUrl).href);
+  const host = document.createElement("section");
+  host.innerHTML = '<span slot="content">slotted value</span>';
+  const shadow = host.attachShadow({ mode: "open" });
+  shadow.innerHTML = `
+    <style>.shadow-card { color: rgb(12, 74, 110); font-weight: 700; }</style>
+    <div class="shadow-card">shadow content: <slot name="content"></slot></div>
+  `;
+  document.body.append(host);
+
+  try {
+    const omitted = await snapshotSource(host, { resourcePolicy: "error", includeShadowDom: false });
+    const included = await snapshotSource(host, { resourcePolicy: "error", includeShadowDom: true });
+    if (omitted.html.includes("shadow content")) throw new Error("Shadow DOM was included without opt-in");
+    const template = document.createElement("template");
+    template.innerHTML = included.html;
+    const root = template.content.firstElementChild;
+    const card = root?.querySelector(".shadow-card");
+    if (root?.getAttribute("data-html2realpdf-shadow-host") !== "open") throw new Error("Shadow host marker is missing");
+    if (!card?.textContent?.includes("shadow content: slotted value")) throw new Error("composed Shadow DOM content was not flattened");
+    if (card.style.color !== "rgb(12, 74, 110)") throw new Error("Shadow DOM computed style was not materialized");
+  } finally {
+    host.remove();
+  }
+}
+
+async function verifyInertHtmlStringComputedSnapshot() {
+  const { buildId, distUrl } = await getPackageBuild();
+  const { snapshotSource } = await import(new URL(`${buildId}/snapshot.js`, distUrl).href);
+  const snapshot = await snapshotSource(`
+    <style>
+      body { --page-width: 320px; }
+      .string-card { width: calc(var(--page-width) - 32px); color: rgb(124, 58, 237); }
+      .string-card::before { content: "String " attr(data-code) ": "; font-weight: 700; }
+    </style>
+    <div class="string-card" data-code="S1">safe body</div>
+    <script>window.__html2realpdfScriptExecuted = true</script>
+  `, { resourcePolicy: "error", enableLinks: true });
+  const template = document.createElement("template");
+  template.innerHTML = snapshot.html;
+  const card = template.content.querySelector(".string-card");
+  const before = card?.querySelector("[data-html2realpdf-pseudo='before']");
+  if ((card instanceof HTMLElement ? card.style.width : "") !== "288px") throw new Error(`HTML string computed width was ${card instanceof HTMLElement ? card.style.width : "missing"}`);
+  if (before?.textContent !== "String S1: ") throw new Error(`HTML string ::before was not materialized: ${before?.textContent}`);
+  if (template.content.querySelector("script")) throw new Error("active script survived the inert snapshot");
+  if (Reflect.get(window, "__html2realpdfScriptExecuted")) throw new Error("HTML string script executed during snapshot");
+}
+
 async function verifySelectorPageBreak() {
   const renderer = await getPackageRenderer();
   const pdf = await renderer.render("<main><p>First page</p><p id='second'>Second page</p></main>", {
@@ -1023,6 +1143,42 @@ async function runWasmTests() {
   } catch (err) {
     failed++;
     testResults.textContent += `✗ ERROR: selector_page_break — ${err.message}\n`;
+  }
+
+  try {
+    await verifyComputedVariablesAndPseudoElements();
+    passed++;
+    testResults.textContent += "✓ PASS: computed_variables_and_pseudo_elements\n";
+  } catch (err) {
+    failed++;
+    testResults.textContent += `✗ ERROR: computed_variables_and_pseudo_elements — ${err.message}\n`;
+  }
+
+  try {
+    await verifyInertHtmlStringComputedSnapshot();
+    passed++;
+    testResults.textContent += "✓ PASS: inert_html_string_computed_snapshot\n";
+  } catch (err) {
+    failed++;
+    testResults.textContent += `✗ ERROR: inert_html_string_computed_snapshot — ${err.message}\n`;
+  }
+
+  try {
+    await verifyRequestedMediaAndViewport();
+    passed++;
+    testResults.textContent += "✓ PASS: requested_media_and_viewport\n";
+  } catch (err) {
+    failed++;
+    testResults.textContent += `✗ ERROR: requested_media_and_viewport — ${err.message}\n`;
+  }
+
+  try {
+    await verifyShadowDomOptIn();
+    passed++;
+    testResults.textContent += "✓ PASS: shadow_dom_opt_in\n";
+  } catch (err) {
+    failed++;
+    testResults.textContent += `✗ ERROR: shadow_dom_opt_in — ${err.message}\n`;
   }
 
   try {

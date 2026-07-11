@@ -101,6 +101,33 @@ test("packaged WASM exposes structured render errors", async () => {
   }
 });
 
+test("packaged WASM returns owned structured CSS diagnostics", async () => {
+  const wasm = await readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url));
+  const { instance } = await WebAssembly.instantiate(wasm, {});
+  const exports = instance.exports;
+  const input = new TextEncoder().encode('<p style="filter:blur(2px);color:red">diagnostic</p>');
+  const inputPointer = exports.alloc(input.length);
+  new Uint8Array(exports.memory.buffer, inputPointer, input.length).set(input);
+  const result = exports.render_html_to_pdf(inputPointer, input.length);
+
+  try {
+    assert.equal(exports.pdf_result_status(result), 0);
+    const pointer = exports.pdf_result_diagnostics_ptr(result);
+    const length = exports.pdf_result_diagnostics_len(result);
+    const diagnostics = JSON.parse(new TextDecoder().decode(new Uint8Array(exports.memory.buffer, pointer, length)));
+    assert.deepEqual(diagnostics, [{
+      code: "UNSUPPORTED_CSS_PROPERTY",
+      severity: "warning",
+      message: "Unsupported CSS property was ignored: filter",
+      property: "filter",
+      phase: "computed",
+    }]);
+  } finally {
+    exports.pdf_result_free(result);
+    exports.free(inputPointer, input.length);
+  }
+});
+
 test("packaged WASM context registers and embeds a custom TrueType family", async () => {
   const [wasm, font] = await Promise.all([
     readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url)),

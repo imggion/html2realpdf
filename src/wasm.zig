@@ -16,6 +16,7 @@ var last_output_len: usize = 0;
 const PdfResult = struct {
     bytes: []u8 = &.{},
     error_message: []u8 = &.{},
+    diagnostics_json: []u8 = &.{},
     page_count: u32 = 0,
     status: i32 = 0,
 };
@@ -382,6 +383,7 @@ fn renderPdf(ptr: usize, len: usize, options: renderer.Options) usize {
     };
 
     result.bytes = rendered.bytes;
+    result.diagnostics_json = rendered.diagnostics_json;
     result.page_count = @intCast(rendered.page_count);
     return @intFromPtr(result);
 }
@@ -398,6 +400,13 @@ fn renderStatus(err: anyerror) i32 {
 fn setResultError(result: *PdfResult, status: i32, message: []const u8) void {
     result.status = status;
     result.error_message = std.heap.wasm_allocator.dupe(u8, message) catch &.{};
+    const values = [_]renderer.Diagnostic{.{
+        .code = "WASM_RENDER_FAILED",
+        .severity = .@"error",
+        .message = message,
+        .phase = .pdf,
+    }};
+    result.diagnostics_json = renderer.serializeDiagnostics(std.heap.wasm_allocator, &values) catch &.{};
 }
 
 export fn pdf_result_status(handle: usize) i32 {
@@ -432,18 +441,22 @@ export fn pdf_result_error_len(handle: usize) usize {
     return result.error_message.len;
 }
 
-export fn pdf_result_diagnostics_ptr(_: usize) usize {
-    return @intFromPtr("[]".ptr);
+export fn pdf_result_diagnostics_ptr(handle: usize) usize {
+    const result = pdfResultFromHandle(handle) orelse return 0;
+    if (result.diagnostics_json.len == 0) return 0;
+    return @intFromPtr(result.diagnostics_json.ptr);
 }
 
-export fn pdf_result_diagnostics_len(_: usize) usize {
-    return 2;
+export fn pdf_result_diagnostics_len(handle: usize) usize {
+    const result = pdfResultFromHandle(handle) orelse return 0;
+    return result.diagnostics_json.len;
 }
 
 export fn pdf_result_free(handle: usize) void {
     const result = pdfResultFromHandle(handle) orelse return;
     if (result.bytes.len > 0) std.heap.wasm_allocator.free(result.bytes);
     if (result.error_message.len > 0) std.heap.wasm_allocator.free(result.error_message);
+    if (result.diagnostics_json.len > 0) std.heap.wasm_allocator.free(result.diagnostics_json);
     std.heap.wasm_allocator.destroy(result);
 }
 

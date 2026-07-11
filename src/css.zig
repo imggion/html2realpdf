@@ -11,6 +11,8 @@ const html = @import("html.zig");
 pub const syntax = @import("css/syntax.zig");
 pub const selectors = @import("css/selectors.zig");
 pub const values = @import("css/values.zig");
+pub const expressions = @import("css/expressions.zig");
+pub const variables = @import("css/variables.zig");
 pub const computed = @import("css/computed.zig");
 pub const cascade = @import("css/cascade.zig");
 pub const properties = @import("css/properties.zig");
@@ -29,9 +31,11 @@ pub const matchesSelector = selectors.matchesSelector;
 pub const selectorSpecificity = selectors.selectorSpecificity;
 pub const compareSpecificity = selectors.compareSpecificity;
 pub const computeStyles = cascade.computeStyles;
+pub const computeStylesWithContext = cascade.computeStylesWithContext;
 pub const collectStyleText = cascade.collectStyleText;
 pub const dumpCascade = cascade.dumpCascade;
 pub const styleArrayFromDocument = cascade.styleArrayFromDocument;
+pub const styleArrayFromDocumentWithContext = cascade.styleArrayFromDocumentWithContext;
 
 const parseLength = values.parseLength;
 const parseDimension = values.parseDimension;
@@ -855,4 +859,47 @@ test "cascade: retains every match beyond the old fixed buffer limit" {
     const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
     const div = fixture.document.nodes.items[style_id].next_sibling.?;
     try std.testing.expectEqual(@as(f32, 79), fixture.styles[div].margin.left);
+}
+
+test "cascade: custom properties inherit into calc dimensions" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>body { --gutter: 20px; } .card { width: calc(50% - var(--gutter)); }</style><body><div class='card'>card</div></body>",
+    );
+    defer fixture.deinit(allocator);
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const body = fixture.document.nodes.items[style_id].next_sibling.?;
+    const card = fixture.document.nodes.items[body].first_child.?;
+    try std.testing.expectApproxEqAbs(@as(f32, 180), fixture.styles[card].width.resolve(400).?, 0.001);
+}
+
+test "cascade: var fallback survives a custom-property cycle" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>.card { --a: var(--b); --b: var(--a); width: var(--a, clamp(120px, 50%, 300px)); }</style><div class='card'>card</div>",
+    );
+    defer fixture.deinit(allocator);
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const card = fixture.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectApproxEqAbs(@as(f32, 250), fixture.styles[card].width.resolve(500).?, 0.001);
+}
+
+test "cascade: CSS-wide keywords and currentColor resolve at computed value time" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>body { color: #123456; } h1 { color: inherit; display: initial; } .reset { color: unset; background-color: currentColor; width: 240px; max-width: initial; }</style><body><h1>Title</h1><div class='reset'>card</div></body>",
+    );
+    defer fixture.deinit(allocator);
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const body = fixture.document.nodes.items[style_id].next_sibling.?;
+    const heading = fixture.document.nodes.items[body].first_child.?;
+    const card = fixture.document.nodes.items[heading].next_sibling.?;
+    try std.testing.expectEqualStrings("#123456", fixture.styles[heading].color);
+    try std.testing.expectEqual(box.Display.inlineBox, fixture.styles[heading].display);
+    try std.testing.expectEqualStrings("#123456", fixture.styles[card].color);
+    try std.testing.expectEqualStrings("#123456", fixture.styles[card].background.?);
+    try std.testing.expectEqual(box.Length.auto, fixture.styles[card].max_width);
 }

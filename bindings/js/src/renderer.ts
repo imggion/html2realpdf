@@ -129,11 +129,21 @@ export class Html2RealPdf {
   async render(source: HtmlSource, options: RenderOptions = {}): Promise<PdfDocument> {
     if (this.disposed) throw new Error("Renderer has been disposed");
     options.onProgress?.({ phase: "snapshot", completed: 0, total: 1 });
-    const snapshotOptions: SnapshotOptions = { resourcePolicy: options.resourcePolicy ?? "error" };
+    const snapshotOptions: SnapshotOptions = {
+      resourcePolicy: options.resourcePolicy ?? "error",
+      cssProfile: options.cssProfile ?? "document",
+      // Preserve the historical browser snapshot behavior unless callers
+      // explicitly request print media. The web-profile example in the public
+      // API opts into print rather than silently changing existing documents.
+      mediaType: options.mediaType ?? "screen",
+      unsupportedCss: options.unsupportedCss ?? (options.cssProfile === "strict" || options.strict ? "error" : "warn"),
+    };
     if (options.baseUrl !== undefined) snapshotOptions.baseUrl = options.baseUrl;
     if (options.resourceResolver !== undefined) snapshotOptions.resourceResolver = options.resourceResolver;
     if (options.strict !== undefined) snapshotOptions.strict = options.strict;
     if (options.enableLinks !== undefined) snapshotOptions.enableLinks = options.enableLinks;
+    if (options.viewport !== undefined) snapshotOptions.viewport = options.viewport;
+    if (options.includeShadowDom !== undefined) snapshotOptions.includeShadowDom = options.includeShadowDom;
     const snapshot = await snapshotSource(source, snapshotOptions);
     options.onProgress?.({ phase: "snapshot", completed: 1, total: 1 });
 

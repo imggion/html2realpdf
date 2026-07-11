@@ -1,42 +1,42 @@
 {
   "profile": "document",
   "version": "0.1.0-alpha.0",
-  "wasmBytes": 2521569,
+  "wasmBytes": 2549658,
   "fixtures": {
     "complex-invoice": {
       "pages": 2,
       "pdfBytes": 112886,
       "sha256": "422e349a63c118d69da60a66f06406876d055ba9056c4c224164d2f047c7e721",
-      "renderMilliseconds": 256.156,
+      "renderMilliseconds": 194.906,
       "wasmMemoryBytesBefore": 3407872,
-      "wasmMemoryBytesAfter": 5898240,
+      "wasmMemoryBytesAfter": 6029312,
       "screenshot": "complex-invoice-page-1.png"
     },
     "analytics-report": {
       "pages": 3,
       "pdfBytes": 114576,
       "sha256": "ba24a4f8df9ede0295a37e474bd4758fb42f19c26ebb70ee3e0d27e57ae7dd91",
-      "renderMilliseconds": 89.066,
-      "wasmMemoryBytesBefore": 5898240,
-      "wasmMemoryBytesAfter": 5898240,
+      "renderMilliseconds": 107.857,
+      "wasmMemoryBytesBefore": 6029312,
+      "wasmMemoryBytesAfter": 6029312,
       "screenshot": "analytics-report-page-1.png"
     },
     "rounded-operations": {
       "pages": 2,
       "pdfBytes": 116619,
       "sha256": "856e9e838ca375fbe42a9a5a9dec13da5f812d9facaeebcd22e6f77051342da4",
-      "renderMilliseconds": 109.267,
-      "wasmMemoryBytesBefore": 5898240,
-      "wasmMemoryBytesAfter": 5898240,
+      "renderMilliseconds": 131.669,
+      "wasmMemoryBytesBefore": 6029312,
+      "wasmMemoryBytesAfter": 6029312,
       "screenshot": "rounded-operations-page-1.png"
     },
     "presentation-deck": {
       "pages": 4,
       "pdfBytes": 118243,
       "sha256": "0e09a3a369101e5035eb02251e9738dd7dbe202ea5252a673577774317fecff6",
-      "renderMilliseconds": 102.706,
-      "wasmMemoryBytesBefore": 5898240,
-      "wasmMemoryBytesAfter": 5898240,
+      "renderMilliseconds": 114.237,
+      "wasmMemoryBytesBefore": 6029312,
+      "wasmMemoryBytesAfter": 6094848,
       "screenshot": "presentation-deck-page-1.png"
     }
   }

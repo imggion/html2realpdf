@@ -13,6 +13,7 @@
 const std = @import("std");
 const dom = @import("dom.zig");
 const html = @import("html.zig");
+const expressions = @import("css/expressions.zig");
 
 /// Stable index into `BoxTree.boxes`.
 ///
@@ -281,12 +282,14 @@ pub const Length = union(enum) {
     auto,
     px: f32,
     percent: f32,
+    expression: expressions.Reference,
 
     pub fn resolve(self: Length, reference: f32) ?f32 {
         return switch (self) {
             .auto => null,
             .px => |value| value,
             .percent => |ratio| reference * ratio,
+            .expression => |value| value.resolve(reference),
         };
     }
 };
@@ -1076,6 +1079,7 @@ fn writeLengthDebug(name: []const u8, length: Length, writer: *std.Io.Writer) !v
         .auto => {},
         .px => |value| try writer.print(" {s}={d:.2}", .{ name, value }),
         .percent => |ratio| try writer.print(" {s}={d:.2}%", .{ name, ratio * 100 }),
+        .expression => try writer.print(" {s}=<calc>", .{name}),
     }
 }
 
