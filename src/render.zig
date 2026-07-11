@@ -98,6 +98,7 @@ pub fn renderHtml(
         .page_height = page_spec.contentHeightCssPx(),
         .font_registry = options.font_registry,
         .shaping_mode = if (options.css_profile == .document) .identity else .harfbuzz,
+        .atomic_inline_baselines = options.css_profile != .document,
     });
     defer laid_out.deinit(arena);
 

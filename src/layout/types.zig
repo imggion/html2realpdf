@@ -31,6 +31,11 @@ pub const Fragment = struct {
     clip_rect: ?geometry.Rect = null,
     line_id: ?usize = null,
     inline_container_line_id: ?usize = null,
+    inline_atomic_container: ?box.BoxId = null,
+    inline_atomic_root: bool = false,
+    inline_baseline_offset: ?f32 = null,
+    inline_margin_top: f32 = 0,
+    inline_margin_bottom: f32 = 0,
     text: ?[]const u8 = null,
     shaped: ?font.ShapedRun = null,
     leading_space: bool = false,
@@ -81,6 +86,7 @@ pub const Options = struct {
     page_height: ?f32 = null,
     font_registry: ?*const font.Registry = null,
     shaping_mode: font.ShapingMode = .identity,
+    atomic_inline_baselines: bool = false,
 };
 
 pub fn borderPaint(style: box.Style) BorderPaint {

@@ -43,6 +43,7 @@ pub fn layout(
         .page_height = options.page_height,
         .font_registry = options.font_registry,
         .shaping_mode = options.shaping_mode,
+        .atomic_inline_baselines = options.atomic_inline_baselines,
     };
     errdefer state.fragments.deinit(allocator);
 
@@ -68,6 +69,7 @@ const State = struct {
     page_height: ?f32,
     font_registry: ?*const font.Registry,
     shaping_mode: font.ShapingMode,
+    atomic_inline_baselines: bool,
     next_line_id: usize = 0,
 
     const BlockLayoutOptions = struct {
@@ -559,6 +561,57 @@ test "align mixed inline font baselines and vertical-align offsets" {
     try std.testing.expectApproxEqAbs(large_baseline.?, small_baseline.?, 0.01);
     try std.testing.expect(super_baseline.? < large_baseline.?);
     try std.testing.expectApproxEqAbs(@as(f32, 5), large_baseline.? - raised_baseline.?, 0.01);
+}
+
+test "align replaced and inline-block atomic baselines" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<p style='margin:0;font-size:18px'>Text<img width='20' height='40' style='margin:2px 0 3px;padding:4px;border:2px solid'></p>" ++
+        "<p style='margin:0;font-size:18px'><span style='display:inline-block;width:60px;padding:4px;border:1px solid'><span>inner</span></span><span>peer</span></p>" ++
+        "<p style='margin:0;font-size:18px'><span style='display:inline-block;overflow:hidden;width:40px;height:30px'>hidden</span><span>tail</span></p>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .atomic_inline_baselines = true });
+    defer result.deinit(allocator);
+
+    var text_baseline: ?f32 = null;
+    var image_baseline: ?f32 = null;
+    var image_inset: ?f32 = null;
+    var inner_baseline: ?f32 = null;
+    var peer_baseline: ?f32 = null;
+    var hidden_bottom: ?f32 = null;
+    var tail_baseline: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.kind == .replaced) {
+            image_baseline = fragment.rect.bottom() + fragment.inline_margin_bottom;
+            image_inset = fragment.image_content_rect.?.y - fragment.rect.y;
+        }
+        if (fragment.inline_atomic_root and fragment.kind == .box and tree.boxes.items[fragment.source_box].style.overflow == .hidden) {
+            hidden_bottom = fragment.rect.bottom() + fragment.inline_margin_bottom;
+        }
+        const text = fragment.text orelse continue;
+        const resolved = font.resolve(null, fragment.font_family, fragment.font_weight, fragment.font_style);
+        const baseline = fragment.rect.y + fragment.font_size * resolved.metrics().ascentRatio();
+        if (std.mem.eql(u8, text, "Text")) text_baseline = baseline;
+        if (std.mem.eql(u8, text, "inner")) inner_baseline = baseline;
+        if (std.mem.eql(u8, text, "peer")) peer_baseline = baseline;
+        if (std.mem.eql(u8, text, "tail")) tail_baseline = baseline;
+    }
+
+    try std.testing.expectApproxEqAbs(image_baseline.?, text_baseline.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), image_inset.?, 0.01);
+    try std.testing.expectApproxEqAbs(inner_baseline.?, peer_baseline.?, 0.01);
+    try std.testing.expectApproxEqAbs(hidden_bottom.?, tail_baseline.?, 0.01);
 }
 
 test "carry text decoration paint through inline fragments" {

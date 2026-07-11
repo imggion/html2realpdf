@@ -429,6 +429,19 @@ pub fn Cursor(comptime State: type) type {
             while (self.x > target_x and self.state.fragments.items.len > self.line_start_fragment) {
                 const last_index = self.state.fragments.items.len - 1;
                 var fragment = &self.state.fragments.items[last_index];
+                if (fragment.inline_atomic_container) |container| {
+                    var remove_start = last_index;
+                    var left = fragment.rect.x;
+                    while (remove_start > self.line_start_fragment) {
+                        const previous = self.state.fragments.items[remove_start - 1];
+                        if (previous.inline_atomic_container != container) break;
+                        remove_start -= 1;
+                        left = @min(left, previous.rect.x);
+                    }
+                    self.state.fragments.items.len = remove_start;
+                    self.x = left - self.state.tree.boxes.items[container].margin.left;
+                    continue;
+                }
                 if (fragment.inline_container_line_id == self.line_id) {
                     var remove_start = last_index;
                     var left = fragment.rect.x;
@@ -638,38 +651,62 @@ pub fn Cursor(comptime State: type) type {
         }
 
         fn layoutAtomic(self: *Self, box_id: box.BoxId, source: box.Box, link_url: ?[]const u8) !void {
+            const modern = self.state.atomic_inline_baselines;
+            const horizontal_non_content = if (modern) source.border.left + source.border.right + source.padding.left + source.padding.right else 0;
+            const vertical_non_content = if (modern) source.border.top + source.border.bottom + source.padding.top + source.padding.bottom else 0;
             const size = intrinsic.resolveReplacedSize(
                 source.style,
                 source.intrinsic_width,
                 source.intrinsic_height,
                 self.width,
                 self.state.page_height orelse self.width,
-                0,
-                0,
+                horizontal_non_content,
+                vertical_non_content,
             );
-            const width = size.width;
-            const height = size.height;
+            const border_width = size.width + horizontal_non_content;
+            const border_height = size.height + vertical_non_content;
+            const outer_width = if (modern) source.margin.left + border_width + source.margin.right else border_width;
+            const outer_height = if (modern) source.margin.top + border_height + source.margin.bottom else border_height;
 
-            if (self.has_content and self.x + width > self.start_x + self.width) self.newLine();
-            self.line_height = @max(self.line_height, height);
+            if (self.has_content and self.x + outer_width > self.start_x + self.width) self.newLine();
+            self.line_height = @max(self.line_height, outer_height);
+            const border_x = self.x + if (modern) source.margin.left else 0;
+            const border_y = self.line_y + if (modern) source.margin.top else 0;
+            const background = if (modern and source.style.background != null)
+                geometry.parseColor(source.style.background.?)
+            else
+                null;
             try self.state.fragments.append(self.state.allocator, .{
                 .kind = .replaced,
                 .source_box = box_id,
-                .rect = .{ .x = self.x, .y = self.line_y, .width = width, .height = height },
+                .rect = .{ .x = border_x, .y = border_y, .width = border_width, .height = border_height },
                 .line_id = self.line_id,
+                .inline_atomic_container = if (modern) box_id else null,
+                .inline_atomic_root = modern,
+                .inline_baseline_offset = if (modern) border_height + source.margin.bottom else null,
+                .inline_margin_top = if (modern) source.margin.top else 0,
+                .inline_margin_bottom = if (modern) source.margin.bottom else 0,
+                .font_size = source.style.font_size,
+                .background = background,
                 .border = source.border,
                 .border_paint = types.borderPaint(source.style),
+                .border_radius = if (modern) source.style.border_radius else 0,
                 .vertical_align = source.style.vertical_align,
                 .link_url = link_url,
                 .image_source = self.state.attributeForBox(box_id, "src"),
-                .image_content_rect = .{ .x = self.x, .y = self.line_y, .width = width, .height = height },
+                .image_content_rect = .{
+                    .x = border_x + if (modern) source.border.left + source.padding.left else 0,
+                    .y = border_y + if (modern) source.border.top + source.padding.top else 0,
+                    .width = size.width,
+                    .height = size.height,
+                },
                 .intrinsic_width = source.intrinsic_width,
                 .intrinsic_height = source.intrinsic_height,
                 .object_fit = source.style.object_fit,
                 .object_position = source.style.object_position,
                 .bidi_level = if (self.direction == .rtl) 1 else 0,
             });
-            self.x += width;
+            self.x += outer_width;
             self.has_content = true;
         }
 
@@ -686,9 +723,29 @@ pub fn Cursor(comptime State: type) type {
                 .{ .x = self.x, .y = self.line_y, .width = expected_outer_width },
                 &nested_cursor_y,
             );
+            var baseline: ?f32 = null;
+            if (self.state.atomic_inline_baselines and source.style.overflow == .visible) {
+                for (self.state.fragments.items[fragment_start..]) |fragment| {
+                    if (fragment.kind != .text) continue;
+                    const candidate = fragment.rect.y + self.textBaselineOffset(fragment);
+                    if (baseline == null or candidate > baseline.?) baseline = candidate;
+                }
+            }
             for (self.state.fragments.items[fragment_start..]) |*fragment| {
                 fragment.inline_container_line_id = self.line_id;
+                if (self.state.atomic_inline_baselines) {
+                    fragment.inline_atomic_container = box_id;
+                    fragment.inline_atomic_root = false;
+                }
                 fragment.vertical_align = source.style.vertical_align;
+            }
+            if (self.state.atomic_inline_baselines) {
+                const root = &self.state.fragments.items[fragment_start];
+                root.inline_atomic_root = true;
+                root.inline_baseline_offset = (baseline orelse rect.bottom() + source.margin.bottom) - root.rect.y;
+                root.inline_margin_top = source.margin.top;
+                root.inline_margin_bottom = source.margin.bottom;
+                root.font_size = source.style.font_size;
             }
             const outer_height = source.margin.top + rect.height + source.margin.bottom;
             self.line_height = @max(self.line_height, outer_height);
@@ -728,14 +785,14 @@ pub fn Cursor(comptime State: type) type {
                 for (self.state.fragments.items[self.line_start_fragment..]) |*fragment| {
                     if (fragment.line_id != self.line_id and fragment.inline_container_line_id != self.line_id) continue;
                     if (fragment.leading_space) shift += extra;
-                    fragment.rect.x += shift;
+                    shiftFragmentX(fragment, shift);
                     if (fragment.collapsible_space) shift += extra;
                 }
                 return;
             }
             const shift = if (text_align == .center) remaining / 2 else remaining;
             for (self.state.fragments.items[self.line_start_fragment..]) |*fragment| {
-                if (fragment.line_id == self.line_id or fragment.inline_container_line_id == self.line_id) fragment.rect.x += shift;
+                if (fragment.line_id == self.line_id or fragment.inline_container_line_id == self.line_id) shiftFragmentX(fragment, shift);
             }
         }
 
@@ -801,8 +858,7 @@ pub fn Cursor(comptime State: type) type {
 
             var visual_x = left;
             for (line) |*fragment| {
-                fragment.rect.x = visual_x;
-                if (fragment.image_content_rect) |*rect| rect.x = visual_x;
+                shiftFragmentX(fragment, visual_x - fragment.rect.x);
                 visual_x += fragment.rect.width;
             }
         }
@@ -810,25 +866,30 @@ pub fn Cursor(comptime State: type) type {
         fn alignVerticalLine(self: *Self) void {
             var max_baseline: f32 = 0;
             for (self.state.fragments.items[self.line_start_fragment..]) |fragment| {
-                if (fragment.line_id != self.line_id or fragment.kind != .text) continue;
-                max_baseline = @max(max_baseline, self.naturalBaseline(fragment));
+                if (!self.isAlignmentParticipant(fragment)) continue;
+                max_baseline = @max(max_baseline, self.naturalBaselineFromLine(fragment));
             }
             if (max_baseline == 0) return;
 
-            for (self.state.fragments.items[self.line_start_fragment..]) |*fragment| {
-                if (fragment.line_id != self.line_id or fragment.kind != .text) continue;
-                const natural_baseline = self.naturalBaseline(fragment.*);
+            var index = self.line_start_fragment;
+            while (index < self.state.fragments.items.len) : (index += 1) {
+                const fragment = self.state.fragments.items[index];
+                if (!self.isAlignmentParticipant(fragment)) continue;
+                const natural_baseline = self.naturalBaselineFromLine(fragment);
                 const baseline_shift = max_baseline - natural_baseline;
                 const shift = switch (fragment.vertical_align) {
                     .baseline => baseline_shift,
                     .sub => baseline_shift + fragment.font_size * 0.2,
                     .super => baseline_shift - fragment.font_size * 0.4,
-                    .middle => max_baseline - fragment.font_size * 0.25 - fragment.rect.height / 2,
-                    .textTop, .top => 0,
-                    .textBottom, .bottom => self.line_height - fragment.rect.height,
+                    .middle => if (self.state.atomic_inline_baselines)
+                        max_baseline + fragment.font_size * 0.25 - self.alignmentCenterFromLine(fragment)
+                    else
+                        max_baseline - fragment.font_size * 0.25 - fragment.rect.height / 2,
+                    .textTop, .top => fragment.inline_margin_top - (fragment.rect.y - self.line_y),
+                    .textBottom, .bottom => self.line_height - fragment.inline_margin_bottom - (fragment.rect.bottom() - self.line_y),
                     .offset => |offset| baseline_shift - (offset.resolve(self.line_height) orelse 0),
                 };
-                fragment.rect.y += shift;
+                self.shiftAlignmentParticipant(index, shift);
             }
 
             var min_y = self.line_y;
@@ -841,17 +902,47 @@ pub fn Cursor(comptime State: type) type {
             if (min_y < self.line_y) {
                 const correction = self.line_y - min_y;
                 for (self.state.fragments.items[self.line_start_fragment..]) |*fragment| {
-                    if (self.belongsToCurrentLine(fragment.*)) fragment.rect.y += correction;
+                    if (self.belongsToCurrentLine(fragment.*)) shiftFragment(fragment, correction);
                 }
                 max_bottom += correction;
             }
             self.line_height = @max(self.line_height, max_bottom - self.line_y);
         }
 
-        fn naturalBaseline(self: *Self, fragment: types.Fragment) f32 {
+        fn naturalBaselineFromLine(self: *Self, fragment: types.Fragment) f32 {
+            const offset = fragment.inline_baseline_offset orelse self.textBaselineOffset(fragment);
+            return fragment.rect.y - self.line_y + offset;
+        }
+
+        fn textBaselineOffset(self: *Self, fragment: types.Fragment) f32 {
             if (fragment.kind != .text) return 0;
             const resolved = font.resolve(self.state.font_registry, fragment.font_family, fragment.font_weight, fragment.font_style);
             return fragment.font_size * resolved.metrics().ascentRatio();
+        }
+
+        fn alignmentCenterFromLine(self: *Self, fragment: types.Fragment) f32 {
+            const top = fragment.rect.y - self.line_y - fragment.inline_margin_top;
+            const height = fragment.inline_margin_top + fragment.rect.height + fragment.inline_margin_bottom;
+            return top + height / 2;
+        }
+
+        fn isAlignmentParticipant(self: *Self, fragment: types.Fragment) bool {
+            if (!self.belongsToCurrentLine(fragment)) return false;
+            if (fragment.inline_atomic_container != null) return fragment.inline_atomic_root;
+            if (fragment.inline_container_line_id == self.line_id) return false;
+            return fragment.kind == .text;
+        }
+
+        fn shiftAlignmentParticipant(self: *Self, index: usize, shift: f32) void {
+            if (shift == 0) return;
+            const fragment = self.state.fragments.items[index];
+            if (fragment.inline_atomic_container) |container| {
+                for (self.state.fragments.items[self.line_start_fragment..]) |*member| {
+                    if (member.inline_atomic_container == container) shiftFragment(member, shift);
+                }
+            } else {
+                shiftFragment(&self.state.fragments.items[index], shift);
+            }
         }
 
         fn belongsToCurrentLine(self: *Self, fragment: types.Fragment) bool {
@@ -868,6 +959,18 @@ pub fn Cursor(comptime State: type) type {
 
 fn isHtmlWhitespace(value: u8) bool {
     return value == ' ' or value == '\t' or value == '\n' or value == '\r' or value == 0x0C;
+}
+
+fn shiftFragment(fragment: *types.Fragment, shift: f32) void {
+    fragment.rect.y += shift;
+    if (fragment.image_content_rect) |*image_rect| image_rect.y += shift;
+    if (fragment.clip_rect) |*clip_rect| clip_rect.y += shift;
+}
+
+fn shiftFragmentX(fragment: *types.Fragment, shift: f32) void {
+    fragment.rect.x += shift;
+    if (fragment.image_content_rect) |*image_rect| image_rect.x += shift;
+    if (fragment.clip_rect) |*clip_rect| clip_rect.x += shift;
 }
 
 fn shouldBreakAtOpportunity(word_break: box.WordBreak, text: []const u8, boundary: usize, opportunity: line_break.Opportunity) bool {

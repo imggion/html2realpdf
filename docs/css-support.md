@@ -41,7 +41,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `text-transform` | Y | Y | Y | Y | Y | Y | Y | Unicode 17 full mappings for uppercase, lowercase, and capitalize; conditional Lithuanian, Turkish, and Azeri casing follows inherited `lang` |
 | `word-break` / `overflow-wrap` | Y | Y | Y | Y | Y | Y | Y | UAX #14 legal opportunities, CJK keep-all, and extended-grapheme emergency wrapping for break-all, break-word, and anywhere |
 | `overflow` / `text-overflow` | Y | Y | Y | Y | Y | Y | Y | visible plus rectangular padding-edge clipping for hidden/clip/auto/scroll; selectable single-line ellipsis |
-| `vertical-align` / inline baselines | Y | Y | Y | Y | Y | Y | Y | mixed text font metrics, keyword alignment, and length-percentage offsets; replaced and inline-block baselines pending |
+| `vertical-align` / inline baselines | Y | Y | Y | Y | Y | Y | Y | mixed text metrics, keywords, and length-percentage offsets; web/strict add replaced-element bottom-margin and inline-block last-line/bottom-margin baselines |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
 | `text-align` | Y | Y | Y | Y | Y | Y | Y | start/end resolved from direction, plus left, center, right, justify |
 | `text-decoration` | Y | Y | Y | Y | Y | Y | Y | combined underline/overline/line-through, color, thickness, solid/double/dotted/dashed/wavy vector styles |
