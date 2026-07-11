@@ -160,6 +160,18 @@ pub const CaptionSide = enum {
     }
 };
 
+pub const BoxDecorationBreak = enum {
+    slice,
+    clone,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .slice => "slice",
+            .clone => "clone",
+        };
+    }
+};
+
 /// Text whitespace mode needed before line breaking can make final decisions.
 pub const WhiteSpace = enum {
     normal,
@@ -608,6 +620,7 @@ pub const Style = struct {
     text_decoration_thickness: TextDecorationThickness = .auto,
 
     box_sizing: BoxSizing = .contentBox,
+    box_decoration_break: BoxDecorationBreak = .slice,
     border_collapse: BorderCollapse = .separate,
     caption_side: CaptionSide = .top,
     border_radius: f32 = 0,
@@ -878,6 +891,7 @@ const BuildState = struct {
         style.aspect_ratio = .{};
         style.object_fit = .fill;
         style.object_position = .{};
+        style.box_decoration_break = .slice;
 
         return style;
     }
@@ -1129,6 +1143,7 @@ fn anonymousStyle(parent: Style) Style {
     style.page_break_before = .auto;
     style.page_break_after = .auto;
     style.page_break_inside = .auto;
+    style.box_decoration_break = .slice;
     return style;
 }
 

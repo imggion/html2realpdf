@@ -33,6 +33,7 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "object-fit",
   "object-position",
   "box-sizing",
+  "box-decoration-break",
   "margin-top",
   "margin-right",
   "margin-bottom",

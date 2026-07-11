@@ -33,6 +33,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | logical sizing/margin/padding/border | Y | Y | Y | Y | Y | Y | Y | `*-block`/`*-inline` longhands and axis shorthands map with final `direction`, share cascade priority with physical peers, and preserve logical `inherit`; horizontal-tb writing mode |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |
+| `box-decoration-break` | Y | Y | Y | Y | Y | Y | Y | web/strict support `slice` and `clone` across page fragments; document preserves its legacy repeated-border behavior |
 | color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `currentColor`, and native PDF alpha via ExtGState |
 | font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | four Noto Sans Latin faces plus built-in Arabic/Hebrew fallbacks and registered TTF faces |
 | line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | web/strict use HarfBuzz OpenType shaping, kerning, ligatures, positioned clusters, and per-glyph fallback; document keeps its byte-stable identity shaper |

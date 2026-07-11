@@ -155,6 +155,10 @@ fn appendSplitBox(
 ) !void {
     var remaining = fragment.rect.height;
     var absolute_y = fragment.rect.y;
+    const first_page_index: usize = @intFromFloat(@floor(@max(absolute_y, 0) / content_height));
+    const first_page_y = absolute_y - @as(f32, @floatFromInt(first_page_index)) * content_height;
+    const is_split = fragment.rect.height > content_height - first_page_y;
+    var is_first = true;
 
     while (remaining > 0) {
         const page_index: usize = @intFromFloat(@floor(@max(absolute_y, 0) / content_height));
@@ -166,12 +170,28 @@ fn appendSplitBox(
         segment.rect.height = segment_height;
         segment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
         segment.image_content_rect = rectForPage(fragment.image_content_rect, page_index, content_height);
-        if (segment_height < fragment.rect.height) segment.border_radius = 0;
+        const is_last = segment_height >= remaining;
+        if (is_split) {
+            if (fragment.legacy_fragment_borders) {
+                segment.border_radius = 0;
+            } else switch (fragment.box_decoration_break) {
+                .slice => {
+                    if (!is_first) segment.border.top = 0;
+                    if (!is_last) segment.border.bottom = 0;
+                    // The renderer currently stores one uniform radius rather than
+                    // per-corner radii, so a sliced middle edge cannot retain only
+                    // the two outer rounded corners.
+                    segment.border_radius = 0;
+                },
+                .clone => {},
+            }
+        }
         try output.append(allocator, .{ .page_index = page_index, .fragment = segment });
 
         page_count.* = @max(page_count.*, page_index + 1);
         remaining -= segment_height;
         absolute_y += segment_height;
+        is_first = false;
         if (segment_height <= 0) break;
     }
 }
@@ -294,4 +314,80 @@ test "translate clipping rectangles into the destination page" {
     try std.testing.expectEqual(@as(usize, 1), paged.fragments.items[0].page_index);
     try std.testing.expectApproxEqAbs(@as(f32, 0), paged.fragments.items[0].fragment.clip_rect.?.y, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 10), paged.fragments.items[0].fragment.clip_rect.?.height, 0.01);
+}
+
+test "slice decoration paints borders only at the box ends" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(layout.Fragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{
+        .kind = .box,
+        .source_box = 0,
+        .rect = .{ .width = 100, .height = 150 },
+        .border = .{ .top = 2, .right = 2, .bottom = 2, .left = 2 },
+        .border_radius = 8,
+        .box_decoration_break = .slice,
+    });
+    const continuous = layout.LayoutDocument{ .fragments = fragments, .content_width = 100, .content_height = 150 };
+    const spec = PageSpec{ .width_points = 75, .height_points = 75 };
+    var paged = try paginate(allocator, &continuous, spec);
+    defer paged.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), paged.fragments.items.len);
+    try std.testing.expectEqual(@as(f32, 2), paged.fragments.items[0].fragment.border.top);
+    try std.testing.expectEqual(@as(f32, 0), paged.fragments.items[0].fragment.border.bottom);
+    try std.testing.expectEqual(@as(f32, 0), paged.fragments.items[1].fragment.border.top);
+    try std.testing.expectEqual(@as(f32, 2), paged.fragments.items[1].fragment.border.bottom);
+    try std.testing.expectEqual(@as(f32, 0), paged.fragments.items[0].fragment.border_radius);
+    try std.testing.expectEqual(@as(f32, 0), paged.fragments.items[1].fragment.border_radius);
+}
+
+test "clone decoration repeats borders and radius on every fragment" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(layout.Fragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{
+        .kind = .box,
+        .source_box = 0,
+        .rect = .{ .width = 100, .height = 150 },
+        .border = .{ .top = 2, .right = 2, .bottom = 2, .left = 2 },
+        .border_radius = 8,
+        .box_decoration_break = .clone,
+    });
+    const continuous = layout.LayoutDocument{ .fragments = fragments, .content_width = 100, .content_height = 150 };
+    const spec = PageSpec{ .width_points = 75, .height_points = 75 };
+    var paged = try paginate(allocator, &continuous, spec);
+    defer paged.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), paged.fragments.items.len);
+    for (paged.fragments.items) |item| {
+        try std.testing.expectEqual(@as(f32, 2), item.fragment.border.top);
+        try std.testing.expectEqual(@as(f32, 2), item.fragment.border.bottom);
+        try std.testing.expectEqual(@as(f32, 8), item.fragment.border_radius);
+    }
+}
+
+test "document profile preserves repeated fragment borders" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(layout.Fragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{
+        .kind = .box,
+        .source_box = 0,
+        .rect = .{ .width = 100, .height = 150 },
+        .border = .{ .top = 2, .right = 2, .bottom = 2, .left = 2 },
+        .border_radius = 8,
+        .legacy_fragment_borders = true,
+    });
+    const continuous = layout.LayoutDocument{ .fragments = fragments, .content_width = 100, .content_height = 150 };
+    const spec = PageSpec{ .width_points = 75, .height_points = 75 };
+    var paged = try paginate(allocator, &continuous, spec);
+    defer paged.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), paged.fragments.items.len);
+    for (paged.fragments.items) |item| {
+        try std.testing.expectEqual(@as(f32, 2), item.fragment.border.top);
+        try std.testing.expectEqual(@as(f32, 2), item.fragment.border.bottom);
+        try std.testing.expectEqual(@as(f32, 0), item.fragment.border_radius);
+    }
 }

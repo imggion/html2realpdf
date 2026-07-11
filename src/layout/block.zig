@@ -99,6 +99,8 @@ pub fn layoutWithOptions(
         .border = border,
         .border_paint = types.borderPaint(style),
         .border_radius = style.border_radius,
+        .box_decoration_break = style.box_decoration_break,
+        .legacy_fragment_borders = !state.web_sizing,
         .page_break_before = style.page_break_before,
         .page_break_after = style.page_break_after,
         .page_break_inside = style.page_break_inside,

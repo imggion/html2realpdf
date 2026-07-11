@@ -35,6 +35,10 @@ const html = `
       <p style="margin: 0">Text occupies the live band between both floats while remaining native selectable PDF text.</p>
       <p style="clear: both; margin: 8px 0 0; padding: 4px; background: #f1f5f9">Cleared below both floats</p>
     </section>
+    <section style="box-decoration-break: clone; width: 400px; height: 520px; margin-top: 18px; padding: 12px; border: 5px solid #7c3aed; border-radius: 10px; background: #f5f3ff">
+      <h2 style="margin-top: 0; color: #6d28d9">Cloned page decoration</h2>
+      <p>This tall native box crosses a page boundary. Its purple border and rounded corners must be painted on both fragments.</p>
+    </section>
   </article>
 `;
 const input = new TextEncoder().encode(html);

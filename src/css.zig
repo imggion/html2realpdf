@@ -985,6 +985,16 @@ test "cascade: clear remains local to the clearing block" {
     try std.testing.expectEqual(box.Clear.none, ct.styles[paragraph_id].clear_direction);
 }
 
+test "cascade: box-decoration-break remains local to the fragmented box" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='box-decoration-break:clone'><p>child</p></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const paragraph_id = ct.document.nodes.items[div_id].first_child.?;
+    try std.testing.expectEqual(box.BoxDecorationBreak.clone, ct.styles[div_id].box_decoration_break);
+    try std.testing.expectEqual(box.BoxDecorationBreak.slice, ct.styles[paragraph_id].box_decoration_break);
+}
+
 test "cascade: text-decoration shorthand keeps line style color and thickness" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");

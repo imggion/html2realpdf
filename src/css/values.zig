@@ -35,6 +35,13 @@ pub fn parseCaptionSide(value: []const u8) ?box.CaptionSide {
     return null;
 }
 
+pub fn parseBoxDecorationBreak(value: []const u8) ?box.BoxDecorationBreak {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "slice")) return .slice;
+    if (eqlProp(v, "clone")) return .clone;
+    return null;
+}
+
 pub fn parsePosition(value: []const u8) ?box.Position {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (eqlProp(v, "static")) return .static;

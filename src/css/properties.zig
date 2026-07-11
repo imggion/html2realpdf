@@ -36,6 +36,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "border", .stage = full, .notes = "uniform radius only" },
     .{ .name = "border-collapse", .stage = layout },
     .{ .name = "border-radius", .stage = full, .notes = "uniform circular radius" },
+    .{ .name = "box-decoration-break", .stage = full, .notes = "web and strict slice or clone page-fragment borders and radius" },
     .{ .name = "box-sizing", .stage = layout },
     .{ .name = "break-after", .stage = layout },
     .{ .name = "break-before", .stage = layout },
