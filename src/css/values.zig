@@ -203,6 +203,19 @@ pub fn parseOverflowWrap(value: []const u8) ?box.OverflowWrap {
     return null;
 }
 
+pub fn parseVerticalAlignKeyword(value: []const u8) ?box.VerticalAlign {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "baseline")) return .baseline;
+    if (eqlProp(v, "sub")) return .sub;
+    if (eqlProp(v, "super")) return .super;
+    if (eqlProp(v, "text-top")) return .textTop;
+    if (eqlProp(v, "text-bottom")) return .textBottom;
+    if (eqlProp(v, "middle")) return .middle;
+    if (eqlProp(v, "top")) return .top;
+    if (eqlProp(v, "bottom")) return .bottom;
+    return null;
+}
+
 pub fn parseTextDecoration(value: []const u8) ?box.TextDecoration {
     var tokens = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
     while (tokens.next()) |token| {

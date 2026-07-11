@@ -32,8 +32,8 @@
     },
     "presentation-deck": {
       "pages": 4,
-      "pdfBytes": 118243,
-      "sha256": "0e09a3a369101e5035eb02251e9738dd7dbe202ea5252a673577774317fecff6",
+      "pdfBytes": 118239,
+      "sha256": "6bbbc0b4a2381053d0c06f40fedc2e49f37d8c0cc2a904a61f914e95b3bbef43",
       "renderMilliseconds": 114.237,
       "wasmMemoryBytesBefore": 6029312,
       "wasmMemoryBytesAfter": 6094848,

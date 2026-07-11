@@ -48,6 +48,7 @@ const parseTextAlign = values.parseTextAlign;
 const parseTextTransform = values.parseTextTransform;
 const parseWordBreak = values.parseWordBreak;
 const parseOverflowWrap = values.parseOverflowWrap;
+const parseVerticalAlignKeyword = values.parseVerticalAlignKeyword;
 const parseBoxSizing = values.parseBoxSizing;
 const parseBorderCollapse = values.parseBorderCollapse;
 const parsePageBreak = values.parsePageBreak;
@@ -717,6 +718,8 @@ test "parse CSS Text inline properties" {
     try std.testing.expectEqual(box.WordBreak.keepAll, parseWordBreak("keep-all").?);
     try std.testing.expectEqual(box.OverflowWrap.breakWord, parseOverflowWrap("break-word").?);
     try std.testing.expectEqual(box.OverflowWrap.anywhere, parseOverflowWrap("anywhere").?);
+    try std.testing.expect(parseVerticalAlignKeyword("super").? == .super);
+    try std.testing.expect(parseVerticalAlignKeyword("text-bottom").? == .textBottom);
 }
 
 test "parse value: box-sizing" {
@@ -836,6 +839,19 @@ test "cascade: CSS Text inline properties inherit as computed values" {
     try std.testing.expectEqual(box.WordBreak.breakAll, ct.styles[span_id].word_break);
     try std.testing.expectEqual(box.OverflowWrap.anywhere, ct.styles[span_id].overflow_wrap);
     try std.testing.expectEqual(@as(f32, 3), ct.styles[span_id].word_spacing);
+}
+
+test "cascade: vertical-align keeps keyword and percentage computed values" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<span style='vertical-align:super'>super</span><span style='vertical-align:25%'>offset</span>");
+    defer ct.deinit(allocator);
+    const first_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const second_id = ct.document.nodes.items[first_id].next_sibling.?;
+    try std.testing.expect(ct.styles[first_id].vertical_align == .super);
+    switch (ct.styles[second_id].vertical_align) {
+        .offset => |offset| try std.testing.expectApproxEqAbs(@as(f32, 4.5), offset.resolve(18).?, 0.01),
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "cascade: page-break and orphans/widows" {

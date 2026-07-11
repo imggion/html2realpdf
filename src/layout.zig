@@ -256,7 +256,7 @@ const State = struct {
         var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent);
         var child = self.tree.boxes.items[parent_id].first_child;
         while (child) |child_id| {
-            try cursor.layoutBox(child_id, null);
+            try cursor.layoutBox(child_id, null, .baseline);
             child = self.tree.boxes.items[child_id].next_sibling;
         }
         return cursor.finish();
@@ -274,7 +274,7 @@ const State = struct {
         const style = if (first.parent) |parent_id| self.tree.boxes.items[parent_id].style else first.style;
         const text_indent = style.text_indent.resolve(width) orelse 0;
         var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent);
-        try cursor.layoutBox(first_box, null);
+        try cursor.layoutBox(first_box, null, .baseline);
         return cursor.finish();
     }
 };
@@ -434,6 +434,49 @@ test "apply text transform indent word spacing and emergency word breaks" {
     try std.testing.expect(break_all_wrapped);
     try std.testing.expect(break_word_wrapped);
     try std.testing.expectApproxEqAbs(@as(f32, 10), spaced_width.? - normal_width.?, 0.01);
+}
+
+test "align mixed inline font baselines and vertical-align offsets" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<p style='margin:0;line-height:40px'>" ++
+        "<span style='font-size:30px'>Large</span>" ++
+        "<span style='font-size:10px'>small</span>" ++
+        "<span style='font-size:12px;vertical-align:super'>super</span>" ++
+        "<span style='font-size:12px;vertical-align:5px'>raised</span>" ++
+        "</p>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300 });
+    defer result.deinit(allocator);
+
+    var large_baseline: ?f32 = null;
+    var small_baseline: ?f32 = null;
+    var super_baseline: ?f32 = null;
+    var raised_baseline: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        const resolved = font.resolve(null, fragment.font_family, fragment.font_weight, fragment.font_style);
+        const baseline = fragment.rect.y + fragment.font_size * resolved.metrics().ascentRatio();
+        if (std.mem.eql(u8, text, "Large")) large_baseline = baseline;
+        if (std.mem.eql(u8, text, "small")) small_baseline = baseline;
+        if (std.mem.eql(u8, text, "super")) super_baseline = baseline;
+        if (std.mem.eql(u8, text, "raised")) raised_baseline = baseline;
+    }
+
+    try std.testing.expectApproxEqAbs(large_baseline.?, small_baseline.?, 0.01);
+    try std.testing.expect(super_baseline.? < large_baseline.?);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), large_baseline.? - raised_baseline.?, 0.01);
 }
 
 test "layout inline-block children as an atomic inline group" {

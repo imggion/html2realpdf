@@ -226,6 +226,18 @@ pub const OverflowWrap = enum {
     }
 };
 
+pub const VerticalAlign = union(enum) {
+    baseline,
+    sub,
+    super,
+    textTop,
+    textBottom,
+    middle,
+    top,
+    bottom,
+    offset: Length,
+};
+
 pub const TextDecoration = enum {
     none,
     underline,
@@ -374,6 +386,7 @@ pub const Style = struct {
     text_transform: TextTransform = .none,
     word_break: WordBreak = .normal,
     overflow_wrap: OverflowWrap = .normal,
+    vertical_align: VerticalAlign = .baseline,
     text_decoration: TextDecoration = .none,
 
     box_sizing: BoxSizing = .contentBox,
@@ -630,6 +643,7 @@ const BuildState = struct {
         style.page_break_before = .auto;
         style.page_break_after = .auto;
         style.page_break_inside = .auto;
+        style.vertical_align = .baseline;
 
         return style;
     }
@@ -1090,6 +1104,17 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     if (style.text_transform != .none) try writer.print(" text-transform={s}", .{style.text_transform.toString()});
     if (style.word_break != .normal) try writer.print(" word-break={s}", .{style.word_break.toString()});
     if (style.overflow_wrap != .normal) try writer.print(" overflow-wrap={s}", .{style.overflow_wrap.toString()});
+    switch (style.vertical_align) {
+        .baseline => {},
+        .sub => try writer.writeAll(" vertical-align=sub"),
+        .super => try writer.writeAll(" vertical-align=super"),
+        .textTop => try writer.writeAll(" vertical-align=text-top"),
+        .textBottom => try writer.writeAll(" vertical-align=text-bottom"),
+        .middle => try writer.writeAll(" vertical-align=middle"),
+        .top => try writer.writeAll(" vertical-align=top"),
+        .bottom => try writer.writeAll(" vertical-align=bottom"),
+        .offset => |offset| try writeLengthDebug("vertical-align", offset, writer),
+    }
     if (style.box_sizing != .contentBox) try writer.print(" box-sizing={s}", .{style.box_sizing.toString()});
     if (style.border_collapse != .separate) try writer.print(" border-collapse={s}", .{style.border_collapse.toString()});
     if (style.page_break_before != .auto) try writer.print(" page-break-before={s}", .{style.page_break_before.toString()});
@@ -1481,4 +1506,28 @@ test "UA defaults set heading font-size and paragraph margins" {
     try std.testing.expectEqual(@as(f32, 21.44), h1_box.style.margin.top);
     try std.testing.expectEqual(@as(f32, 16), p_box.style.margin.top);
     try std.testing.expectEqual(@as(f32, 16), p_box.style.margin.bottom);
+}
+
+test "text boxes do not inherit vertical-align from table cells" {
+    const allocator = std.testing.allocator;
+    const source = "<table><tr><td style='vertical-align:middle'>cell</td></tr></table>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try allocator.alloc(Style, document.nodes.items.len);
+    defer allocator.free(styles);
+    for (document.nodes.items, 0..) |node, node_id| {
+        styles[node_id] = defaultStyleForNode(&document, node_id);
+        if (node.kind == .element and node.kind.element.tag == .td) styles[node_id].vertical_align = .middle;
+    }
+    var tree = try Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+
+    for (tree.boxes.items) |candidate| {
+        if (candidate.kind != .text) continue;
+        try std.testing.expect(candidate.style.vertical_align == .baseline);
+        return;
+    }
+    return error.TestExpectedEqual;
 }

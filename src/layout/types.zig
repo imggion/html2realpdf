@@ -36,6 +36,7 @@ pub const Fragment = struct {
     font_family: []const u8 = "Noto Sans",
     letter_spacing: f32 = 0,
     word_spacing: f32 = 0,
+    vertical_align: box.VerticalAlign = .baseline,
     font_weight: box.FontWeight = .normal,
     font_style: box.FontStyle = .normal,
     color: geometry.Color = geometry.Color.black,

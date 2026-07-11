@@ -21,7 +21,7 @@ Read these local docs before changing code:
 - `docs/css-support.md` is the public, versioned CSS support contract; `src/css/properties.zig` is its machine-readable property inventory.
 - `tests/baselines/0.1.0-alpha.0/` freezes deterministic PDFs, first-page Poppler PNGs, metrics, and digests from the document profile.
 - Rounded box painting uses a uniform `border-radius` propagated through layout and display-list commands into native PDF Bézier paths; keep per-corner and clipping behavior out until tested explicitly.
-- Inline CSS Text support includes percentage `text-indent`, ASCII case transforms, emergency codepoint wrapping, and `word-spacing`; preserve word spacing through fragment/display-list state and PDF Type 0 `TJ` adjustments so geometry and selectable text remain aligned.
+- Inline CSS Text support includes percentage `text-indent`, ASCII case transforms, emergency codepoint wrapping, mixed-font baseline alignment, `vertical-align`, and `word-spacing`; preserve word spacing through fragment/display-list state and PDF Type 0 `TJ` adjustments so geometry and selectable text remain aligned.
 - The browser fixture set includes portrait reports and an A4 landscape presentation deck; keep both available from `tests/web/index.html` and in automated browser verification.
 - `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
 - The browser package is framework-agnostic; React refs are supported structurally without a React dependency.

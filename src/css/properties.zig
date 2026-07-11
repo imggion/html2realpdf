@@ -62,6 +62,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "text-decoration", .stage = full, .notes = "underline and line-through" },
     .{ .name = "text-indent", .stage = full, .notes = "length and percentage on first formatted line" },
     .{ .name = "text-transform", .stage = full, .notes = "locale-aware Unicode case mapping pending" },
+    .{ .name = "vertical-align", .stage = full, .notes = "text baseline keywords and length-percentage offsets; replaced baselines pending" },
     .{ .name = "white-space", .stage = layout },
     .{ .name = "widows", .stage = layout },
     .{ .name = "width", .stage = layout, .notes = "typed calc/min/max/clamp and viewport units" },

@@ -41,19 +41,22 @@ pub fn Cursor(comptime State: type) type {
             };
         }
 
-        pub fn layoutBox(self: *Self, box_id: box.BoxId, inherited_link: ?[]const u8) !void {
+        pub fn layoutBox(self: *Self, box_id: box.BoxId, inherited_link: ?[]const u8, inherited_vertical_align: box.VerticalAlign) !void {
             const source = self.state.tree.boxes.items[box_id];
+            const effective_vertical_align = if (isBaselineAlignment(source.style.vertical_align)) inherited_vertical_align else source.style.vertical_align;
+            var effective_source = source;
+            effective_source.style.vertical_align = effective_vertical_align;
             const link_url = self.state.linkForBox(box_id) orelse inherited_link;
             if (source.style.page_break_before == .always) self.forcePageBreak();
             switch (source.kind) {
-                .text => if (source.text) |text| try self.layoutText(box_id, text, source.style, link_url),
+                .text => if (source.text) |text| try self.layoutText(box_id, text, effective_source.style, link_url),
                 .lineBreak => self.newLine(),
-                .replaced => try self.layoutAtomic(box_id, source, link_url),
-                .inlineBlock => try self.layoutInlineBlock(box_id, source),
+                .replaced => try self.layoutAtomic(box_id, effective_source, link_url),
+                .inlineBlock => try self.layoutInlineBlock(box_id, effective_source),
                 .inlineBox, .anonymousInline => {
                     var child = source.first_child;
                     while (child) |child_id| {
-                        try self.layoutBox(child_id, link_url);
+                        try self.layoutBox(child_id, link_url, effective_vertical_align);
                         child = self.state.tree.boxes.items[child_id].next_sibling;
                     }
                 },
@@ -311,6 +314,7 @@ pub fn Cursor(comptime State: type) type {
                 .font_family = resolved.family,
                 .letter_spacing = style.letter_spacing,
                 .word_spacing = style.word_spacing,
+                .vertical_align = style.vertical_align,
                 .font_weight = style.font_weight,
                 .font_style = style.font_style,
                 .color = geometry.parseColor(style.color) orelse geometry.Color.black,
@@ -386,6 +390,7 @@ pub fn Cursor(comptime State: type) type {
                 .line_id = self.line_id,
                 .border = source.border,
                 .border_paint = types.borderPaint(source.style),
+                .vertical_align = source.style.vertical_align,
                 .link_url = link_url,
                 .image_source = self.state.attributeForBox(box_id, "src"),
             });
@@ -408,6 +413,7 @@ pub fn Cursor(comptime State: type) type {
             );
             for (self.state.fragments.items[fragment_start..]) |*fragment| {
                 fragment.inline_container_line_id = self.line_id;
+                fragment.vertical_align = source.style.vertical_align;
             }
             const outer_height = source.margin.top + rect.height + source.margin.bottom;
             self.line_height = @max(self.line_height, outer_height);
@@ -428,7 +434,9 @@ pub fn Cursor(comptime State: type) type {
         }
 
         fn alignCurrentLine(self: *Self, is_last_line: bool) void {
-            if (!self.has_content or self.text_align == .left) return;
+            if (!self.has_content) return;
+            self.alignVerticalLine();
+            if (self.text_align == .left) return;
             const used = self.x - self.start_x;
             const remaining = @max(self.width - used, 0);
             if (self.text_align == .justify) {
@@ -453,6 +461,57 @@ pub fn Cursor(comptime State: type) type {
             }
         }
 
+        fn alignVerticalLine(self: *Self) void {
+            var max_baseline: f32 = 0;
+            for (self.state.fragments.items[self.line_start_fragment..]) |fragment| {
+                if (fragment.line_id != self.line_id or fragment.kind != .text) continue;
+                max_baseline = @max(max_baseline, self.naturalBaseline(fragment));
+            }
+            if (max_baseline == 0) return;
+
+            for (self.state.fragments.items[self.line_start_fragment..]) |*fragment| {
+                if (fragment.line_id != self.line_id or fragment.kind != .text) continue;
+                const natural_baseline = self.naturalBaseline(fragment.*);
+                const baseline_shift = max_baseline - natural_baseline;
+                const shift = switch (fragment.vertical_align) {
+                    .baseline => baseline_shift,
+                    .sub => baseline_shift + fragment.font_size * 0.2,
+                    .super => baseline_shift - fragment.font_size * 0.4,
+                    .middle => max_baseline - fragment.font_size * 0.25 - fragment.rect.height / 2,
+                    .textTop, .top => 0,
+                    .textBottom, .bottom => self.line_height - fragment.rect.height,
+                    .offset => |offset| baseline_shift - (offset.resolve(self.line_height) orelse 0),
+                };
+                fragment.rect.y += shift;
+            }
+
+            var min_y = self.line_y;
+            var max_bottom = self.line_y + self.line_height;
+            for (self.state.fragments.items[self.line_start_fragment..]) |fragment| {
+                if (!self.belongsToCurrentLine(fragment)) continue;
+                min_y = @min(min_y, fragment.rect.y);
+                max_bottom = @max(max_bottom, fragment.rect.bottom());
+            }
+            if (min_y < self.line_y) {
+                const correction = self.line_y - min_y;
+                for (self.state.fragments.items[self.line_start_fragment..]) |*fragment| {
+                    if (self.belongsToCurrentLine(fragment.*)) fragment.rect.y += correction;
+                }
+                max_bottom += correction;
+            }
+            self.line_height = @max(self.line_height, max_bottom - self.line_y);
+        }
+
+        fn naturalBaseline(self: *Self, fragment: types.Fragment) f32 {
+            if (fragment.kind != .text) return 0;
+            const resolved = font.resolve(self.state.font_registry, fragment.font_family, fragment.font_weight, fragment.font_style);
+            return fragment.font_size * resolved.metrics().ascentRatio();
+        }
+
+        fn belongsToCurrentLine(self: *Self, fragment: types.Fragment) bool {
+            return fragment.line_id == self.line_id or fragment.inline_container_line_id == self.line_id;
+        }
+
         pub fn finish(self: *Self) f32 {
             self.alignCurrentLine(true);
             if (!self.has_content and self.line_y == self.start_y) return 0;
@@ -463,6 +522,13 @@ pub fn Cursor(comptime State: type) type {
 
 fn isHtmlWhitespace(value: u8) bool {
     return value == ' ' or value == '\t' or value == '\n' or value == '\r' or value == 0x0C;
+}
+
+fn isBaselineAlignment(value: box.VerticalAlign) bool {
+    return switch (value) {
+        .baseline => true,
+        else => false,
+    };
 }
 
 fn countCodepoints(text: []const u8) usize {
