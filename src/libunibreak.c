@@ -6,3 +6,4 @@
 #include "eastasianwidthdef.c"
 #include "emojidef.c"
 #include "linebreak.c"
+#include "graphemebreak.c"

@@ -39,7 +39,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `direction` / bidi | Y | Y | Y | Y | Y | Y | Y | web/strict use SheenBidi UAX #9 paragraph levels and L2 visual reordering; `ltr` and `rtl` base directions |
 | `text-indent` | Y | Y | Y | Y | Y | Y | Y | lengths and percentages on the first formatted line |
 | `text-transform` | Y | Y | Y | Y | Y | Y | Y | none, uppercase, lowercase, capitalize; locale-aware Unicode case mapping pending |
-| `word-break` / `overflow-wrap` | Y | Y | Y | Y | Y | Y | Y | UAX #14 legal opportunities plus emergency UTF-8 codepoint wrapping for break-all, break-word, and anywhere |
+| `word-break` / `overflow-wrap` | Y | Y | Y | Y | Y | Y | Y | UAX #14 legal opportunities, CJK keep-all, and extended-grapheme emergency wrapping for break-all, break-word, and anywhere |
 | `overflow` / `text-overflow` | Y | Y | Y | Y | Y | Y | Y | visible plus rectangular padding-edge clipping for hidden/clip/auto/scroll; selectable single-line ellipsis |
 | `vertical-align` / inline baselines | Y | Y | Y | Y | Y | Y | Y | mixed text font metrics, keyword alignment, and length-percentage offsets; replaced and inline-block baselines pending |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |

@@ -56,4 +56,25 @@ pub fn main(init: std.process.Init) !void {
         last_line = fragment.line_id;
     }
     if (first_line == null or last_line == null or first_line.? == last_line.?) return error.UnicodeLineBreakMismatch;
+
+    const grapheme_source = "<p style=\"word-break:break-all\">a\u{301}bc</p>";
+    const grapheme_tokens = try html.Tokenizer.tokenizeHtml(allocator, grapheme_source);
+    var grapheme_document = try dom.Parser.parse(allocator, grapheme_source, grapheme_tokens.items);
+    const grapheme_styles = try css.styleArrayFromDocument(allocator, &grapheme_document);
+    var grapheme_tree = try box.Builder.build(allocator, &grapheme_document, grapheme_styles, grapheme_document.root);
+    const grapheme_result = try layout.layout(allocator, &grapheme_tree, &grapheme_document, .{
+        .content_width = 5,
+        .shaping_mode = .harfbuzz,
+    });
+    var first_grapheme: ?[]const u8 = null;
+    var grapheme_lines: usize = 0;
+    var previous_line: ?usize = null;
+    for (grapheme_result.fragments.items) |fragment| {
+        if (fragment.kind != .text) continue;
+        const fragment_text = fragment.text orelse continue;
+        first_grapheme = first_grapheme orelse fragment_text;
+        if (previous_line == null or previous_line.? != fragment.line_id.?) grapheme_lines += 1;
+        previous_line = fragment.line_id;
+    }
+    if (first_grapheme == null or !std.mem.eql(u8, first_grapheme.?, "a\u{301}") or grapheme_lines < 2) return error.GraphemeWrapMismatch;
 }

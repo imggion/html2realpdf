@@ -25,3 +25,18 @@ test "combining sequence and emoji ZWJ remain unbroken" {
         try std.testing.expect(!opportunity.permitsBreak());
     }
 }
+
+test "extended grapheme boundaries keep combining marks and emoji ZWJ together" {
+    const allocator = std.testing.allocator;
+    const text = "a\u{301}b👩‍💻c";
+    const boundaries = try line_break.graphemeBoundaries(allocator, text);
+    defer allocator.free(boundaries);
+
+    try std.testing.expect(!boundaries[0]);
+    try std.testing.expect(boundaries["a\u{301}".len - 1]);
+    const emoji_start = "a\u{301}b".len;
+    for (boundaries[emoji_start .. emoji_start + "👩‍💻".len - 1]) |boundary| {
+        try std.testing.expect(!boundary);
+    }
+    try std.testing.expect(boundaries[emoji_start + "👩‍💻".len - 1]);
+}

@@ -16,6 +16,7 @@ pub const Opportunity = enum(u8) {
 };
 
 extern fn set_linebreaks_utf8([*]const u8, usize, ?[*:0]const u8, [*]u8) void;
+extern fn set_graphemebreaks_utf8([*]const u8, usize, ?[*:0]const u8, [*]u8) void;
 
 /// Return one break classification per UTF-8 code unit. A permitted entry at
 /// index `i` means the line may end after byte `i`.
@@ -28,6 +29,39 @@ pub fn opportunities(
     const raw = try allocator.alloc(u8, text.len);
     set_linebreaks_utf8(text.ptr, text.len, language, raw.ptr);
     return @ptrCast(raw);
+}
+
+/// Return a byte-indexed mask whose true entries are extended grapheme-cluster
+/// boundaries after that byte. Continuation bytes are always false.
+pub fn graphemeBoundaries(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+) std.mem.Allocator.Error![]bool {
+    if (text.len == 0) return &.{};
+    const raw = try allocator.alloc(u8, text.len);
+    defer allocator.free(raw);
+    set_graphemebreaks_utf8(text.ptr, text.len, null, raw.ptr);
+    const boundaries = try allocator.alloc(bool, text.len);
+    for (raw, boundaries) |value, *boundary| boundary.* = value == 0;
+    return boundaries;
+}
+
+pub fn graphemeBoundariesForLayout(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+) std.mem.Allocator.Error![]bool {
+    if (!builtin.is_test) return graphemeBoundaries(allocator, text);
+    if (text.len == 0) return &.{};
+    const boundaries = try allocator.alloc(bool, text.len);
+    @memset(boundaries, false);
+    var index: usize = 0;
+    while (index < text.len) {
+        const sequence_length = std.unicode.utf8ByteSequenceLength(text[index]) catch 1;
+        const end = @min(index + sequence_length, text.len);
+        boundaries[end - 1] = true;
+        index = end;
+    }
+    return boundaries;
 }
 
 /// Keep standalone layout unit tests independent from linked C objects. The

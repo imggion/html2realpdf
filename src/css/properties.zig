@@ -60,7 +60,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "object-position", .stage = full, .notes = "one- and two-value keyword or length-percentage positions" },
     .{ .name = "orphans", .stage = layout },
     .{ .name = "overflow", .stage = full, .notes = "rectangular descendant clipping; auto and scroll omit interactive scrollbars" },
-    .{ .name = "overflow-wrap", .stage = full, .notes = "normal break-word and anywhere; Unicode segmentation pending" },
+    .{ .name = "overflow-wrap", .stage = full, .notes = "normal break-word and anywhere at extended grapheme boundaries" },
     .{ .name = "padding", .stage = full },
     .{ .name = "position", .stage = computed_only, .notes = "non-static rejected by renderer" },
     .{ .name = "text-align", .stage = full },
@@ -72,7 +72,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "white-space", .stage = layout },
     .{ .name = "widows", .stage = layout },
     .{ .name = "width", .stage = layout, .notes = "typed calc/min/max/clamp and viewport units" },
-    .{ .name = "word-break", .stage = full, .notes = "break-all with UTF-8 codepoint boundaries; Unicode segmentation pending" },
+    .{ .name = "word-break", .stage = full, .notes = "UAX #14 normal, break-all, and CJK keep-all with extended grapheme boundaries" },
     .{ .name = "word-spacing", .stage = full, .notes = "PDF Type 0 TJ adjustments" },
 };
 

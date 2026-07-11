@@ -206,7 +206,7 @@ pub fn Cursor(comptime State: type) type {
                     const sequence_length = std.unicode.utf8ByteSequenceLength(normalized_text[chunk_end]) catch 1;
                     chunk_end = @min(chunk_end + sequence_length, normalized_text.len);
                     boundary = opportunities[chunk_end - 1];
-                    if (boundary.permitsBreak()) break;
+                    if (shouldBreakAtOpportunity(style.word_break, normalized_text, chunk_end, boundary)) break;
                 }
 
                 var body_start = chunk_start;
@@ -285,6 +285,8 @@ pub fn Cursor(comptime State: type) type {
             allow_wrap: bool,
         ) !void {
             self.pending_space = false;
+            const grapheme_boundaries = try line_break.graphemeBoundariesForLayout(self.state.allocator, text);
+            defer if (grapheme_boundaries.len > 0) self.state.allocator.free(grapheme_boundaries);
             var chunk_start: usize = 0;
             var chunk_width: f32 = 0;
             var index: usize = 0;
@@ -312,16 +314,20 @@ pub fn Cursor(comptime State: type) type {
                     continue;
                 }
 
-                const sequence_length = std.unicode.utf8ByteSequenceLength(byte) catch 1;
-                const end = @min(index + sequence_length, text.len);
-                const character_width = self.measureStyledText(text[index..end], style);
-                if (allow_wrap and self.has_content and self.x + chunk_width + character_width > self.start_x + self.width) {
+                var end = index;
+                while (end < text.len) {
+                    const sequence_length = std.unicode.utf8ByteSequenceLength(text[end]) catch 1;
+                    end = @min(end + sequence_length, text.len);
+                    if (grapheme_boundaries[end - 1]) break;
+                }
+                const grapheme_width = self.measureStyledText(text[index..end], style);
+                if (allow_wrap and self.has_content and self.x + chunk_width + grapheme_width > self.start_x + self.width) {
                     if (chunk_start < index) try self.appendTextFragment(box_id, text[chunk_start..index], chunk_width, false, style, link_url);
                     self.newLine();
                     chunk_start = index;
                     chunk_width = 0;
                 }
-                chunk_width += character_width;
+                chunk_width += grapheme_width;
                 index = end;
             }
             if (chunk_start < text.len) try self.appendTextFragment(box_id, text[chunk_start..], chunk_width, false, style, link_url);
@@ -335,6 +341,8 @@ pub fn Cursor(comptime State: type) type {
             style: box.Style,
             link_url: ?[]const u8,
         ) !void {
+            const grapheme_boundaries = try line_break.graphemeBoundariesForLayout(self.state.allocator, word);
+            defer if (grapheme_boundaries.len > 0) self.state.allocator.free(grapheme_boundaries);
             var leading_space = has_leading_space;
             var leading_width = if (leading_space) self.spaceWidth(style) else 0;
             if (self.has_content and self.x + leading_width >= self.start_x + self.width) {
@@ -347,15 +355,19 @@ pub fn Cursor(comptime State: type) type {
             var chunk_width: f32 = 0;
             var index: usize = 0;
             while (index < word.len) {
-                const sequence_length = std.unicode.utf8ByteSequenceLength(word[index]) catch 1;
-                const end = @min(index + sequence_length, word.len);
-                const character_width = self.measureStyledText(word[index..end], style);
-                if (chunk_start == index and self.has_content and self.x + leading_width + character_width > self.start_x + self.width) {
+                var end = index;
+                while (end < word.len) {
+                    const sequence_length = std.unicode.utf8ByteSequenceLength(word[end]) catch 1;
+                    end = @min(end + sequence_length, word.len);
+                    if (grapheme_boundaries[end - 1]) break;
+                }
+                const grapheme_width = self.measureStyledText(word[index..end], style);
+                if (chunk_start == index and self.has_content and self.x + leading_width + grapheme_width > self.start_x + self.width) {
                     self.newLine();
                     leading_space = false;
                     leading_width = 0;
                 }
-                if (chunk_start < index and self.x + leading_width + chunk_width + character_width > self.start_x + self.width) {
+                if (chunk_start < index and self.x + leading_width + chunk_width + grapheme_width > self.start_x + self.width) {
                     try self.appendTextFragment(box_id, word[chunk_start..index], leading_width + chunk_width, leading_space, style, link_url);
                     self.newLine();
                     leading_space = false;
@@ -363,7 +375,7 @@ pub fn Cursor(comptime State: type) type {
                     chunk_start = index;
                     chunk_width = 0;
                 }
-                chunk_width += character_width;
+                chunk_width += grapheme_width;
                 index = end;
             }
             if (chunk_start < word.len) try self.appendTextFragment(box_id, word[chunk_start..], leading_width + chunk_width, leading_space, style, link_url);
@@ -381,17 +393,23 @@ pub fn Cursor(comptime State: type) type {
             const ellipsis_width = self.measureStyledText(ellipsis, style);
             const line_end = self.start_x + self.width;
             try self.trimLineToFit(line_end - ellipsis_width);
+            const grapheme_boundaries = try line_break.graphemeBoundariesForLayout(self.state.allocator, word);
+            defer if (grapheme_boundaries.len > 0) self.state.allocator.free(grapheme_boundaries);
 
             var leading_space = requested_leading_space and self.has_content;
             var consumed = if (leading_space) self.spaceWidth(style) else 0;
             var prefix_end: usize = 0;
             var index: usize = 0;
             while (index < word.len) {
-                const sequence_length = std.unicode.utf8ByteSequenceLength(word[index]) catch 1;
-                const end = @min(index + sequence_length, word.len);
-                const character_width = self.measureStyledText(word[index..end], style);
-                if (self.x + consumed + character_width + ellipsis_width > line_end) break;
-                consumed += character_width;
+                var end = index;
+                while (end < word.len) {
+                    const sequence_length = std.unicode.utf8ByteSequenceLength(word[end]) catch 1;
+                    end = @min(end + sequence_length, word.len);
+                    if (grapheme_boundaries[end - 1]) break;
+                }
+                const grapheme_width = self.measureStyledText(word[index..end], style);
+                if (self.x + consumed + grapheme_width + ellipsis_width > line_end) break;
+                consumed += grapheme_width;
                 prefix_end = end;
                 index = end;
             }
@@ -875,6 +893,37 @@ fn isHtmlWhitespace(value: u8) bool {
     return value == ' ' or value == '\t' or value == '\n' or value == '\r' or value == 0x0C;
 }
 
+fn shouldBreakAtOpportunity(word_break: box.WordBreak, text: []const u8, boundary: usize, opportunity: line_break.Opportunity) bool {
+    if (!opportunity.permitsBreak()) return false;
+    if (opportunity == .mandatory) return true;
+    return word_break != .keepAll or !isCjkBoundary(text, boundary);
+}
+
+fn isCjkBoundary(text: []const u8, boundary: usize) bool {
+    if (boundary == 0 or boundary >= text.len) return false;
+    const previous_start = previousCodepointStart(text[0..boundary]);
+    const previous = std.unicode.utf8Decode(text[previous_start..boundary]) catch return false;
+    const next_length = std.unicode.utf8ByteSequenceLength(text[boundary]) catch return false;
+    const next_end = @min(boundary + next_length, text.len);
+    const next = std.unicode.utf8Decode(text[boundary..next_end]) catch return false;
+    return isCjkCodepoint(previous) and isCjkCodepoint(next);
+}
+
+fn isCjkCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x1100 and codepoint <= 0x11FF) or
+        (codepoint >= 0x2E80 and codepoint <= 0x2FFF) or
+        (codepoint >= 0x3040 and codepoint <= 0x30FF) or
+        (codepoint >= 0x3130 and codepoint <= 0x318F) or
+        (codepoint >= 0x31F0 and codepoint <= 0x31FF) or
+        (codepoint >= 0x3400 and codepoint <= 0x4DBF) or
+        (codepoint >= 0x4E00 and codepoint <= 0x9FFF) or
+        (codepoint >= 0xA960 and codepoint <= 0xA97F) or
+        (codepoint >= 0xAC00 and codepoint <= 0xD7FF) or
+        (codepoint >= 0xF900 and codepoint <= 0xFAFF) or
+        (codepoint >= 0xFF66 and codepoint <= 0xFF9D) or
+        (codepoint >= 0x20000 and codepoint <= 0x3134F);
+}
+
 fn isBaselineAlignment(value: box.VerticalAlign) bool {
     return switch (value) {
         .baseline => true,
@@ -912,4 +961,13 @@ fn previousCodepointStart(text: []const u8) usize {
     var index = text.len - 1;
     while (index > 0 and text[index] & 0xC0 == 0x80) index -= 1;
     return index;
+}
+
+test "keep-all suppresses only discretionary CJK boundaries" {
+    const text = "日本 A";
+    try std.testing.expect(!shouldBreakAtOpportunity(.keepAll, text, "日".len, .allowed));
+    try std.testing.expect(shouldBreakAtOpportunity(.normal, text, "日".len, .allowed));
+    try std.testing.expect(shouldBreakAtOpportunity(.keepAll, text, "日本 ".len, .allowed));
+    try std.testing.expect(shouldBreakAtOpportunity(.keepAll, text, "日".len, .mandatory));
+    try std.testing.expect(!shouldBreakAtOpportunity(.keepAll, text, "日".len, .prohibited));
 }
