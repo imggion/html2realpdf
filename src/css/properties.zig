@@ -1,0 +1,66 @@
+//! Versioned support metadata for the HTML2RealPDF Web CSS Profile.
+//!
+//! Runtime behavior remains implemented in syntax, computed-style, layout, and
+//! paint modules. This table is the machine-readable source for documentation
+//! and compatibility tests.
+
+pub const Stage = struct {
+    parsed: bool = false,
+    cascaded: bool = false,
+    computed: bool = false,
+    laid_out: bool = false,
+    painted: bool = false,
+    paginated: bool = false,
+    tested: bool = false,
+};
+
+pub const PropertySupport = struct {
+    name: []const u8,
+    stage: Stage,
+    notes: []const u8 = "",
+};
+
+const full = Stage{ .parsed = true, .cascaded = true, .computed = true, .laid_out = true, .painted = true, .paginated = true, .tested = true };
+const layout = Stage{ .parsed = true, .cascaded = true, .computed = true, .laid_out = true, .paginated = true, .tested = true };
+const computed_only = Stage{ .parsed = true, .cascaded = true, .computed = true, .tested = true };
+
+pub const document_profile = [_]PropertySupport{
+    .{ .name = "background-color", .stage = full },
+    .{ .name = "border", .stage = full, .notes = "uniform radius only" },
+    .{ .name = "border-collapse", .stage = layout },
+    .{ .name = "border-radius", .stage = full, .notes = "uniform circular radius" },
+    .{ .name = "box-sizing", .stage = layout },
+    .{ .name = "break-after", .stage = layout },
+    .{ .name = "break-before", .stage = layout },
+    .{ .name = "break-inside", .stage = layout },
+    .{ .name = "color", .stage = full },
+    .{ .name = "display", .stage = layout, .notes = "block inline inline-block and table roles" },
+    .{ .name = "float", .stage = computed_only, .notes = "non-none rejected by renderer" },
+    .{ .name = "font-family", .stage = full },
+    .{ .name = "font-size", .stage = full },
+    .{ .name = "font-style", .stage = full },
+    .{ .name = "font-weight", .stage = full },
+    .{ .name = "height", .stage = layout },
+    .{ .name = "letter-spacing", .stage = full },
+    .{ .name = "line-height", .stage = full },
+    .{ .name = "margin", .stage = layout, .notes = "adjacent block collapse supported" },
+    .{ .name = "max-height", .stage = layout },
+    .{ .name = "max-width", .stage = layout },
+    .{ .name = "min-height", .stage = layout },
+    .{ .name = "min-width", .stage = layout },
+    .{ .name = "orphans", .stage = layout },
+    .{ .name = "padding", .stage = full },
+    .{ .name = "position", .stage = computed_only, .notes = "non-static rejected by renderer" },
+    .{ .name = "text-align", .stage = full },
+    .{ .name = "text-decoration", .stage = full, .notes = "underline and line-through" },
+    .{ .name = "white-space", .stage = layout },
+    .{ .name = "widows", .stage = layout },
+    .{ .name = "width", .stage = layout },
+};
+
+test "document profile entries are sorted and uniquely named" {
+    const std = @import("std");
+    for (document_profile[1..], document_profile[0 .. document_profile.len - 1]) |current, previous| {
+        try std.testing.expect(std.mem.order(u8, previous.name, current.name) == .lt);
+    }
+}

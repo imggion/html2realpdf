@@ -32,6 +32,9 @@ and similar documents. Flexbox, Grid, floats, positioned layout, transforms,
 shadows, and arbitrary browser painting are outside the current alpha scope and
 are rejected or reported instead of being silently rasterized.
 
+See [docs/css-support.md](docs/css-support.md) for the versioned property and
+pipeline-stage support matrix.
+
 ## Browser package
 
 ```ts

@@ -954,6 +954,7 @@ function showDiff(name, expected, actual) {
 }
 
 async function runWasmTests() {
+  document.documentElement.dataset.testStatus = "running";
   testResults.textContent = "Loading snapshots...\n";
 
   const instance = await getWasmInstance();
@@ -965,6 +966,7 @@ async function runWasmTests() {
     snapshots = await response.json();
   } catch (err) {
     testResults.textContent = `Failed to load snapshots.json: ${err.message}`;
+    document.documentElement.dataset.testStatus = "failed";
     return;
   }
 
@@ -1089,6 +1091,7 @@ async function runWasmTests() {
   }
 
   testResults.textContent += `\n${passed} passed, ${failed} failed\n`;
+  document.documentElement.dataset.testStatus = failed === 0 ? "passed" : "failed";
 
   if (failures.length > 0) {
     testResults.textContent += `\n--- Failure details ---`;
@@ -1101,5 +1104,6 @@ async function runWasmTests() {
 runWasmTestsButton.addEventListener("click", () => {
   runWasmTests().catch((err) => {
     testResults.textContent = `Internal error: ${err instanceof Error ? err.message : String(err)}`;
+    document.documentElement.dataset.testStatus = "failed";
   });
 });

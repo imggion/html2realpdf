@@ -1,4 +1,4 @@
-.PHONY: debug release wasm run react test test-js test-react test-web test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
+.PHONY: debug release wasm run react baseline test test-format test-js test-react test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
 
 debug:
 	zig build -Doptimize=Debug
@@ -19,6 +19,9 @@ run:
 react: wasm
 	npm --prefix tests/react run dev
 
+baseline: wasm
+	node tests/baselines/generate.mjs
+
 test:
 	zig test src/html.zig
 	zig test src/dom.zig
@@ -32,6 +35,11 @@ test:
 	zig test src/display_list.zig
 	zig test src/pdf.zig
 	zig test src/render.zig
+	zig test src/css/properties.zig
+	zig test src/layout/fragmentation.zig
+
+test-format:
+	zig fmt --check build.zig src/*.zig src/css/*.zig src/layout/*.zig src/paint/*.zig
 
 test-js:
 	npm --prefix bindings/js test
@@ -39,10 +47,18 @@ test-js:
 test-react: wasm
 	npm --prefix tests/react run build
 
-test-web: wasm
+test-web-snapshots: wasm
 	node tests/web/verify_snapshots.mjs
 
-test-release: test test-js test-react test-web
+test-browser: wasm test-react
+	npm --prefix tests/web test
+
+test-baseline: wasm
+	node tests/baselines/verify.mjs
+
+test-web: test-web-snapshots test-browser
+
+test-release: test-format test test-js test-react test-web test-baseline
 
 test-debug: test-debug-tokenizer test-debug-dom test-debug-box
 
@@ -67,11 +83,20 @@ help:
 	@echo "                Print all WASM ABI exports"
 	@echo "  make run      Run the native CLI app"
 	@echo "  make react    Start the React ref integration app"
+	@echo "  make baseline Capture versioned PDF and PNG baselines"
 	@echo "  make test     Run tests"
+	@echo "  make test-format"
+	@echo "                Check all Zig facade and phase-module formatting"
 	@echo "  make test-react"
 	@echo "                Build the React ref integration app"
 	@echo "  make test-js  Build and test the npm package"
-	@echo "  make test-web Verify WASM browser snapshots in Node"
+	@echo "  make test-web-snapshots"
+	@echo "                Verify WASM structural snapshots in Node"
+	@echo "  make test-browser"
+	@echo "                Run Chromium, Firefox, and WebKit browser E2E"
+	@echo "  make test-web Run snapshot and browser E2E suites"
+	@echo "  make test-baseline"
+	@echo "                Verify PDFs against committed SHA-256 baselines"
 	@echo "  make test-release"
 	@echo "                Run the complete release validation suite"
 	@echo "  make test-debug-tokenizer"

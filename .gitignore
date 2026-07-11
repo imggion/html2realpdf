@@ -26,6 +26,7 @@ bindings/js/.browser-build/
 bindings/js/*.tgz
 tests/react/node_modules/
 tests/react/dist/
+tests/web/node_modules/
 
 # Local PDF render verification artifacts
 tmp/
