@@ -975,6 +975,16 @@ test "cascade: caption-side inherits and accepts bottom" {
     try std.testing.expectEqual(box.CaptionSide.bottom, ct.styles[caption_id].caption_side);
 }
 
+test "cascade: clear remains local to the clearing block" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='clear:both'><p>child</p></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const paragraph_id = ct.document.nodes.items[div_id].first_child.?;
+    try std.testing.expectEqual(box.Clear.both, ct.styles[div_id].clear_direction);
+    try std.testing.expectEqual(box.Clear.none, ct.styles[paragraph_id].clear_direction);
+}
+
 test "cascade: text-decoration shorthand keeps line style color and thickness" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");

@@ -21,6 +21,8 @@ export interface SnapshotResult {
 
 const SUPPORTED_COMPUTED_PROPERTIES = [
   "display",
+  "float",
+  "clear",
   "width",
   "height",
   "min-width",
@@ -723,7 +725,7 @@ function materializeComputedStyle(
   if (position !== "static") {
     throw new UnsupportedCssError(`position:${position} is outside the document/report layout profile`);
   }
-  if (floatValue !== "none") {
+  if (floatValue !== "none" && !usesWebLayout(options)) {
     throw new UnsupportedCssError(`float:${floatValue} is outside the document/report layout profile`);
   }
 
@@ -1213,7 +1215,7 @@ function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnost
       const property = match[1]?.toLowerCase();
       const value = (match[2]?.trim().toLowerCase() ?? "").replace(/\s*!important\s*$/, "");
       if (!property || property.startsWith("--")) continue;
-      validateAuthoredLayout(property, value);
+      validateAuthoredLayout(property, value, options);
       if (property === "background" && /(?:url|(?:repeating-)?(?:linear|radial|conic)-gradient)\s*\(/.test(value)) {
         reportUnsupportedCss("background-image", options, diagnostics);
       }
@@ -1223,16 +1225,20 @@ function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnost
   }
 }
 
-function validateAuthoredLayout(property: string, value: string): void {
+function validateAuthoredLayout(property: string, value: string, options: SnapshotOptions): void {
   if (property === "display" && !SUPPORTED_DISPLAY.has(value)) {
     throw new UnsupportedCssError(`display:${value} is outside the document/report layout profile`);
   }
   if (property === "position" && value !== "static") {
     throw new UnsupportedCssError(`position:${value} is outside the document/report layout profile`);
   }
-  if (property === "float" && value !== "none") {
+  if (property === "float" && value !== "none" && !usesWebLayout(options)) {
     throw new UnsupportedCssError(`float:${value} is outside the document/report layout profile`);
   }
+}
+
+function usesWebLayout(options: SnapshotOptions): boolean {
+  return options.cssProfile === "web" || options.cssProfile === "strict";
 }
 
 function reportUnsupportedCss(property: string, options: SnapshotOptions, diagnostics: Diagnostic[]): void {

@@ -6,11 +6,13 @@
 const std = @import("std");
 const box = @import("../box.zig");
 const geometry = @import("../geometry.zig");
+const floats = @import("floats.zig");
 const intrinsic = @import("intrinsic.zig");
 const types = @import("types.zig");
 
 pub const Options = struct {
     fill_available_width: bool = false,
+    shrink_to_fit: bool = false,
     containing_block_height: ?f32 = null,
 };
 
@@ -44,7 +46,7 @@ pub fn layoutWithOptions(
     const available_outer_width = @max(containing.width - margin.left - margin.right, 1);
     const horizontal_non_content = border.left + border.right + padding.left + padding.right;
     const vertical_non_content = border.top + border.bottom + padding.top + padding.bottom;
-    const inline_sizes = if (style.width.usesIntrinsicSizing() or style.min_width.usesIntrinsicSizing() or style.max_width.usesIntrinsicSizing())
+    const inline_sizes = if (options.shrink_to_fit or style.width.usesIntrinsicSizing() or style.min_width.usesIntrinsicSizing() or style.max_width.usesIntrinsicSizing())
         try state.measureIntrinsicInline(box_id)
     else
         intrinsic.InlineSizes{};
@@ -62,6 +64,8 @@ pub fn layoutWithOptions(
         @max(available_outer_width - horizontal_non_content, 1)
     else if (replaced_size) |size|
         size.width
+    else if (options.shrink_to_fit and style.width.isAuto())
+        @min(inline_sizes.max_content, @max(inline_sizes.min_content, available_outer_width - horizontal_non_content))
     else
         intrinsic.resolveContentInlineDimension(style.width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes) orelse @max(available_outer_width - horizontal_non_content, 1);
     if (!options.fill_available_width) {
@@ -136,16 +140,61 @@ pub fn layoutWithOptions(
         child_cursor_y += try state.layoutTable(box_id, content_x, content_y, content_width);
     } else if (source.first_child) |_| {
         if (state.hasBlockChildren(box_id)) {
+            var float_context = try floats.Context.init(state.allocator, .{
+                .x = content_x,
+                .y = content_y,
+                .width = content_width,
+            });
+            defer float_context.deinit();
             var previous_bottom_margin: f32 = 0;
             var child = source.first_child;
             while (child) |child_id| {
                 const child_box = state.tree.boxes.items[child_id];
-                if (isBlockLevel(child_box.kind)) {
-                    const collapsed = collapseMargins(previous_bottom_margin, child_box.margin.top);
-                    child_cursor_y -= previous_bottom_margin + child_box.margin.top - collapsed;
+                if (state.web_sizing and child_box.style.float_direction != .none) {
+                    previous_bottom_margin = 0;
+                    const required_width = try floatOuterWidth(state, child_id, content_width);
+                    const float_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
+                    const band = float_context.bandAt(float_y);
+                    const float_fragment_start = state.fragments.items.len;
+                    var float_cursor = float_y;
+                    var rect = try state.layoutBlockWithOptions(
+                        child_id,
+                        .{ .x = band.x, .y = float_y, .width = @max(band.width, 1) },
+                        &float_cursor,
+                        .{
+                            .shrink_to_fit = true,
+                            .containing_block_height = if (state.web_sizing) specified_content_height else containing.height,
+                        },
+                    );
+                    if (child_box.style.float_direction == .right) {
+                        const target_right = band.x + band.width - child_box.margin.right;
+                        const shift = target_right - (rect.x + rect.width);
+                        floats.shiftFragments(state.fragments.items[float_fragment_start..], shift, 0);
+                        rect.x += shift;
+                    }
+                    try float_context.add(.{
+                        .rect = floats.marginRect(rect, child_box.margin),
+                        .side = child_box.style.float_direction,
+                    });
+                } else if (isBlockLevel(child_box.kind) or (state.web_sizing and child_box.style.clear_direction != .none)) {
+                    if (state.web_sizing) {
+                        const required_width = try minimumOuterWidth(state, child_id);
+                        child_cursor_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
+                    }
+                    if (state.web_sizing and child_box.style.clear_direction != .none) {
+                        previous_bottom_margin = 0;
+                    } else {
+                        const collapsed = collapseMargins(previous_bottom_margin, child_box.margin.top);
+                        child_cursor_y -= previous_bottom_margin + child_box.margin.top - collapsed;
+                    }
+                    const band = if (state.web_sizing) float_context.bandAt(child_cursor_y) else floats.Band{
+                        .x = content_x,
+                        .width = content_width,
+                        .next_bottom = null,
+                    };
                     _ = try state.layoutBlockWithOptions(
                         child_id,
-                        .{ .x = content_x, .y = content_y, .width = content_width },
+                        .{ .x = band.x, .y = content_y, .width = @max(band.width, 1) },
                         &child_cursor_y,
                         .{ .containing_block_height = if (state.web_sizing) specified_content_height else containing.height },
                     );
@@ -157,6 +206,7 @@ pub fn layoutWithOptions(
                 }
                 child = child_box.next_sibling;
             }
+            if (state.web_sizing) child_cursor_y = @max(child_cursor_y, float_context.maximumBottom());
         } else {
             const inline_height = try state.layoutInlineChildren(box_id, content_x, content_y, content_width, style.text_align);
             child_cursor_y += inline_height;
@@ -206,9 +256,24 @@ pub fn layoutWithOptions(
 
 pub fn isBlockLevel(kind: box.BoxType) bool {
     return switch (kind) {
-        .block, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .anonymousTableRow => true,
+        .block, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .tableCaption, .anonymousTableRow => true,
         else => false,
     };
+}
+
+fn minimumOuterWidth(state: anytype, box_id: box.BoxId) !f32 {
+    const source = state.tree.boxes.items[box_id];
+    const sizes = try state.measureIntrinsicInline(box_id);
+    return sizes.min_content + source.margin.left + source.margin.right + source.border.left + source.border.right + source.padding.left + source.padding.right;
+}
+
+fn floatOuterWidth(state: anytype, box_id: box.BoxId, available: f32) !f32 {
+    const source = state.tree.boxes.items[box_id];
+    const sizes = try state.measureIntrinsicInline(box_id);
+    const non_content = source.border.left + source.border.right + source.padding.left + source.padding.right;
+    const content_width = intrinsic.resolveContentInlineDimension(source.style.width, available, non_content, source.style.box_sizing, sizes) orelse
+        @min(sizes.max_content, @max(sizes.min_content, available - non_content));
+    return content_width + non_content + source.margin.left + source.margin.right;
 }
 
 fn collapseMargins(previous: f32, next: f32) f32 {

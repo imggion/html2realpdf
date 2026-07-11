@@ -218,7 +218,7 @@ const State = struct {
         var child = self.tree.boxes.items[box_id].first_child;
         while (child) |child_id| {
             const child_box = self.tree.boxes.items[child_id];
-            if (block.isBlockLevel(child_box.kind)) return true;
+            if (block.isBlockLevel(child_box.kind) or (self.web_sizing and child_box.style.float_direction != .none)) return true;
             child = child_box.next_sibling;
         }
         return false;
@@ -1364,6 +1364,46 @@ test "adjacent block margins collapse instead of adding" {
     try std.testing.expectEqual(@as(usize, 2), paragraph_count);
     const gap = paragraphs[1].y - paragraphs[0].bottom();
     try std.testing.expectApproxEqAbs(@as(f32, 16), gap, 0.01);
+}
+
+test "Web floats occupy side bands and clear moves below them" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='width:300px'>" ++
+        "<div style='float:left;width:80px;height:80px;margin-right:10px'>LEFT</div>" ++
+        "<div style='float:right;width:60px;height:50px;margin-left:10px'>RIGHT</div>" ++
+        "<p style='margin:0'>FLOW</p>" ++
+        "<div style='clear:both;height:20px'>CLEAR</div>" ++
+        "</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var left: ?geometry.Rect = null;
+    var right: ?geometry.Rect = null;
+    var flow: ?geometry.Rect = null;
+    var clear: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        if (std.mem.eql(u8, text, "LEFT")) left = fragment.rect;
+        if (std.mem.eql(u8, text, "RIGHT")) right = fragment.rect;
+        if (std.mem.eql(u8, text, "FLOW")) flow = fragment.rect;
+        if (std.mem.eql(u8, text, "CLEAR")) clear = fragment.rect;
+    }
+    try std.testing.expect(left.?.x < flow.?.x);
+    try std.testing.expect(flow.?.x < right.?.x);
+    try std.testing.expect(clear.?.y >= left.?.y + 80);
 }
 
 test "orphans move a paragraph that would leave one line at page bottom" {

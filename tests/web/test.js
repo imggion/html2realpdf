@@ -892,6 +892,39 @@ async function verifyWebTypographyProfile() {
   }
 }
 
+async function verifyWebFloatSnapshotAndRender() {
+  const { buildId, distUrl } = await getPackageBuild();
+  const { snapshotSource } = await import(new URL(`${buildId}/snapshot.js`, distUrl).href);
+  const source = `
+    <section style="width:320px">
+      <div class="left" style="float:left;width:80px;height:60px">left</div>
+      <div class="right" style="float:right;width:60px;height:40px">right</div>
+      <p style="margin:0">flow</p>
+      <p class="clear" style="clear:both">clear</p>
+    </section>
+  `;
+  const snapshot = await snapshotSource(source, { resourcePolicy: "error", cssProfile: "web" });
+  const template = document.createElement("template");
+  template.innerHTML = snapshot.html;
+  if (template.content.querySelector(".left")?.style.cssFloat !== "left") throw new Error("left float was not materialized");
+  if (template.content.querySelector(".right")?.style.cssFloat !== "right") throw new Error("right float was not materialized");
+  if (template.content.querySelector(".clear")?.style.clear !== "both") throw new Error("clear:both was not materialized");
+
+  const renderer = await getPackageRenderer();
+  const pdf = await renderer.render(source, {
+    cssProfile: "web",
+    page: { format: "a4", margin: 36, unit: "pt" },
+  });
+  try {
+    const bytes = pdf.toUint8Array();
+    const pdfSource = decoder.decode(bytes);
+    if (!pdfSource.startsWith("%PDF-1.7")) throw new Error("float fixture did not produce a PDF");
+    if (pdfSource.includes("/Subtype /Image")) throw new Error("float fixture was rasterized");
+  } finally {
+    pdf.dispose();
+  }
+}
+
 tokenizeButton.addEventListener("click", async () => {
   output.textContent = "";
 
@@ -1310,6 +1343,15 @@ async function runWasmTests() {
   } catch (err) {
     failed++;
     testResults.textContent += `✗ ERROR: web_opentype_typography — ${err.message}\n`;
+  }
+
+  try {
+    await verifyWebFloatSnapshotAndRender();
+    passed++;
+    testResults.textContent += "✓ PASS: web_float_snapshot_and_render\n";
+  } catch (err) {
+    failed++;
+    testResults.textContent += `✗ ERROR: web_float_snapshot_and_render — ${err.message}\n`;
   }
 
   try {

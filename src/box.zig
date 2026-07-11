@@ -132,6 +132,22 @@ pub const Float = enum {
     }
 };
 
+pub const Clear = enum {
+    none,
+    left,
+    right,
+    both,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .left => "left",
+            .right => "right",
+            .both => "both",
+        };
+    }
+};
+
 pub const CaptionSide = enum {
     top,
     bottom,
@@ -554,6 +570,7 @@ pub const Style = struct {
     display: Display = .inlineBox,
     position: Position = .static,
     float_direction: Float = .none,
+    clear_direction: Clear = .none,
     white_space: WhiteSpace = .normal,
     direction: Direction = .ltr,
 
@@ -833,6 +850,7 @@ const BuildState = struct {
         style.display = .inlineBox;
         style.position = .static;
         style.float_direction = .none;
+        style.clear_direction = .none;
         style.background = null;
         style.width = .auto;
         style.height = .auto;
@@ -1092,6 +1110,7 @@ fn anonymousStyle(parent: Style) Style {
     var style = parent;
     style.position = .static;
     style.float_direction = .none;
+    style.clear_direction = .none;
     style.background = null;
     style.width = .auto;
     style.height = .auto;
@@ -1310,6 +1329,7 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     if (style.background) |background| {
         try writer.print(" background={s}", .{background});
     }
+    if (style.clear_direction != .none) try writer.print(" clear={s}", .{style.clear_direction.toString()});
     if (style.font_weight != .normal) try writer.print(" font-weight={s}", .{style.font_weight.toString()});
     if (style.font_style != .normal) try writer.print(" font-style={s}", .{style.font_style.toString()});
     if (style.text_decoration != .none) try writer.print(" text-decoration={s}", .{style.text_decoration.toString()});

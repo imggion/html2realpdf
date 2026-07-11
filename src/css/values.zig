@@ -52,6 +52,15 @@ pub fn parseFloatValue(value: []const u8) ?box.Float {
     return null;
 }
 
+pub fn parseClear(value: []const u8) ?box.Clear {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "none")) return .none;
+    if (eqlProp(v, "left")) return .left;
+    if (eqlProp(v, "right")) return .right;
+    if (eqlProp(v, "both")) return .both;
+    return null;
+}
+
 pub fn parseWhiteSpace(value: []const u8) ?box.WhiteSpace {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (eqlProp(v, "normal")) return .normal;

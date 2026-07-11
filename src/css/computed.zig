@@ -13,6 +13,7 @@ const eqlProp = values.eqlProp;
 const parseDisplay = values.parseDisplay;
 const parsePosition = values.parsePosition;
 const parseFloatValue = values.parseFloatValue;
+const parseClear = values.parseClear;
 const parseWhiteSpace = values.parseWhiteSpace;
 const parseFontWeight = values.parseFontWeight;
 const parseFontStyle = values.parseFontStyle;
@@ -63,18 +64,18 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "aspect-ratio",       "background-color",      "border-bottom-color",  "border-bottom-style",   "border-bottom-width",       "border-collapse",
-    "border-left-color",  "border-left-style",     "border-left-width",    "border-radius",         "border-right-color",        "border-right-style",
-    "border-right-width", "border-top-color",      "border-top-style",     "border-top-width",      "box-sizing",                "break-after",
-    "break-before",       "break-inside",          "caption-side",         "color",                 "direction",                 "display",
-    "float",              "font-family",           "font-size",            "font-style",            "font-weight",               "height",
-    "letter-spacing",     "line-height",           "margin-bottom",        "margin-left",           "margin-right",              "margin-top",
-    "max-height",         "max-width",             "min-height",           "min-width",             "object-fit",                "object-position",
-    "orphans",            "padding-bottom",        "padding-left",         "padding-right",         "padding-top",               "overflow",
-    "overflow-wrap",      "page-break-after",      "page-break-before",    "page-break-inside",     "position",                  "text-align",
-    "text-overflow",      "text-decoration-color", "text-decoration-line", "text-decoration-style", "text-decoration-thickness", "text-indent",
-    "text-transform",     "vertical-align",        "white-space",          "widows",                "width",                     "word-break",
-    "word-spacing",
+    "aspect-ratio",       "background-color",  "border-bottom-color",   "border-bottom-style",  "border-bottom-width",   "border-collapse",
+    "border-left-color",  "border-left-style", "border-left-width",     "border-radius",        "border-right-color",    "border-right-style",
+    "border-right-width", "border-top-color",  "border-top-style",      "border-top-width",     "box-sizing",            "break-after",
+    "break-before",       "break-inside",      "caption-side",          "clear",                "color",                 "direction",
+    "display",            "float",             "font-family",           "font-size",            "font-style",            "font-weight",
+    "height",             "letter-spacing",    "line-height",           "margin-bottom",        "margin-left",           "margin-right",
+    "margin-top",         "max-height",        "max-width",             "min-height",           "min-width",             "object-fit",
+    "object-position",    "orphans",           "padding-bottom",        "padding-left",         "padding-right",         "padding-top",
+    "overflow",           "overflow-wrap",     "page-break-after",      "page-break-before",    "page-break-inside",     "position",
+    "text-align",         "text-overflow",     "text-decoration-color", "text-decoration-line", "text-decoration-style", "text-decoration-thickness",
+    "text-indent",        "text-transform",    "vertical-align",        "white-space",          "widows",                "width",
+    "word-break",         "word-spacing",
 };
 
 const logical_properties = [_][]const u8{
@@ -140,6 +141,8 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
         if (parseDirection(value)) |direction| style.direction = direction;
     } else if (eqlProp(name, "float")) {
         if (parseFloatValue(value)) |f| style.float_direction = f;
+    } else if (eqlProp(name, "clear")) {
+        if (parseClear(value)) |clear| style.clear_direction = clear;
     } else if (eqlProp(name, "white-space")) {
         if (parseWhiteSpace(value)) |w| style.white_space = w;
     } else if (eqlProp(name, "font-size")) {
@@ -416,6 +419,10 @@ fn isInheritedProperty(name: []const u8) bool {
 }
 
 fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) void {
+    if (eqlProp(name, "clear")) {
+        target.clear_direction = source.clear_direction;
+        return;
+    }
     if (eqlProp(name, "caption-side")) {
         target.caption_side = source.caption_side;
         return;

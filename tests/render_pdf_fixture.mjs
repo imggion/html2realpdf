@@ -28,6 +28,12 @@ const html = `
       <tr><td style="border: 1px solid #64748b; padding: 6px">Selectable PDF text</td><td style="border: 1px solid #64748b; padding: 6px">Included</td></tr>
       <caption style="caption-side: bottom; padding: 5px; color: #475569">Caption below the grid</caption>
     </table>
+    <section style="width: 400px; margin-top: 16px; padding: 8px; border: 1px solid #94a3b8">
+      <div style="float: left; width: 72px; height: 54px; margin-right: 10px; padding: 6px; background: #fee2e2">Left float</div>
+      <div style="float: right; width: 66px; height: 42px; margin-left: 10px; padding: 6px; background: #dcfce7">Right float</div>
+      <p style="margin: 0">Text occupies the live band between both floats while remaining native selectable PDF text.</p>
+      <p style="clear: both; margin: 8px 0 0; padding: 4px; background: #f1f5f9">Cleared below both floats</p>
+    </section>
   </article>
 `;
 const input = new TextEncoder().encode(html);
