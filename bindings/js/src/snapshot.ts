@@ -52,6 +52,7 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "border-bottom-color",
   "border-left-color",
   "border-collapse",
+  "caption-side",
   "border-radius",
   "background-color",
   "color",
@@ -105,6 +106,9 @@ const SUPPORTED_DISPLAY = new Set([
   "table-footer-group",
   "table-row",
   "table-cell",
+  "table-caption",
+  "table-column",
+  "table-column-group",
 ]);
 
 const ACTIVE_ELEMENTS = "script,iframe,object,embed";
@@ -1063,7 +1067,6 @@ function rulesAuthorProperty(rules: CSSRuleList, element: Element, property: str
 function normalizeComputedDisplay(original: Element, display: string): string {
   switch (display) {
     case "list-item":
-    case "table-caption":
       return "block";
     case "flow-root":
       return original.localName === "button" ? "inline-block" : "block";

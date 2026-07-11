@@ -108,6 +108,9 @@ fn computeStylesRecursive(
         style.word_break = ps.word_break;
         style.overflow_wrap = ps.overflow_wrap;
         style.direction = ps.direction;
+        style.caption_side = ps.caption_side;
+        style.orphans = ps.orphans;
+        style.widows = ps.widows;
     }
 
     // Heading sizes are UA declarations, not inherited defaults. Preserve

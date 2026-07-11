@@ -711,6 +711,9 @@ test "parse value: table display keywords" {
     try std.testing.expectEqual(box.Display.tableRow, parseDisplay("table-row").?);
     try std.testing.expectEqual(box.Display.tableCell, parseDisplay("table-cell").?);
     try std.testing.expectEqual(box.Display.tableRowGroup, parseDisplay("table-row-group").?);
+    try std.testing.expectEqual(box.Display.tableCaption, parseDisplay("table-caption").?);
+    try std.testing.expectEqual(box.Display.tableColumn, parseDisplay("table-column").?);
+    try std.testing.expectEqual(box.Display.tableColumnGroup, parseDisplay("table-column-group").?);
 }
 
 test "parse value: text-align" {
@@ -960,6 +963,16 @@ test "cascade: vertical-align keeps keyword and percentage computed values" {
         .offset => |offset| try std.testing.expectApproxEqAbs(@as(f32, 4.5), offset.resolve(18).?, 0.01),
         else => return error.TestExpectedEqual,
     }
+}
+
+test "cascade: caption-side inherits and accepts bottom" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<table style='caption-side:bottom'><caption>summary</caption></table>");
+    defer ct.deinit(allocator);
+    const table_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const caption_id = ct.document.nodes.items[table_id].first_child.?;
+    try std.testing.expectEqual(box.CaptionSide.bottom, ct.styles[table_id].caption_side);
+    try std.testing.expectEqual(box.CaptionSide.bottom, ct.styles[caption_id].caption_side);
 }
 
 test "cascade: text-decoration shorthand keeps line style color and thickness" {

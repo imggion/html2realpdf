@@ -38,6 +38,9 @@ pub const BoxType = enum {
     tableRow,
     tableCell,
     tableRowGroup,
+    tableCaption,
+    tableColumn,
+    tableColumnGroup,
     replaced,
     lineBreak,
 
@@ -54,6 +57,9 @@ pub const BoxType = enum {
             .tableRow => "table-row",
             .tableCell => "table-cell",
             .tableRowGroup => "table-row-group",
+            .tableCaption => "table-caption",
+            .tableColumn => "table-column",
+            .tableColumnGroup => "table-column-group",
             .replaced => "replaced",
             .lineBreak => "line-break",
         };
@@ -73,6 +79,9 @@ pub const Display = enum {
     tableRow,
     tableCell,
     tableRowGroup,
+    tableCaption,
+    tableColumn,
+    tableColumnGroup,
 
     pub fn toString(self: @This()) []const u8 {
         return switch (self) {
@@ -84,6 +93,9 @@ pub const Display = enum {
             .tableRow => "table-row",
             .tableCell => "table-cell",
             .tableRowGroup => "table-row-group",
+            .tableCaption => "table-caption",
+            .tableColumn => "table-column",
+            .tableColumnGroup => "table-column-group",
         };
     }
 };
@@ -116,6 +128,18 @@ pub const Float = enum {
             .none => "none",
             .left => "left",
             .right => "right",
+        };
+    }
+};
+
+pub const CaptionSide = enum {
+    top,
+    bottom,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .top => "top",
+            .bottom => "bottom",
         };
     }
 };
@@ -568,6 +592,7 @@ pub const Style = struct {
 
     box_sizing: BoxSizing = .contentBox,
     border_collapse: BorderCollapse = .separate,
+    caption_side: CaptionSide = .top,
     border_radius: f32 = 0,
 
     page_break_before: PageBreak = .auto,
@@ -934,6 +959,9 @@ fn determineElementDisplayByName(name: []const u8) Display {
         std.ascii.eqlIgnoreCase(name, "tbody") or
         std.ascii.eqlIgnoreCase(name, "tfoot"))
         return .tableRowGroup;
+    if (std.ascii.eqlIgnoreCase(name, "caption")) return .tableCaption;
+    if (std.ascii.eqlIgnoreCase(name, "col")) return .tableColumn;
+    if (std.ascii.eqlIgnoreCase(name, "colgroup")) return .tableColumnGroup;
     return .inlineBox;
 }
 
@@ -1120,7 +1148,7 @@ fn normalizeAnonymousTables(tree: *BoxTree, allocator: std.mem.Allocator, box_id
 }
 
 fn isBlockContainer(kind: BoxType) bool {
-    return kind == .block or kind == .anonymousBlock or kind == .inlineBlock or kind == .tableCell;
+    return kind == .block or kind == .anonymousBlock or kind == .inlineBlock or kind == .tableCell or kind == .tableCaption;
 }
 
 /// Classifies the external formatting role used by anonymous-box normalization.
@@ -1144,6 +1172,9 @@ fn boxTypeForElement(element: dom.Element, style: Style) BoxType {
         .tableRow => .tableRow,
         .tableCell => .tableCell,
         .tableRowGroup => .tableRowGroup,
+        .tableCaption => .tableCaption,
+        .tableColumn => .tableColumn,
+        .tableColumnGroup => .tableColumnGroup,
         .none => unreachable,
     };
 }
@@ -1634,6 +1665,27 @@ test "build table tree from DOM" {
         \\
     ;
     try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "preserve captions and column groups as table roles" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source = "<table><caption>Summary</caption><colgroup><col span='2'></colgroup><tr><td>A</td><td>B</td></tr></table>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const table_id = document.nodes.items[document.root].first_child.?;
+    var tree = try Builder.build(allocator, &document, &.{}, table_id);
+    defer tree.deinit(allocator);
+
+    const caption_id = tree.boxes.items[tree.root].first_child.?;
+    const group_id = tree.boxes.items[caption_id].next_sibling.?;
+    const column_id = tree.boxes.items[group_id].first_child.?;
+    try std.testing.expectEqual(BoxType.tableCaption, tree.boxes.items[caption_id].kind);
+    try std.testing.expectEqual(BoxType.tableColumnGroup, tree.boxes.items[group_id].kind);
+    try std.testing.expectEqual(BoxType.tableColumn, tree.boxes.items[column_id].kind);
 }
 
 test "wrap orphan table cell in anonymous table row" {

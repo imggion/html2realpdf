@@ -917,6 +917,82 @@ test "table cells align top middle bottom and shared baselines" {
     try std.testing.expectApproxEqAbs(small_baseline.?, large_baseline.?, 0.01);
 }
 
+test "table captions and column definitions participate in Web layout" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:300px'>" ++
+        "<caption>TOP</caption>" ++
+        "<colgroup><col style='width:60px'><col span='2' style='width:120px'></colgroup>" ++
+        "<tr><td>A</td><td>B</td><td>C</td></tr>" ++
+        "<caption style='caption-side:bottom'>BOTTOM</caption>" ++
+        "</table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var cells: [3]geometry.Rect = undefined;
+    var cell_count: usize = 0;
+    var top_y: ?f32 = null;
+    var row_y: ?f32 = null;
+    var bottom_y: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        if (tree.boxes.items[fragment.source_box].kind == .tableCell) {
+            cells[cell_count] = fragment.rect;
+            cell_count += 1;
+        }
+        const text = fragment.text orelse continue;
+        if (std.mem.eql(u8, text, "TOP")) top_y = fragment.rect.y;
+        if (std.mem.eql(u8, text, "A")) row_y = fragment.rect.y;
+        if (std.mem.eql(u8, text, "BOTTOM")) bottom_y = fragment.rect.y;
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), cell_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), cells[0].width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), cells[1].width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), cells[2].width, 0.01);
+    try std.testing.expect(top_y.? < row_y.? and row_y.? < bottom_y.?);
+}
+
+test "Web table auto layout uses intrinsic cell contributions" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source = "<table style='width:300px'><tr><td>substantially-wide-content</td><td>x</td></tr></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var widths: [2]f32 = undefined;
+    var count: usize = 0;
+    for (result.fragments.items) |fragment| {
+        if (tree.boxes.items[fragment.source_box].kind != .tableCell) continue;
+        widths[count] = fragment.rect.width;
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expect(widths[0] > widths[1] * 2);
+}
+
 test "percentage table cells fill their allocated tracks" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -1058,6 +1134,38 @@ test "table grid honors row and column spans" {
     try std.testing.expectApproxEqAbs(@as(f32, 150), cells[2].x, 0.01);
     try std.testing.expect(cells[2].y > cells[1].y);
     try std.testing.expectApproxEqAbs(cells[1].height + cells[2].height, cells[0].height, 0.01);
+}
+
+test "row-spanning cells align after their final row height is known" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:200px'>" ++
+        "<tr style='height:40px'><td rowspan='2' style='vertical-align:bottom'>SPAN</td><td>FIRST</td></tr>" ++
+        "<tr style='height:40px'><td>SECOND</td></tr>" ++
+        "</table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200 });
+    defer result.deinit(allocator);
+
+    var span_y: ?f32 = null;
+    var second_y: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        if (std.mem.eql(u8, text, "SPAN")) span_y = fragment.rect.y;
+        if (std.mem.eql(u8, text, "SECOND")) second_y = fragment.rect.y;
+    }
+    try std.testing.expect(span_y.? > second_y.?);
 }
 
 test "repeat table headers when rows continue on another page" {

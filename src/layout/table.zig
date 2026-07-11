@@ -19,6 +19,7 @@ const CellLayout = struct {
     root: FragmentId,
     end: usize,
     natural_height: f32,
+    row_span: usize = 1,
 };
 
 pub fn layout(
@@ -31,19 +32,29 @@ pub fn layout(
     var rows = try std.ArrayList(box.BoxId).initCapacity(state.allocator, 0);
     defer rows.deinit(state.allocator);
     try collectTableRows(state, table_id, &rows);
-    if (rows.items.len == 0) return 0;
 
-    const column_count = try tableGridColumnCount(state, rows.items);
-    const column_widths = try tableColumnWidths(state, rows.items, column_count, width);
+    var top_captions = try std.ArrayList(box.BoxId).initCapacity(state.allocator, 0);
+    defer top_captions.deinit(state.allocator);
+    var bottom_captions = try std.ArrayList(box.BoxId).initCapacity(state.allocator, 0);
+    defer bottom_captions.deinit(state.allocator);
+    try collectTableCaptions(state, table_id, &top_captions, &bottom_captions);
+
+    const column_count = @max(try tableGridColumnCount(state, rows.items), tableDefinedColumnCount(state, table_id));
+    const column_widths = try tableColumnWidths(state, table_id, rows.items, column_count, width);
     defer state.allocator.free(column_widths);
+    var table_width: f32 = 0;
+    for (column_widths) |track_width| table_width += track_width;
+    expandTableRootWidth(state, table_id, table_width - width);
+
     var row_y = start_y;
+    try layoutCaptions(state, table_id, top_captions.items, start_x, &row_y, table_width);
     var header_template_start: ?usize = null;
     var header_template_end: usize = 0;
     var header_start_y: f32 = 0;
     var header_height: f32 = 0;
     var last_repeated_page: ?usize = null;
-    const ActiveSpan = struct { remaining: usize = 0, fragment_id: ?FragmentId = null };
-    const NewSpan = struct { first_column: usize, column_span: usize, row_span: usize, fragment_id: FragmentId };
+    const ActiveSpan = struct { remaining: usize = 0, cell: ?CellLayout = null };
+    const NewSpan = struct { first_column: usize, column_span: usize, cell: CellLayout };
     const active_spans = try state.allocator.alloc(ActiveSpan, column_count);
     defer state.allocator.free(active_spans);
     @memset(active_spans, ActiveSpan{});
@@ -59,7 +70,7 @@ pub fn layout(
         try state.fragments.append(state.allocator, .{
             .kind = .box,
             .source_box = row_id,
-            .rect = .{ .x = start_x, .y = row_y, .width = width },
+            .rect = .{ .x = start_x, .y = row_y, .width = table_width },
             .background = if (row_source.style.background) |value| geometry.parseColor(value) else null,
             .border = row_source.border,
             .border_paint = borderPaint(row_source.style),
@@ -75,17 +86,17 @@ pub fn layout(
         defer cell_layouts.deinit(state.allocator);
         var new_spans = try std.ArrayList(NewSpan).initCapacity(state.allocator, 0);
         defer new_spans.deinit(state.allocator);
-        var old_span_roots = try std.ArrayList(FragmentId).initCapacity(state.allocator, 0);
-        defer old_span_roots.deinit(state.allocator);
+        var old_span_cells = try std.ArrayList(CellLayout).initCapacity(state.allocator, 0);
+        defer old_span_cells.deinit(state.allocator);
         for (active_spans, 0..) |active, index| {
             occupied[index] = active.remaining > 0;
-            const root = active.fragment_id orelse continue;
+            const spanning_cell = active.cell orelse continue;
             var already_added = false;
-            for (old_span_roots.items) |existing| if (existing == root) {
+            for (old_span_cells.items) |existing| if (existing.root == spanning_cell.root) {
                 already_added = true;
                 break;
             };
-            if (!already_added) try old_span_roots.append(state.allocator, root);
+            if (!already_added) try old_span_cells.append(state.allocator, spanning_cell);
         }
 
         var cell = row_source.first_child;
@@ -116,17 +127,18 @@ pub fn layout(
                     if (column_index > 0) state.fragments.items[cell_fragment_id].border.left = 0;
                     if (row_index > 0) state.fragments.items[cell_fragment_id].border.top = 0;
                 }
-                try cell_layouts.append(state.allocator, .{
+                const cell_layout = CellLayout{
                     .root = cell_fragment_id,
                     .end = state.fragments.items.len,
                     .natural_height = state.fragments.items[cell_fragment_id].rect.height,
-                });
+                    .row_span = row_span,
+                };
+                try cell_layouts.append(state.allocator, cell_layout);
                 for (occupied[column_index .. column_index + span]) |*slot| slot.* = true;
                 if (row_span > 1) try new_spans.append(state.allocator, .{
                     .first_column = column_index,
                     .column_span = span,
-                    .row_span = row_span,
-                    .fragment_id = cell_fragment_id,
+                    .cell = cell_layout,
                 });
                 row_height = @max(row_height, cell_cursor - row_y);
                 column_index += span;
@@ -176,19 +188,32 @@ pub fn layout(
             header_height = row_y + row_height - header_start_y;
         }
 
-        for (old_span_roots.items) |fragment_id| {
-            const fragment = &state.fragments.items[fragment_id];
-            fragment.rect.height = @max(fragment.rect.height, row_y + row_height - fragment.rect.y);
+        for (old_span_cells.items) |spanning_cell| {
+            const fragment = &state.fragments.items[spanning_cell.root];
+            const spanned_height = row_y + row_height - fragment.rect.y;
+            fragment.rect.height = @max(fragment.rect.height, spanned_height);
+            var completes_here = false;
+            for (active_spans) |active| {
+                if (active.cell != null and active.cell.?.root == spanning_cell.root and active.remaining == 1) {
+                    completes_here = true;
+                    break;
+                }
+            }
+            if (completes_here) {
+                var final_cell = spanning_cell;
+                final_cell.row_span = 1;
+                alignCellContents(state, &.{final_cell}, spanned_height);
+            }
         }
         for (active_spans) |*active| {
             if (active.remaining > 0) active.remaining -= 1;
-            if (active.remaining == 0) active.fragment_id = null;
+            if (active.remaining == 0) active.cell = null;
         }
         for (new_spans.items) |new_span| {
             for (active_spans[new_span.first_column .. new_span.first_column + new_span.column_span]) |*active| {
                 active.* = .{
-                    .remaining = new_span.row_span - 1,
-                    .fragment_id = new_span.fragment_id,
+                    .remaining = new_span.cell.row_span - 1,
+                    .cell = new_span.cell,
                 };
             }
         }
@@ -196,12 +221,67 @@ pub fn layout(
         row_y += row_height;
     }
 
+    try layoutCaptions(state, table_id, bottom_captions.items, start_x, &row_y, table_width);
+
     return row_y - start_y;
+}
+
+fn collectTableCaptions(
+    state: anytype,
+    table_id: box.BoxId,
+    top: *std.ArrayList(box.BoxId),
+    bottom: *std.ArrayList(box.BoxId),
+) !void {
+    var child = state.tree.boxes.items[table_id].first_child;
+    while (child) |child_id| {
+        const source = state.tree.boxes.items[child_id];
+        if (source.kind == .tableCaption) {
+            if (source.style.caption_side == .bottom) {
+                try bottom.append(state.allocator, child_id);
+            } else {
+                try top.append(state.allocator, child_id);
+            }
+        }
+        child = source.next_sibling;
+    }
+}
+
+fn layoutCaptions(
+    state: anytype,
+    table_id: box.BoxId,
+    captions: []const box.BoxId,
+    x: f32,
+    cursor_y: *f32,
+    width: f32,
+) !void {
+    for (captions) |caption_id| {
+        const fragment_start = state.fragments.items.len;
+        _ = try state.layoutBlockWithOptions(
+            caption_id,
+            .{ .x = x, .y = cursor_y.*, .width = width },
+            cursor_y,
+            .{ .fill_available_width = true },
+        );
+        for (state.fragments.items[fragment_start..]) |*fragment| fragment.table_id = table_id;
+    }
+}
+
+fn expandTableRootWidth(state: anytype, table_id: box.BoxId, extra: f32) void {
+    if (extra <= 0) return;
+    var index = state.fragments.items.len;
+    while (index > 0) {
+        index -= 1;
+        const fragment = &state.fragments.items[index];
+        if (fragment.source_box != table_id) continue;
+        fragment.rect.width += extra;
+        return;
+    }
 }
 
 fn alignCellContents(state: anytype, cells: []const CellLayout, row_height: f32) void {
     var row_baseline: ?f32 = null;
     for (cells) |cell| {
+        if (cell.row_span > 1) continue;
         const source = state.tree.boxes.items[state.fragments.items[cell.root].source_box];
         if (source.style.vertical_align != .baseline) continue;
         const baseline = firstTextBaseline(state, cell.root + 1, cell.end) orelse continue;
@@ -209,6 +289,7 @@ fn alignCellContents(state: anytype, cells: []const CellLayout, row_height: f32)
     }
 
     for (cells) |cell| {
+        if (cell.row_span > 1) continue;
         const root = &state.fragments.items[cell.root];
         const source = state.tree.boxes.items[root.source_box];
         const free_space = @max(row_height - cell.natural_height, 0);
@@ -280,10 +361,67 @@ fn collectTableRows(state: anytype, parent_id: box.BoxId, rows: *std.ArrayList(b
     }
 }
 
-/// Resolve table-cell width hints into final track widths before laying out
-/// cell contents. Percentage hints are relative to the table, not to the
-/// already allocated track that will later contain the cell.
-fn tableColumnWidths(state: anytype, rows: []const box.BoxId, column_count: usize, table_width: f32) ![]f32 {
+/// Resolves auto-layout tracks from column hints and cell min/max-content
+/// contributions. Document profile keeps the legacy percentage-track behavior
+/// so existing PDF baselines remain byte stable.
+fn tableColumnWidths(
+    state: anytype,
+    table_id: box.BoxId,
+    rows: []const box.BoxId,
+    column_count: usize,
+    table_width: f32,
+) ![]f32 {
+    if (!state.web_sizing) return legacyTableColumnWidths(state, rows, column_count, table_width);
+
+    const minimums = try state.allocator.alloc(f32, column_count);
+    defer state.allocator.free(minimums);
+    @memset(minimums, 0);
+    const preferred = try state.allocator.alloc(f32, column_count);
+    defer state.allocator.free(preferred);
+    @memset(preferred, 0);
+    applyColumnWidthHints(state, table_id, minimums, preferred, table_width);
+
+    const active = try state.allocator.alloc(usize, column_count);
+    defer state.allocator.free(active);
+    @memset(active, 0);
+
+    for (rows) |row_id| {
+        var column: usize = 0;
+        var child = state.tree.boxes.items[row_id].first_child;
+        while (child) |child_id| {
+            const child_box = state.tree.boxes.items[child_id];
+            if (child_box.kind == .tableCell) {
+                const span = tableCellSpan(state, child_id);
+                column = findFreeColumnSpan(active, column, span);
+                if (column + span > column_count) break;
+
+                const measured = try state.measureIntrinsicInline(child_id);
+                const edges = child_box.border.left + child_box.border.right + child_box.padding.left + child_box.padding.right;
+                var minimum = measured.min_content + edges;
+                var maximum = @max(measured.max_content + edges, minimum);
+                if (tableCellOuterWidthHint(child_box, table_width)) |hint| {
+                    minimum = @max(minimum, hint);
+                    maximum = @max(maximum, hint);
+                }
+                applySpanningContribution(minimums, column, span, minimum);
+                applySpanningContribution(preferred, column, span, maximum);
+
+                const row_span = tableCellRowSpan(state, child_id);
+                for (active[column .. column + span]) |*remaining| remaining.* = @max(remaining.*, row_span);
+                column += span;
+            }
+            child = child_box.next_sibling;
+        }
+        for (active) |*remaining| if (remaining.* > 0) {
+            remaining.* -= 1;
+        };
+    }
+
+    for (preferred, minimums) |*maximum, minimum| maximum.* = @max(maximum.*, minimum);
+    return distributeIntrinsicTracks(state.allocator, minimums, preferred, table_width);
+}
+
+fn legacyTableColumnWidths(state: anytype, rows: []const box.BoxId, column_count: usize, table_width: f32) ![]f32 {
     const widths = try state.allocator.alloc(f32, column_count);
     errdefer state.allocator.free(widths);
     @memset(widths, 0);
@@ -357,6 +495,116 @@ fn tableColumnWidths(state: anytype, rows: []const box.BoxId, column_count: usiz
     return widths;
 }
 
+fn applyColumnWidthHints(
+    state: anytype,
+    table_id: box.BoxId,
+    minimums: []f32,
+    preferred: []f32,
+    table_width: f32,
+) void {
+    var column_index: usize = 0;
+    var child = state.tree.boxes.items[table_id].first_child;
+    while (child) |child_id| {
+        const source = state.tree.boxes.items[child_id];
+        if (source.kind == .tableColumn) {
+            const span = @min(tableColumnSpan(state, child_id), minimums.len -| column_index);
+            applyColumnBoxHint(source, minimums, preferred, column_index, span, table_width, true);
+            column_index += span;
+        } else if (source.kind == .tableColumnGroup) {
+            const group_start = column_index;
+            var group_child = source.first_child;
+            while (group_child) |column_id| {
+                const column = state.tree.boxes.items[column_id];
+                if (column.kind == .tableColumn) {
+                    const span = @min(tableColumnSpan(state, column_id), minimums.len -| column_index);
+                    applyColumnBoxHint(column, minimums, preferred, column_index, span, table_width, true);
+                    column_index += span;
+                }
+                group_child = column.next_sibling;
+            }
+            if (column_index == group_start) column_index += @min(tableColumnSpan(state, child_id), minimums.len -| column_index);
+            const group_span = column_index - group_start;
+            applyColumnBoxHint(source, minimums, preferred, group_start, group_span, table_width, false);
+        }
+        child = source.next_sibling;
+    }
+}
+
+fn applyColumnBoxHint(
+    source: box.Box,
+    minimums: []f32,
+    preferred: []f32,
+    start: usize,
+    span: usize,
+    table_width: f32,
+    per_column: bool,
+) void {
+    if (span == 0 or start >= minimums.len) return;
+    const hint = tableCellOuterWidthHint(source, table_width) orelse return;
+    if (per_column) {
+        const end = @min(start + span, minimums.len);
+        for (minimums[start..end]) |*minimum| minimum.* = @max(minimum.*, hint);
+        for (preferred[start..end]) |*maximum| maximum.* = @max(maximum.*, hint);
+    } else {
+        applySpanningContribution(minimums, start, span, hint);
+        applySpanningContribution(preferred, start, span, hint);
+    }
+}
+
+fn applySpanningContribution(tracks: []f32, start: usize, span: usize, contribution: f32) void {
+    if (span == 0 or start >= tracks.len) return;
+    const end = @min(start + span, tracks.len);
+    var current: f32 = 0;
+    for (tracks[start..end]) |track| current += track;
+    if (current >= contribution) return;
+    const extra = (contribution - current) / @as(f32, @floatFromInt(end - start));
+    for (tracks[start..end]) |*track| track.* += extra;
+}
+
+fn distributeIntrinsicTracks(
+    allocator: std.mem.Allocator,
+    minimums: []const f32,
+    preferred: []const f32,
+    table_width: f32,
+) ![]f32 {
+    const widths = try allocator.dupe(f32, minimums);
+    errdefer allocator.free(widths);
+    var minimum_total: f32 = 0;
+    var growth_total: f32 = 0;
+    for (minimums, preferred) |minimum, maximum| {
+        minimum_total += minimum;
+        growth_total += @max(maximum - minimum, 0);
+    }
+
+    var extra = @max(table_width - minimum_total, 0);
+    if (extra > 0 and growth_total > 0) {
+        const assigned = @min(extra, growth_total);
+        for (widths, minimums, preferred) |*width, minimum, maximum| {
+            width.* += assigned * @max(maximum - minimum, 0) / growth_total;
+        }
+        extra -= assigned;
+    }
+    if (extra > 0) {
+        const share = extra / @as(f32, @floatFromInt(widths.len));
+        for (widths) |*width| width.* += share;
+    }
+    for (widths) |*width| width.* = @max(width.*, 1);
+    return widths;
+}
+
+fn findFreeColumnSpan(active: []const usize, start: usize, span: usize) usize {
+    var column = start;
+    while (column + span <= active.len) : (column += 1) {
+        var free = true;
+        for (active[column .. column + span]) |remaining| if (remaining > 0) {
+            free = false;
+            break;
+        };
+        if (free) return column;
+    }
+    return active.len;
+}
+
 fn tableCellOuterWidthHint(cell: box.Box, table_width: f32) ?f32 {
     return switch (cell.style.width) {
         .auto => null,
@@ -414,6 +662,32 @@ fn tableGridColumnCount(state: anytype, rows: []const box.BoxId) !usize {
         };
     }
     return maximum;
+}
+
+fn tableDefinedColumnCount(state: anytype, table_id: box.BoxId) usize {
+    var total: usize = 0;
+    var child = state.tree.boxes.items[table_id].first_child;
+    while (child) |child_id| {
+        const source = state.tree.boxes.items[child_id];
+        if (source.kind == .tableColumn) {
+            total += tableColumnSpan(state, child_id);
+        } else if (source.kind == .tableColumnGroup) {
+            var group_total: usize = 0;
+            var group_child = source.first_child;
+            while (group_child) |column_id| {
+                const column = state.tree.boxes.items[column_id];
+                if (column.kind == .tableColumn) group_total += tableColumnSpan(state, column_id);
+                group_child = column.next_sibling;
+            }
+            total += if (group_total > 0) group_total else tableColumnSpan(state, child_id);
+        }
+        child = source.next_sibling;
+    }
+    return @max(total, 1);
+}
+
+fn tableColumnSpan(state: anytype, column_id: box.BoxId) usize {
+    return tableCellIntegerAttribute(state, column_id, "span");
 }
 
 fn tableCellSpan(state: anytype, cell_id: box.BoxId) usize {

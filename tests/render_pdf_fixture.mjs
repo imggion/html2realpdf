@@ -20,6 +20,14 @@ const html = `
       <div style="width: max-content; margin-bottom: 8px; padding: 6px; background: #dcfce7">alpha longestword beta</div>
       <div style="width: fit-content(140px); padding: 6px; background: #dbeafe">alpha longestword beta</div>
     </section>
+    <table style="width: 400px; margin-top: 18px; border: 1px solid #334155; border-collapse: collapse">
+      <caption style="padding: 6px; background: #e0e7ff; font-weight: bold">Intrinsic table tracks</caption>
+      <colgroup><col style="width: 80px"><col style="width: 200px"><col style="width: 120px"></colgroup>
+      <tr><th style="border: 1px solid #64748b; padding: 6px">Qty</th><th style="border: 1px solid #64748b; padding: 6px">Description</th><th style="border: 1px solid #64748b; padding: 6px">Total</th></tr>
+      <tr><td rowspan="2" style="border: 1px solid #64748b; padding: 6px; vertical-align: middle">2</td><td style="border: 1px solid #64748b; padding: 6px">Layout engine</td><td style="border: 1px solid #64748b; padding: 6px">EUR 240</td></tr>
+      <tr><td style="border: 1px solid #64748b; padding: 6px">Selectable PDF text</td><td style="border: 1px solid #64748b; padding: 6px">Included</td></tr>
+      <caption style="caption-side: bottom; padding: 5px; color: #475569">Caption below the grid</caption>
+    </table>
   </article>
 `;
 const input = new TextEncoder().encode(html);

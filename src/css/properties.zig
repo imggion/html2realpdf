@@ -40,6 +40,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "break-after", .stage = layout },
     .{ .name = "break-before", .stage = layout },
     .{ .name = "break-inside", .stage = layout },
+    .{ .name = "caption-side", .stage = layout, .notes = "top and bottom table captions" },
     .{ .name = "color", .stage = full, .notes = "currentColor and native PDF alpha via ExtGState" },
     .{ .name = "direction", .stage = computed_only, .notes = "web and strict resolve full UAX 9 visual runs" },
     .{ .name = "display", .stage = layout, .notes = "block inline inline-block and table roles" },

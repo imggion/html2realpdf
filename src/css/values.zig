@@ -22,6 +22,16 @@ pub fn parseDisplay(value: []const u8) ?box.Display {
     if (eqlProp(v, "table-row")) return .tableRow;
     if (eqlProp(v, "table-cell")) return .tableCell;
     if (eqlProp(v, "table-row-group") or eqlProp(v, "table-header-group") or eqlProp(v, "table-footer-group")) return .tableRowGroup;
+    if (eqlProp(v, "table-caption")) return .tableCaption;
+    if (eqlProp(v, "table-column")) return .tableColumn;
+    if (eqlProp(v, "table-column-group")) return .tableColumnGroup;
+    return null;
+}
+
+pub fn parseCaptionSide(value: []const u8) ?box.CaptionSide {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "top")) return .top;
+    if (eqlProp(v, "bottom")) return .bottom;
     return null;
 }
 
