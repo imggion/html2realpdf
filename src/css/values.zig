@@ -16,6 +16,7 @@ pub fn parseDisplay(value: []const u8) ?box.Display {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (eqlProp(v, "none")) return .none;
     if (eqlProp(v, "block")) return .block;
+    if (eqlProp(v, "list-item")) return .listItem;
     if (eqlProp(v, "inline")) return .inlineBox;
     if (eqlProp(v, "inline-block")) return .inlineBlock;
     if (eqlProp(v, "table")) return .table;
@@ -25,6 +26,28 @@ pub fn parseDisplay(value: []const u8) ?box.Display {
     if (eqlProp(v, "table-caption")) return .tableCaption;
     if (eqlProp(v, "table-column")) return .tableColumn;
     if (eqlProp(v, "table-column-group")) return .tableColumnGroup;
+    return null;
+}
+
+pub fn parseListStyleType(value: []const u8) ?box.ListStyleType {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "none")) return .none;
+    if (eqlProp(v, "disc")) return .disc;
+    if (eqlProp(v, "circle")) return .circle;
+    if (eqlProp(v, "square")) return .square;
+    if (eqlProp(v, "decimal")) return .decimal;
+    if (eqlProp(v, "decimal-leading-zero")) return .decimalLeadingZero;
+    if (eqlProp(v, "lower-alpha") or eqlProp(v, "lower-latin")) return .lowerAlpha;
+    if (eqlProp(v, "upper-alpha") or eqlProp(v, "upper-latin")) return .upperAlpha;
+    if (eqlProp(v, "lower-roman")) return .lowerRoman;
+    if (eqlProp(v, "upper-roman")) return .upperRoman;
+    return null;
+}
+
+pub fn parseListStylePosition(value: []const u8) ?box.ListStylePosition {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "outside")) return .outside;
+    if (eqlProp(v, "inside")) return .inside;
     return null;
 }
 

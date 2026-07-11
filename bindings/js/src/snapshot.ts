@@ -34,6 +34,8 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "object-position",
   "box-sizing",
   "box-decoration-break",
+  "list-style-type",
+  "list-style-position",
   "margin-top",
   "margin-right",
   "margin-bottom",
@@ -101,6 +103,7 @@ const SVG_COMPUTED_PROPERTIES = [
 const SUPPORTED_DISPLAY = new Set([
   "none",
   "block",
+  "list-item",
   "inline",
   "inline-block",
   "table",
@@ -119,7 +122,7 @@ const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   ...SUPPORTED_COMPUTED_PROPERTIES,
   "margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left",
   "border-width", "border-style", "border-color", "background", "page-break-before", "page-break-after",
-  "page-break-inside", "orphans", "widows",
+  "page-break-inside", "list-style", "orphans", "widows",
 ]);
 
 export async function snapshotSource(source: HtmlSource, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -1069,8 +1072,6 @@ function rulesAuthorProperty(rules: CSSRuleList, element: Element, property: str
 
 function normalizeComputedDisplay(original: Element, display: string): string {
   switch (display) {
-    case "list-item":
-      return "block";
     case "flow-root":
       return original.localName === "button" ? "inline-block" : "block";
     default:

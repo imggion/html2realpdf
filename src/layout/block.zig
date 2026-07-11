@@ -114,26 +114,71 @@ pub fn layoutWithOptions(
     const content_x = outer_x + border.left + padding.left;
     const content_y = outer_y + border.top + padding.top;
     var child_cursor_y = content_y;
+    var inline_marker_offset: f32 = 0;
+    var marker_line_height: f32 = 0;
 
     if (try state.listMarkerForBox(box_id)) |marker| {
-        try state.fragments.append(state.allocator, .{
-            .kind = .text,
-            .source_box = box_id,
-            .rect = .{
-                .x = @max(content_x - style.font_size * 1.25, containing.x),
-                .y = content_y,
-                .width = intrinsic.measureText(state.font_registry, state.shaping_mode, marker, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing),
-                .height = @max(style.line_height, style.font_size * 1.2),
+        const marker_width = switch (marker.content) {
+            .text => |text| intrinsic.measureText(state.font_registry, state.shaping_mode, text, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing),
+            .circle, .square => style.font_size * 0.45,
+        };
+        const marker_gap = style.font_size * 0.5;
+        marker_line_height = @max(style.line_height, style.font_size * 1.2);
+        const marker_x = switch (marker.position) {
+            .inside => content_x,
+            .outside => if (style.direction == .rtl)
+                content_x + content_width + marker_gap
+            else
+                @max(content_x - marker_width - marker_gap, 0),
+        };
+        if (marker.position == .inside) inline_marker_offset = marker_width + marker_gap;
+        switch (marker.content) {
+            .text => |text| try state.fragments.append(state.allocator, .{
+                .kind = .text,
+                .source_box = box_id,
+                .rect = .{
+                    .x = marker_x,
+                    .y = content_y,
+                    .width = marker_width,
+                    .height = marker_line_height,
+                },
+                .text = text,
+                .font_size = style.font_size,
+                .font_family = style.font_family,
+                .letter_spacing = style.letter_spacing,
+                .font_weight = style.font_weight,
+                .font_style = style.font_style,
+                .color = geometry.parseColor(style.color) orelse geometry.Color.black,
+                .text_decoration = style.text_decoration,
+            }),
+            .circle, .square => {
+                const marker_color = geometry.parseColor(style.color) orelse geometry.Color.black;
+                const is_circle = switch (marker.content) {
+                    .circle => true,
+                    .square => false,
+                    else => unreachable,
+                };
+                try state.fragments.append(state.allocator, .{
+                    .kind = .box,
+                    .source_box = box_id,
+                    .rect = .{
+                        .x = marker_x,
+                        .y = content_y + (marker_line_height - marker_width) / 2,
+                        .width = marker_width,
+                        .height = marker_width,
+                    },
+                    .background = if (is_circle) null else marker_color,
+                    .border = if (is_circle) .{ .top = 1, .right = 1, .bottom = 1, .left = 1 } else .{},
+                    .border_paint = .{
+                        .top_color = marker_color,
+                        .right_color = marker_color,
+                        .bottom_color = marker_color,
+                        .left_color = marker_color,
+                    },
+                    .border_radius = if (is_circle) marker_width / 2 else 0,
+                });
             },
-            .text = marker,
-            .font_size = style.font_size,
-            .font_family = style.font_family,
-            .letter_spacing = style.letter_spacing,
-            .font_weight = style.font_weight,
-            .font_style = style.font_style,
-            .color = geometry.parseColor(style.color) orelse geometry.Color.black,
-            .text_decoration = style.text_decoration,
-        });
+        }
     }
 
     if (source.kind == .replaced) {
@@ -142,6 +187,10 @@ pub fn layoutWithOptions(
         child_cursor_y += try state.layoutTable(box_id, content_x, content_y, content_width);
     } else if (source.first_child) |_| {
         if (state.hasBlockChildren(box_id)) {
+            if (inline_marker_offset > 0) {
+                child_cursor_y += marker_line_height;
+                inline_marker_offset = 0;
+            }
             var float_context = try floats.Context.init(state.allocator, .{
                 .x = content_x,
                 .y = content_y,
@@ -210,9 +259,11 @@ pub fn layoutWithOptions(
             }
             if (state.web_sizing) child_cursor_y = @max(child_cursor_y, float_context.maximumBottom());
         } else {
-            const inline_height = try state.layoutInlineChildren(box_id, content_x, content_y, content_width, style.text_align);
+            const inline_height = try state.layoutInlineChildrenWithOffset(box_id, content_x, content_y, content_width, style.text_align, inline_marker_offset);
             child_cursor_y += inline_height;
         }
+    } else if (marker_line_height > 0) {
+        child_cursor_y += marker_line_height;
     }
 
     var content_height = @max(child_cursor_y - content_y, 0);
@@ -262,7 +313,7 @@ pub fn layoutWithOptions(
 
 pub fn isBlockLevel(kind: box.BoxType) bool {
     return switch (kind) {
-        .block, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .tableCaption, .anonymousTableRow => true,
+        .block, .listItem, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .tableCaption, .anonymousTableRow => true,
         else => false,
     };
 }

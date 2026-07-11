@@ -995,6 +995,19 @@ test "cascade: box-decoration-break remains local to the fragmented box" {
     try std.testing.expectEqual(box.BoxDecorationBreak.slice, ct.styles[paragraph_id].box_decoration_break);
 }
 
+test "cascade: list marker styles inherit and display list-item is preserved" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<ol style='list-style:inside upper-roman'><li>first</li></ol><div style='display:list-item;list-style-type:square'>extra</div>");
+    defer ct.deinit(allocator);
+    const list_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const item_id = ct.document.nodes.items[list_id].first_child.?;
+    const extra_id = ct.document.nodes.items[list_id].next_sibling.?;
+    try std.testing.expectEqual(box.ListStyleType.upperRoman, ct.styles[item_id].list_style_type);
+    try std.testing.expectEqual(box.ListStylePosition.inside, ct.styles[item_id].list_style_position);
+    try std.testing.expectEqual(box.Display.listItem, ct.styles[extra_id].display);
+    try std.testing.expectEqual(box.ListStyleType.square, ct.styles[extra_id].list_style_type);
+}
+
 test "cascade: text-decoration shorthand keeps line style color and thickness" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");

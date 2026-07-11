@@ -27,6 +27,17 @@ pub const Fragment = types.Fragment;
 pub const LayoutDocument = types.LayoutDocument;
 pub const Options = types.Options;
 
+pub const ListMarkerContent = union(enum) {
+    text: []const u8,
+    circle,
+    square,
+};
+
+pub const ListMarker = struct {
+    content: ListMarkerContent,
+    position: box.ListStylePosition,
+};
+
 const InlineCursor = inline_context.Cursor(State);
 
 pub fn layout(
@@ -263,44 +274,57 @@ const State = struct {
         return null;
     }
 
-    pub fn listMarkerForBox(self: *const State, box_id: box.BoxId) !?[]const u8 {
-        const node_id = self.tree.boxes.items[box_id].node orelse return null;
-        const node = self.document.nodes.items[node_id];
-        const element = switch (node.kind) {
-            .element => |value| value,
-            else => return null,
+    pub fn listMarkerForBox(self: *const State, box_id: box.BoxId) !?ListMarker {
+        const source = self.tree.boxes.items[box_id];
+        if (source.kind != .listItem) return null;
+        const content: ListMarkerContent = switch (source.style.list_style_type) {
+            .none => return null,
+            .disc => .{ .text = "•" },
+            .circle => .circle,
+            .square => .square,
+            else => .{ .text = try formatListCounter(self.allocator, try self.listItemValue(box_id), source.style.list_style_type) },
         };
-        if (element.tag != .li) return null;
+        return .{ .content = content, .position = source.style.list_style_position };
+    }
 
-        const parent_id = node.parent orelse return "•";
-        const parent = self.document.nodes.items[parent_id];
-        const parent_element = switch (parent.kind) {
+    fn listItemValue(self: *const State, box_id: box.BoxId) !i64 {
+        const source = self.tree.boxes.items[box_id];
+        const parent_id = source.parent orelse return 1;
+        const parent = self.tree.boxes.items[parent_id];
+        const reversed = self.hasAttributeForBox(parent_id, "reversed");
+        const step: i64 = if (reversed) -1 else 1;
+        var value: i64 = if (self.attributeForBox(parent_id, "start")) |start|
+            std.fmt.parseInt(i64, start, 10) catch 1
+        else if (reversed)
+            @intCast(countListItems(self.tree, parent_id))
+        else
+            1;
+
+        var child = parent.first_child;
+        while (child) |child_id| {
+            const child_box = self.tree.boxes.items[child_id];
+            if (child_box.kind == .listItem) {
+                if (self.attributeForBox(child_id, "value")) |explicit| {
+                    value = std.fmt.parseInt(i64, explicit, 10) catch value;
+                }
+                if (child_id == box_id) return value;
+                value += step;
+            }
+            child = child_box.next_sibling;
+        }
+        return 1;
+    }
+
+    fn hasAttributeForBox(self: *const State, box_id: box.BoxId, name: []const u8) bool {
+        const node_id = self.tree.boxes.items[box_id].node orelse return false;
+        const element = switch (self.document.nodes.items[node_id].kind) {
             .element => |value| value,
-            else => return "•",
+            else => return false,
         };
-        if (parent_element.tag != .ol) return "•";
-
         for (element.attributes) |attribute| {
-            if (!std.ascii.eqlIgnoreCase(attribute.name, "value")) continue;
-            const value = attribute.value orelse break;
-            const explicit = std.fmt.parseInt(usize, value, 10) catch break;
-            return try std.fmt.allocPrint(self.allocator, "{d}.", .{explicit});
+            if (std.ascii.eqlIgnoreCase(attribute.name, name)) return true;
         }
-
-        var item_number: usize = 1;
-        for (parent_element.attributes) |attribute| {
-            if (!std.ascii.eqlIgnoreCase(attribute.name, "start")) continue;
-            const value = attribute.value orelse break;
-            item_number = std.fmt.parseInt(usize, value, 10) catch 1;
-            break;
-        }
-        var sibling = node.prev_sibling;
-        while (sibling) |sibling_id| {
-            const sibling_node = self.document.nodes.items[sibling_id];
-            if (sibling_node.kind == .element and sibling_node.kind.element.tag == .li) item_number += 1;
-            sibling = sibling_node.prev_sibling;
-        }
-        return try std.fmt.allocPrint(self.allocator, "{d}.", .{item_number});
+        return false;
     }
 
     pub fn layoutInlineChildren(
@@ -311,8 +335,20 @@ const State = struct {
         width: f32,
         text_align: box.TextAlign,
     ) !f32 {
+        return self.layoutInlineChildrenWithOffset(parent_id, start_x, start_y, width, text_align, 0);
+    }
+
+    pub fn layoutInlineChildrenWithOffset(
+        self: *State,
+        parent_id: box.BoxId,
+        start_x: f32,
+        start_y: f32,
+        width: f32,
+        text_align: box.TextAlign,
+        first_line_offset: f32,
+    ) !f32 {
         const style = self.tree.boxes.items[parent_id].style;
-        const text_indent = style.text_indent.resolve(width) orelse 0;
+        const text_indent = (style.text_indent.resolve(width) orelse 0) + first_line_offset;
         const ellipsis_enabled = style.text_overflow == .ellipsis and style.overflow.clips();
         var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, style.direction, text_indent, ellipsis_enabled);
         var child = self.tree.boxes.items[parent_id].first_child;
@@ -340,6 +376,75 @@ const State = struct {
         return cursor.finish();
     }
 };
+
+fn countListItems(tree: *const box.BoxTree, parent_id: box.BoxId) usize {
+    var count: usize = 0;
+    var child = tree.boxes.items[parent_id].first_child;
+    while (child) |child_id| {
+        const source = tree.boxes.items[child_id];
+        if (source.kind == .listItem) count += 1;
+        child = source.next_sibling;
+    }
+    return count;
+}
+
+fn formatListCounter(allocator: std.mem.Allocator, value: i64, style: box.ListStyleType) ![]const u8 {
+    return switch (style) {
+        .decimal => std.fmt.allocPrint(allocator, "{d}.", .{value}),
+        .decimalLeadingZero => if (value >= 0 and value < 10)
+            std.fmt.allocPrint(allocator, "0{d}.", .{value})
+        else if (value < 0 and value > -10)
+            std.fmt.allocPrint(allocator, "-0{d}.", .{-value})
+        else
+            std.fmt.allocPrint(allocator, "{d}.", .{value}),
+        .lowerAlpha => formatAlphabeticCounter(allocator, value, false),
+        .upperAlpha => formatAlphabeticCounter(allocator, value, true),
+        .lowerRoman => formatRomanCounter(allocator, value, false),
+        .upperRoman => formatRomanCounter(allocator, value, true),
+        else => unreachable,
+    };
+}
+
+fn formatAlphabeticCounter(allocator: std.mem.Allocator, value: i64, uppercase: bool) ![]const u8 {
+    if (value <= 0) return std.fmt.allocPrint(allocator, "{d}.", .{value});
+    var reversed: [64]u8 = undefined;
+    var len: usize = 0;
+    var remaining: u64 = @intCast(value);
+    while (remaining > 0) {
+        remaining -= 1;
+        const digit: u8 = @intCast(remaining % 26);
+        reversed[len] = (if (uppercase) @as(u8, 'A') else @as(u8, 'a')) + digit;
+        len += 1;
+        remaining /= 26;
+    }
+    const result = try allocator.alloc(u8, len + 1);
+    for (0..len) |index| result[index] = reversed[len - index - 1];
+    result[len] = '.';
+    return result;
+}
+
+fn formatRomanCounter(allocator: std.mem.Allocator, value: i64, uppercase: bool) ![]const u8 {
+    if (value <= 0 or value > 3999) return std.fmt.allocPrint(allocator, "{d}.", .{value});
+    const numerals = [_]struct { value: u16, upper: []const u8, lower: []const u8 }{
+        .{ .value = 1000, .upper = "M", .lower = "m" }, .{ .value = 900, .upper = "CM", .lower = "cm" },
+        .{ .value = 500, .upper = "D", .lower = "d" },  .{ .value = 400, .upper = "CD", .lower = "cd" },
+        .{ .value = 100, .upper = "C", .lower = "c" },  .{ .value = 90, .upper = "XC", .lower = "xc" },
+        .{ .value = 50, .upper = "L", .lower = "l" },   .{ .value = 40, .upper = "XL", .lower = "xl" },
+        .{ .value = 10, .upper = "X", .lower = "x" },   .{ .value = 9, .upper = "IX", .lower = "ix" },
+        .{ .value = 5, .upper = "V", .lower = "v" },    .{ .value = 4, .upper = "IV", .lower = "iv" },
+        .{ .value = 1, .upper = "I", .lower = "i" },
+    };
+    var result = try std.ArrayList(u8).initCapacity(allocator, 16);
+    var remaining: u16 = @intCast(value);
+    for (numerals) |numeral| {
+        while (remaining >= numeral.value) {
+            try result.appendSlice(allocator, if (uppercase) numeral.upper else numeral.lower);
+            remaining -= numeral.value;
+        }
+    }
+    try result.append(allocator, '.');
+    return result.toOwnedSlice(allocator);
+}
 
 test "layout block and wrapped inline text into separate fragments" {
     const html = @import("html.zig");
@@ -1399,6 +1504,65 @@ test "adjacent block margins collapse instead of adding" {
     try std.testing.expectEqual(@as(usize, 2), paragraph_count);
     const gap = paragraphs[1].y - paragraphs[0].bottom();
     try std.testing.expectApproxEqAbs(@as(f32, 16), gap, 0.01);
+}
+
+test "Web list markers honor CSS styles and HTML counter hints" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<ol reversed start='5' style='list-style:inside upper-roman'>" ++
+        "<li>five</li><li value='2'>two</li><li>one</li></ol>" ++
+        "<ul style='list-style-type:square'><li>box</li></ul>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    const expected = [_][]const u8{ "V.", "II.", "I." };
+    var found: usize = 0;
+    var first_marker_x: ?f32 = null;
+    var first_text_x: ?f32 = null;
+    var square_marker_x: ?f32 = null;
+    var square_text_x: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.kind == .box and fragment.rect.width > 0 and fragment.rect.width < 10 and fragment.background != null) {
+            square_marker_x = fragment.rect.x;
+        }
+        const text = fragment.text orelse continue;
+        if (found < expected.len and std.mem.eql(u8, text, expected[found])) {
+            if (found == 0) first_marker_x = fragment.rect.x;
+            found += 1;
+        } else if (std.mem.eql(u8, text, "five")) {
+            first_text_x = fragment.rect.x;
+        } else if (std.mem.eql(u8, text, "box")) {
+            square_text_x = fragment.rect.x;
+        }
+    }
+    try std.testing.expectEqual(expected.len, found);
+    try std.testing.expect(first_text_x.? > first_marker_x.?);
+    try std.testing.expect(square_text_x.? > square_marker_x.?);
+}
+
+test "list counter formatting covers alphabetic Roman and leading zero styles" {
+    const allocator = std.testing.allocator;
+    const alpha = try formatListCounter(allocator, 27, .upperAlpha);
+    defer allocator.free(alpha);
+    const roman = try formatListCounter(allocator, 49, .lowerRoman);
+    defer allocator.free(roman);
+    const leading_zero = try formatListCounter(allocator, -3, .decimalLeadingZero);
+    defer allocator.free(leading_zero);
+    try std.testing.expectEqualStrings("AA.", alpha);
+    try std.testing.expectEqualStrings("xlix.", roman);
+    try std.testing.expectEqualStrings("-03.", leading_zero);
 }
 
 test "Web floats occupy side bands and clear moves below them" {

@@ -28,6 +28,7 @@ pub const BoxId = usize;
 /// DOM node that owns them. `lineBreak` gives `<br>` a visible layout signal.
 pub const BoxType = enum {
     block,
+    listItem,
     inlineBox,
     inlineBlock,
     text,
@@ -47,6 +48,7 @@ pub const BoxType = enum {
     pub fn toString(self: @This()) []const u8 {
         return switch (self) {
             .block => "block",
+            .listItem => "list-item",
             .inlineBox => "inline",
             .inlineBlock => "inline-block",
             .text => "text",
@@ -73,6 +75,7 @@ pub const BoxType = enum {
 pub const Display = enum {
     none,
     block,
+    listItem,
     inlineBox,
     inlineBlock,
     table,
@@ -87,6 +90,7 @@ pub const Display = enum {
         return switch (self) {
             .none => "none",
             .block => "block",
+            .listItem => "list-item",
             .inlineBox => "inline",
             .inlineBlock => "inline-block",
             .table => "table",
@@ -168,6 +172,46 @@ pub const BoxDecorationBreak = enum {
         return switch (self) {
             .slice => "slice",
             .clone => "clone",
+        };
+    }
+};
+
+pub const ListStyleType = enum {
+    none,
+    disc,
+    circle,
+    square,
+    decimal,
+    decimalLeadingZero,
+    lowerAlpha,
+    upperAlpha,
+    lowerRoman,
+    upperRoman,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .disc => "disc",
+            .circle => "circle",
+            .square => "square",
+            .decimal => "decimal",
+            .decimalLeadingZero => "decimal-leading-zero",
+            .lowerAlpha => "lower-alpha",
+            .upperAlpha => "upper-alpha",
+            .lowerRoman => "lower-roman",
+            .upperRoman => "upper-roman",
+        };
+    }
+};
+
+pub const ListStylePosition = enum {
+    outside,
+    inside,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .outside => "outside",
+            .inside => "inside",
         };
     }
 };
@@ -621,6 +665,8 @@ pub const Style = struct {
 
     box_sizing: BoxSizing = .contentBox,
     box_decoration_break: BoxDecorationBreak = .slice,
+    list_style_type: ListStyleType = .disc,
+    list_style_position: ListStylePosition = .outside,
     border_collapse: BorderCollapse = .separate,
     caption_side: CaptionSide = .top,
     border_radius: f32 = 0,
@@ -929,6 +975,9 @@ pub fn defaultStyleForNode(document: *const dom.Document, node_id: dom.NodeId) S
 
             const display = determineElementDisplay(element);
             var style = Style{ .display = display };
+            if (uaListStyleTypeForNode(document, node_id)) |list_style_type| {
+                style.list_style_type = list_style_type;
+            }
 
             const heading_defaults = .{
                 .{ dom.Tag.h1, 32, 21.44, 21.44 },
@@ -970,11 +1019,41 @@ pub fn defaultStyleForNode(document: *const dom.Document, node_id: dom.NodeId) S
 /// Maps an element to its display type using tag enum first, then name strings.
 fn determineElementDisplay(element: dom.Element) Display {
     return switch (element.tag) {
-        .h1, .h2, .h3, .h4, .h5, .h6, .p, .div, .ul, .ol, .li, .html, .body => .block,
+        .h1, .h2, .h3, .h4, .h5, .h6, .p, .div, .ul, .ol, .html, .body => .block,
+        .li => .listItem,
         .table => .table,
         .tr => .tableRow,
         .td, .th => .tableCell,
         else => determineElementDisplayByName(element.name),
+    };
+}
+
+/// Returns the HTML presentational hint that acts like a user-agent list rule.
+pub fn uaListStyleTypeForNode(document: *const dom.Document, node_id: dom.NodeId) ?ListStyleType {
+    const element = switch (document.nodes.items[node_id].kind) {
+        .element => |value| value,
+        else => return null,
+    };
+    if (element.tag != .ul and element.tag != .ol and element.tag != .li) return null;
+
+    for (element.attributes) |attribute| {
+        if (!std.ascii.eqlIgnoreCase(attribute.name, "type")) continue;
+        const value = attribute.value orelse break;
+        if (std.mem.eql(u8, value, "1")) return .decimal;
+        if (std.mem.eql(u8, value, "a")) return .lowerAlpha;
+        if (std.mem.eql(u8, value, "A")) return .upperAlpha;
+        if (std.mem.eql(u8, value, "i")) return .lowerRoman;
+        if (std.mem.eql(u8, value, "I")) return .upperRoman;
+        if (std.ascii.eqlIgnoreCase(value, "disc")) return .disc;
+        if (std.ascii.eqlIgnoreCase(value, "circle")) return .circle;
+        if (std.ascii.eqlIgnoreCase(value, "square")) return .square;
+        break;
+    }
+
+    return switch (element.tag) {
+        .ul => .disc,
+        .ol => .decimal,
+        else => null,
     };
 }
 
@@ -1182,7 +1261,7 @@ fn normalizeAnonymousTables(tree: *BoxTree, allocator: std.mem.Allocator, box_id
 }
 
 fn isBlockContainer(kind: BoxType) bool {
-    return kind == .block or kind == .anonymousBlock or kind == .inlineBlock or kind == .tableCell or kind == .tableCaption;
+    return kind == .block or kind == .listItem or kind == .anonymousBlock or kind == .inlineBlock or kind == .tableCell or kind == .tableCaption;
 }
 
 /// Classifies the external formatting role used by anonymous-box normalization.
@@ -1200,6 +1279,7 @@ fn boxTypeForElement(element: dom.Element, style: Style) BoxType {
 
     return switch (style.display) {
         .block => .block,
+        .listItem => .listItem,
         .inlineBox => .inlineBox,
         .inlineBlock => .inlineBlock,
         .table => .table,

@@ -25,7 +25,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 
 | Property or group | P | C | V | L | Paint | Page | T | Current limit |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | --- |
-| `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, and table roles |
+| `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, list-item, and table roles |
 | width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`/`min()`/`max()`/`clamp()`, `min-content`/`max-content`/`fit-content()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
 | `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic fallback for replaced elements; web/strict transfer the preferred ratio into auto block size for normal boxes |
 | `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
@@ -47,6 +47,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
 | `text-align` | Y | Y | Y | Y | Y | Y | Y | start/end resolved from direction, plus left, center, right, justify |
 | `text-decoration` | Y | Y | Y | Y | Y | Y | Y | combined underline/overline/line-through, color, thickness, solid/double/dotted/dashed/wavy vector styles |
+| `list-style-type` / `list-style-position` | Y | Y | Y | Y | Y | Y | Y | inherited common bullet, decimal, alphabetic and Roman markers; inside/outside placement, HTML start/reversed/value/type hints |
 | `box-sizing` | Y | Y | Y | Y | - | Y | Y | content-box and border-box |
 | `border-collapse` | Y | Y | Y | Y | Y | Y | Y | table collapsed-border approximation |
 | `caption-side` | Y | Y | Y | Y | Y | Y | Y | inherited `top` and `bottom` placement on table captions |

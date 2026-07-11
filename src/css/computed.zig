@@ -38,6 +38,8 @@ const parseBoxSizing = values.parseBoxSizing;
 const parseBorderCollapse = values.parseBorderCollapse;
 const parseCaptionSide = values.parseCaptionSide;
 const parseBoxDecorationBreak = values.parseBoxDecorationBreak;
+const parseListStylePosition = values.parseListStylePosition;
+const parseListStyleType = values.parseListStyleType;
 const parsePageBreak = values.parsePageBreak;
 const parseBorderStyle = values.parseBorderStyle;
 const parseBorderWidth = values.parseBorderWidth;
@@ -65,18 +67,18 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "aspect-ratio",              "background-color",  "border-bottom-color", "border-bottom-style",   "border-bottom-width",  "border-collapse",
-    "border-left-color",         "border-left-style", "border-left-width",   "border-radius",         "border-right-color",   "border-right-style",
-    "border-right-width",        "border-top-color",  "border-top-style",    "border-top-width",      "box-decoration-break", "box-sizing",
-    "break-after",               "break-before",      "break-inside",        "caption-side",          "clear",                "color",
-    "direction",                 "display",           "float",               "font-family",           "font-size",            "font-style",
-    "font-weight",               "height",            "letter-spacing",      "line-height",           "margin-bottom",        "margin-left",
-    "margin-right",              "margin-top",        "max-height",          "max-width",             "min-height",           "min-width",
-    "object-fit",                "object-position",   "orphans",             "padding-bottom",        "padding-left",         "padding-right",
-    "padding-top",               "overflow",          "overflow-wrap",       "page-break-after",      "page-break-before",    "page-break-inside",
-    "position",                  "text-align",        "text-overflow",       "text-decoration-color", "text-decoration-line", "text-decoration-style",
-    "text-decoration-thickness", "text-indent",       "text-transform",      "vertical-align",        "white-space",          "widows",
-    "width",                     "word-break",        "word-spacing",
+    "aspect-ratio",         "background-color",      "border-bottom-color",       "border-bottom-style", "border-bottom-width",  "border-collapse",
+    "border-left-color",    "border-left-style",     "border-left-width",         "border-radius",       "border-right-color",   "border-right-style",
+    "border-right-width",   "border-top-color",      "border-top-style",          "border-top-width",    "box-decoration-break", "box-sizing",
+    "break-after",          "break-before",          "break-inside",              "caption-side",        "clear",                "color",
+    "direction",            "display",               "float",                     "font-family",         "font-size",            "font-style",
+    "font-weight",          "height",                "letter-spacing",            "line-height",         "list-style-position",  "list-style-type",
+    "margin-bottom",        "margin-left",           "margin-right",              "margin-top",          "max-height",           "max-width",
+    "min-height",           "min-width",             "object-fit",                "object-position",     "orphans",              "padding-bottom",
+    "padding-left",         "padding-right",         "padding-top",               "overflow",            "overflow-wrap",        "page-break-after",
+    "page-break-before",    "page-break-inside",     "position",                  "text-align",          "text-overflow",        "text-decoration-color",
+    "text-decoration-line", "text-decoration-style", "text-decoration-thickness", "text-indent",         "text-transform",       "vertical-align",
+    "white-space",          "widows",                "width",                     "word-break",          "word-spacing",
 };
 
 const logical_properties = [_][]const u8{
@@ -235,6 +237,10 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
         if (parseBoxSizing(value)) |bs| style.box_sizing = bs;
     } else if (eqlProp(name, "box-decoration-break")) {
         if (parseBoxDecorationBreak(value)) |decoration_break| style.box_decoration_break = decoration_break;
+    } else if (eqlProp(name, "list-style-type")) {
+        if (parseListStyleType(value)) |list_style_type| style.list_style_type = list_style_type;
+    } else if (eqlProp(name, "list-style-position")) {
+        if (parseListStylePosition(value)) |list_style_position| style.list_style_position = list_style_position;
     } else if (eqlProp(name, "border-collapse")) {
         if (parseBorderCollapse(value)) |collapse| style.border_collapse = collapse;
     } else if (eqlProp(name, "caption-side")) {
@@ -417,7 +423,8 @@ fn isInheritedProperty(name: []const u8) bool {
         eqlProp(name, "overflow-wrap") or eqlProp(name, "text-decoration") or
         eqlProp(name, "text-decoration-line") or eqlProp(name, "text-decoration-style") or
         eqlProp(name, "text-decoration-color") or eqlProp(name, "text-decoration-thickness") or
-        eqlProp(name, "white-space") or eqlProp(name, "caption-side") or eqlProp(name, "orphans") or
+        eqlProp(name, "white-space") or eqlProp(name, "caption-side") or eqlProp(name, "list-style-type") or
+        eqlProp(name, "list-style-position") or eqlProp(name, "orphans") or
         eqlProp(name, "widows");
 }
 
@@ -428,6 +435,14 @@ fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) 
     }
     if (eqlProp(name, "clear")) {
         target.clear_direction = source.clear_direction;
+        return;
+    }
+    if (eqlProp(name, "list-style-type")) {
+        target.list_style_type = source.list_style_type;
+        return;
+    }
+    if (eqlProp(name, "list-style-position")) {
+        target.list_style_position = source.list_style_position;
         return;
     }
     if (eqlProp(name, "caption-side")) {

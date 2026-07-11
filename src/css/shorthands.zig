@@ -51,8 +51,39 @@ pub fn expand(
     if (values.eqlProp(name, "border-block")) return try expandLogicalBorder(allocator, "block", true, value, important);
     if (values.eqlProp(name, "border-inline")) return try expandLogicalBorder(allocator, "inline", true, value, important);
     if (values.eqlProp(name, "background")) return try single(allocator, "background-color", value, important);
+    if (values.eqlProp(name, "list-style")) return try expandListStyle(allocator, value, important);
     if (values.eqlProp(name, "text-decoration")) return try expandTextDecoration(allocator, value, important);
     return null;
+}
+
+fn expandListStyle(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+    important: bool,
+) !Expansion {
+    const components = splitComponents(value);
+    var list_style_type: []const u8 = "disc";
+    var list_style_position: []const u8 = "outside";
+
+    if (components.len == 1 and isCssWideKeyword(components.items[0])) {
+        list_style_type = components.items[0];
+        list_style_position = components.items[0];
+    } else {
+        for (components.slice()) |component| {
+            if (values.parseListStylePosition(component) != null) {
+                list_style_position = component;
+            } else if (values.parseListStyleType(component) != null) {
+                list_style_type = component;
+            } else {
+                return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+            }
+        }
+    }
+
+    const declarations = try allocator.alloc(Declaration, 2);
+    declarations[0] = .{ .name = "list-style-type", .value = list_style_type, .important = important };
+    declarations[1] = .{ .name = "list-style-position", .value = list_style_position, .important = important };
+    return .{ .declarations = declarations, .owns_names = false };
 }
 
 fn expandLogicalPair(
@@ -377,5 +408,17 @@ test "expand text-decoration into line style color and thickness" {
     try std.testing.expectEqualStrings("wavy", expansion.declarations[1].value);
     try std.testing.expectEqualStrings("rebeccapurple", expansion.declarations[2].value);
     try std.testing.expectEqualStrings("2px", expansion.declarations[3].value);
+    try std.testing.expect(expansion.declarations[0].important);
+}
+
+test "expand list-style into inherited marker longhands" {
+    const allocator = std.testing.allocator;
+    const expansion = (try expand(allocator, "list-style", "inside upper-roman", true)).?;
+    defer expansion.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), expansion.declarations.len);
+    try std.testing.expectEqualStrings("list-style-type", expansion.declarations[0].name);
+    try std.testing.expectEqualStrings("upper-roman", expansion.declarations[0].value);
+    try std.testing.expectEqualStrings("list-style-position", expansion.declarations[1].name);
+    try std.testing.expectEqualStrings("inside", expansion.declarations[1].value);
     try std.testing.expect(expansion.declarations[0].important);
 }

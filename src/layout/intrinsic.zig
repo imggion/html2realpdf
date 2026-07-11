@@ -178,7 +178,7 @@ fn hasBlockChildren(tree: *const box.BoxTree, box_id: box.BoxId) bool {
 
 fn isBlockLevel(kind: box.BoxType) bool {
     return switch (kind) {
-        .block, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .anonymousTableRow => true,
+        .block, .listItem, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .anonymousTableRow => true,
         else => false,
     };
 }

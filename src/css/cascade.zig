@@ -109,6 +109,8 @@ fn computeStylesRecursive(
         style.overflow_wrap = ps.overflow_wrap;
         style.direction = ps.direction;
         style.caption_side = ps.caption_side;
+        style.list_style_type = ps.list_style_type;
+        style.list_style_position = ps.list_style_position;
         style.orphans = ps.orphans;
         style.widows = ps.widows;
     }
@@ -126,6 +128,9 @@ fn computeStylesRecursive(
         style.text_decoration_style = ua_style.text_decoration_style;
         style.text_decoration_color = ua_style.text_decoration_color;
         style.text_decoration_thickness = ua_style.text_decoration_thickness;
+    }
+    if (box.uaListStyleTypeForNode(document, node_id)) |list_style_type| {
+        style.list_style_type = list_style_type;
     }
 
     var matches = try std.ArrayList(Match).initCapacity(scratch, 0);

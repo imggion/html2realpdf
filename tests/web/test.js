@@ -681,6 +681,10 @@ async function verifyComputedVariablesAndPseudoElements() {
     const counterSnapshot = await snapshotSource(counterFixture, { resourcePolicy: "error" });
     const counterTemplate = document.createElement("template");
     counterTemplate.innerHTML = counterSnapshot.html;
+    const snapshottedListItem = counterTemplate.content.querySelector("li");
+    if (snapshottedListItem?.style.display !== "list-item" || !snapshottedListItem.style.listStyleType) {
+      throw new Error("list-item display or computed marker style was not preserved");
+    }
     const beforeCounters = [...counterTemplate.content.querySelectorAll("[data-html2realpdf-pseudo='before']")].map((node) => node.textContent);
     const afterCounters = [...counterTemplate.content.querySelectorAll("[data-html2realpdf-pseudo='after']")].map((node) => node.textContent);
     if (beforeCounters.join("|") !== "1. |1.1. |1.2. |2. ") throw new Error(`nested counters were not materialized: ${beforeCounters.join("|")}`);
