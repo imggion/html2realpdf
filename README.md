@@ -1,100 +1,180 @@
 # html2realpdf
 
-Early-stage Zig project for converting HTML toward a real PDF rendering pipeline.
+`html2realpdf` is a Zig/WebAssembly renderer that converts HTML into real PDF
+content. Text remains selectable and searchable, links become PDF annotations,
+fonts are embedded as subset TrueType fonts, and shapes stay vector-based. It
+does not capture the page as a bitmap.
 
-The current implementation focuses on two foundations:
+The browser package is published as `@imggion/html2realpdf`.
 
-- an HTML tokenizer;
-- a tolerant DOM tree builder built from tokenizer output.
+## Current alpha capabilities
 
-PDF generation is not implemented yet.
+- tolerant HTML tokenizer and flat DOM/Box Trees;
+- CSS cascade with specificity, source order, inheritance, inline styles, and
+  `!important`;
+- block and inline layout, wrapping, whitespace modes, alignment, margin
+  collapse, padding, borders, and `border-box` sizing;
+- tables with `colspan`, `rowspan`, collapsed borders, and repeated `<thead>`
+  rows;
+- A4, Letter, landscape, custom page sizes, forced breaks, `break-inside`,
+  orphans, and widows;
+- selectable Unicode text with Noto Sans or registered TTF fonts;
+- JPEG pass-through, transparent PNG soft masks, vector backgrounds/borders,
+  and live link annotations;
+- uniform `border-radius` fills and borders emitted as native PDF Bézier paths;
+- compressed PDF 1.7 streams, metadata, deterministic classic xref output;
+- a versioned WASM ABI with independent result handles and structured errors;
+- an ESM/TypeScript browser package with Worker execution, DOM/React-ref
+  snapshotting, preview/download helpers, and an html2pdf.js-compatible facade.
 
-## Requirements
+The supported layout profile is aimed at invoices, reports, tickets, letters,
+and similar documents. Flexbox, Grid, floats, positioned layout, transforms,
+shadows, and arbitrary browser painting are outside the current alpha scope and
+are rejected or reported instead of being silently rasterized.
+
+## Browser package
+
+```ts
+import { renderPdf } from "@imggion/html2realpdf";
+
+const pdf = await renderPdf(document.querySelector("#invoice")!, {
+  page: { format: "a4", margin: [15, 12], unit: "mm" },
+  metadata: { title: "Invoice 2026-001", author: "Example Ltd" },
+});
+
+const preview = await pdf.preview(document.querySelector("#pdf-preview")!, {
+  initialScale: "fit-width",
+});
+pdf.download("invoice.pdf");
+
+preview.dispose();
+pdf.dispose();
+```
+
+The preview is an in-page Shadow DOM component with responsive canvas pages,
+HiDPI rendering, zoom controls, and fit-to-width behavior. It does not open an
+iframe or delegate rendering to the browser's built-in PDF plugin.
+
+React refs work without a React runtime dependency:
+
+```ts
+const pdf = await renderPdf(invoiceRef);
+```
+
+Register custom TTF faces when creating a renderer:
+
+```ts
+import { createRenderer } from "@imggion/html2realpdf";
+
+const renderer = await createRenderer({
+  fonts: [{
+    family: "Inter",
+    data: await (await fetch("/fonts/Inter-Regular.ttf")).arrayBuffer(),
+    weight: 400,
+  }],
+});
+
+const pdf = await renderer.render('<p style="font-family: Inter">Hello</p>');
+```
+
+Common html2pdf.js PDF workflows are available from the default export:
+
+```ts
+import html2pdf from "@imggion/html2realpdf";
+
+await html2pdf()
+  .set({
+    filename: "invoice.pdf",
+    pagebreak: { mode: ["css", "legacy"], avoid: ".line-item" },
+    jsPDF: { format: "a4", unit: "mm" },
+  })
+  .from(document.querySelector("#invoice")!)
+  .save();
+```
+
+Raster-only stages such as `toCanvas()`, `toImg()`, and html2canvas options
+throw an explicit compatibility error.
+
+## Requirements and build
 
 - Zig `0.16.0`
-- `make` for convenience commands
-
-## Build
+- Node.js `20.16+` for the npm package and JavaScript tests
+- `make` for convenience targets
 
 ```sh
 zig build
+zig build wasm -Doptimize=ReleaseSmall
+npm --prefix bindings/js test
 ```
 
-Or with Make:
+Run the complete local suite:
 
 ```sh
-make debug
-make release
+make test-release
 ```
 
-## Run
-
-```sh
-zig build run
-```
-
-Or:
-
-```sh
-make run
-```
-
-## Test
+Useful focused commands:
 
 ```sh
 make test
-```
-
-Direct commands:
-
-```sh
-zig test src/html.zig
-zig test src/dom.zig
-```
-
-Debug dump helpers:
-
-```sh
+make test-react
+make test-web
 make test-debug-tokenizer
 make test-debug-dom
 make test-debug-box
-make test-debug
 ```
 
-## WebAssembly Smoke Test
+## Browser harness
 
-Build the WASM target:
+Build the WASM artifact, serve the repository, and open
+`tests/web/index.html`:
 
 ```sh
 make wasm
+python3 -m http.server 8765
 ```
 
-Then serve the repository locally and open:
+`make wasm` also rebuilds the TypeScript bindings and writes a content-addressed
+browser runtime manifest, so the harness cannot combine a new test script with
+stale nested ESM modules from an earlier preview API.
+
+The harness runs structural snapshots and exposes buttons for PDF generation,
+in-page canvas preview, download, and the public DOM/ref package API. It also
+generates a two-page colored invoice and a three-page analytics report with
+charts, a two-page rounded-table operations report, and a four-page A4
+landscape presentation deck. It verifies that canvas transparency survives as
+a PDF soft mask and that the presentation uses landscape page geometry.
+
+For a real React integration, install the isolated test app once and start it:
+
+```sh
+npm --prefix tests/react install
+make react
+```
+
+`tests/react/` renders a mounted report component through `forwardRef`, updates
+it with controlled React state, and shows the source DOM beside the generated
+in-page PDF canvas. The fixture covers computed class styles, percentage table
+cards, live canvas pixels, inline SVG, links, lists, and closed details state.
+
+## Architecture
 
 ```text
-tests/web/index.html
+HTML -> tokenizer -> flat DOM -> CSS cascade -> flat Box Tree
+     -> block/inline/table layout -> pagination -> display list
+     -> PDF writer -> WASM result handle -> Worker/TypeScript API
 ```
 
-The page can:
+Core modules live under `src/`: `html.zig`, `dom.zig`, `css.zig`, `box.zig`,
+`font.zig`, `layout.zig`, `pagination.zig`, `display_list.zig`, `image.zig`,
+`pdf.zig`, `render.zig`, and `wasm.zig`. The npm package lives in
+`bindings/js/`; framework-agnostic browser verification lives in `tests/web/`
+and the explicit React integration fixture lives in `tests/react/`.
 
-- tokenize the sample HTML and show the token count;
-- generate an ASCII DOM tree from the same HTML through the WASM module;
-- generate an ASCII Box Tree with styles through the WASM module.
+## Licenses
 
-## Project Layout
-
-```text
-src/html.zig      HTML tokenizer and token debug dump
-src/dom.zig       tolerant DOM parser and ASCII tree dump
-src/box.zig       Box Tree builder and style-aware tree dump
-src/wasm.zig      WebAssembly exports
-src/main.zig      native CLI entrypoint
-src/root.zig      package root exports
-tests/web/        manual browser smoke test
-```
-
-## Current Scope
-
-The parser is intentionally small and pragmatic. It supports an MVP subset useful for future PDF rendering work, including headings, paragraphs, inline emphasis, lists, tables, images, line breaks, and generic containers.
-
-The DOM parser is tolerant but not a full HTML5 tree-construction implementation.
+Project code is MIT licensed. Bundled Noto Sans font software is distributed
+under the SIL Open Font License 1.1; see `assets/fonts/OFL.txt` and the copy
+included in the npm package. The vendored PDF.js display layer used only by the
+optional in-page preview is distributed under Apache License 2.0; its license
+is included in `dist/vendor/PDFJS-LICENSE.txt`.

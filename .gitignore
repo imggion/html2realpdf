@@ -18,3 +18,15 @@ build.zig.lock
 # Personal docs
 TODO.md
 agents-files/
+
+# JavaScript package build artifacts
+bindings/js/node_modules/
+bindings/js/dist/
+bindings/js/.browser-build/
+bindings/js/*.tgz
+tests/react/node_modules/
+tests/react/dist/
+
+# Local PDF render verification artifacts
+tmp/
+output/

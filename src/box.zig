@@ -138,6 +138,30 @@ pub const WhiteSpace = enum {
     }
 };
 
+pub const FontWeight = enum {
+    normal,
+    bold,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .normal => "normal",
+            .bold => "bold",
+        };
+    }
+};
+
+pub const FontStyle = enum {
+    normal,
+    italic,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .normal => "normal",
+            .italic => "italic",
+        };
+    }
+};
+
 /// Horizontal text alignment within a block container.
 pub const TextAlign = enum {
     left,
@@ -155,6 +179,20 @@ pub const TextAlign = enum {
     }
 };
 
+pub const TextDecoration = enum {
+    none,
+    underline,
+    lineThrough,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .underline => "underline",
+            .lineThrough => "line-through",
+        };
+    }
+};
+
 /// Box sizing model: content-box or border-box.
 pub const BoxSizing = enum {
     contentBox,
@@ -164,6 +202,18 @@ pub const BoxSizing = enum {
         return switch (self) {
             .contentBox => "content-box",
             .borderBox => "border-box",
+        };
+    }
+};
+
+pub const BorderCollapse = enum {
+    separate,
+    collapse,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .separate => "separate",
+            .collapse => "collapse",
         };
     }
 };
@@ -225,12 +275,29 @@ pub const EdgeSizes = struct {
     left: f32 = 0,
 };
 
+/// A layout dimension that must retain its percentage until a containing size
+/// is known. Absolute CSS units are normalized to CSS pixels by the cascade.
+pub const Length = union(enum) {
+    auto,
+    px: f32,
+    percent: f32,
+
+    pub fn resolve(self: Length, reference: f32) ?f32 {
+        return switch (self) {
+            .auto => null,
+            .px => |value| value,
+            .percent => |ratio| reference * ratio,
+        };
+    }
+};
+
 /// Style data resolved enough for Box Tree construction.
 ///
 /// This is not the CSS parser format. The builder only needs properties that
 /// decide whether a box exists, which kind it is, and which flags/layout inputs
 /// must survive into later phases.
 pub const Style = struct {
+    layout_supported: bool = true,
     display: Display = .inlineBox,
     position: Position = .static,
     float_direction: Float = .none,
@@ -238,23 +305,30 @@ pub const Style = struct {
 
     font_size: f32 = 16,
     font_family: []const u8 = "serif",
+    font_weight: FontWeight = .normal,
+    font_style: FontStyle = .normal,
     color: []const u8 = "black",
     background: ?[]const u8 = null,
 
-    width: ?f32 = null,
-    height: ?f32 = null,
-    min_width: ?f32 = null,
-    max_width: ?f32 = null,
-    min_height: ?f32 = null,
-    max_height: ?f32 = null,
+    width: Length = .auto,
+    height: Length = .auto,
+    min_width: Length = .auto,
+    max_width: Length = .auto,
+    min_height: Length = .auto,
+    max_height: Length = .auto,
 
     line_height: f32 = 18,
+    letter_spacing: f32 = 0,
     text_align: TextAlign = .left,
+    text_decoration: TextDecoration = .none,
 
     box_sizing: BoxSizing = .contentBox,
+    border_collapse: BorderCollapse = .separate,
+    border_radius: f32 = 0,
 
     page_break_before: PageBreak = .auto,
     page_break_after: PageBreak = .auto,
+    page_break_inside: PageBreak = .auto,
     orphans: u32 = 2,
     widows: u32 = 2,
 
@@ -482,9 +556,26 @@ const BuildState = struct {
         style.position = .static;
         style.float_direction = .none;
         style.background = null;
+        style.width = .auto;
+        style.height = .auto;
+        style.min_width = .auto;
+        style.max_width = .auto;
+        style.min_height = .auto;
+        style.max_height = .auto;
         style.margin = .{};
         style.border = .{};
         style.padding = .{};
+        style.border_top_style = .none;
+        style.border_right_style = .none;
+        style.border_bottom_style = .none;
+        style.border_left_style = .none;
+        style.border_top_color = "black";
+        style.border_right_color = "black";
+        style.border_bottom_color = "black";
+        style.border_left_color = "black";
+        style.page_break_before = .auto;
+        style.page_break_after = .auto;
+        style.page_break_inside = .auto;
 
         return style;
     }
@@ -545,6 +636,12 @@ pub fn defaultStyleForNode(document: *const dom.Document, node_id: dom.NodeId) S
                     .ul, .ol => {
                         style.margin = .{ .top = 16, .bottom = 16 };
                         style.padding = .{ .left = 40 };
+                    },
+                    .strong => style.font_weight = .bold,
+                    .em => style.font_style = .italic,
+                    .a => {
+                        style.color = "#0000ee";
+                        style.text_decoration = .underline;
                     },
                     else => {},
                 }
@@ -650,8 +747,8 @@ fn wrapInlineRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId
 /// Runs after anonymous-block normalization, wrapping orphan table cells in
 /// anonymous table-row boxes.
 ///
-/// ponytail: does not wrap orphan tableRow in anonymous tableRowGroup inside table;
-/// layout can iterate both tableRow and tableRowGroup as direct children of table.
+/// Orphan rows remain direct table children because layout intentionally accepts
+/// both direct rows and row groups.
 fn wrapTableCellRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId) !void {
     try wrapChildRuns(tree, allocator, parent_id, .anonymousTableRow, isTableWrappableBox);
 }
@@ -682,7 +779,7 @@ fn wrapChildRuns(
             if (current_run == null) {
                 const anonymous_id = try appendDetachedBox(tree, allocator, .{
                     .kind = anon_kind,
-                    .style = tree.boxes.items[parent_id].style,
+                    .style = anonymousStyle(tree.boxes.items[parent_id].style),
                 });
                 appendToRebuiltChildList(tree, parent_id, anonymous_id, &new_first, &new_last);
                 current_run = anonymous_id;
@@ -702,6 +799,31 @@ fn wrapChildRuns(
 
 fn isTableWrappableBox(box: Box) bool {
     return box.kind == .tableCell or isInlineLevelBox(box);
+}
+
+fn anonymousStyle(parent: Style) Style {
+    var style = parent;
+    style.position = .static;
+    style.float_direction = .none;
+    style.background = null;
+    style.width = .auto;
+    style.height = .auto;
+    style.min_width = .auto;
+    style.max_width = .auto;
+    style.min_height = .auto;
+    style.max_height = .auto;
+    style.margin = .{};
+    style.border = .{};
+    style.padding = .{};
+    style.border_top_style = .none;
+    style.border_right_style = .none;
+    style.border_bottom_style = .none;
+    style.border_left_style = .none;
+    style.border_radius = 0;
+    style.page_break_before = .auto;
+    style.page_break_after = .auto;
+    style.page_break_inside = .auto;
+    return style;
 }
 
 /// Rebuilds one parent's child list without reallocating existing boxes.
@@ -800,13 +922,8 @@ fn fillIntrinsicSize(box: *Box, element: dom.Element) void {
 }
 
 fn getAttributeValue(attributes: []const html.Attribute, name: []const u8) ?[]const u8 {
-    // TODO: optimize this (TO STUDY IF IS A GOOD CHOICE)
-    // we could get a "lookup table" one time after the tokenization to use the map here
-    // instead of ciclyng everytime for every time we need to get an attribute value from
-    // the HTML.
-    // An example could be a function called: mapAttributes that inject an HashMap of attributes
-    // for every box, instead of looping everytime we loop only when we need these info for
-    // a particular Box
+    // Attribute lists are normally tiny. A linear lookup keeps ownership simple
+    // and avoids allocating a map for every DOM element.
     for (attributes) |attribute| {
         if (std.ascii.eqlIgnoreCase(attribute.name, name)) return attribute.value;
     }
@@ -901,15 +1018,20 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     if (style.background) |background| {
         try writer.print(" background={s}", .{background});
     }
-    if (style.width) |w| try writer.print(" width={d:.2}", .{w});
-    if (style.height) |h| try writer.print(" height={d:.2}", .{h});
-    if (style.min_width) |w| try writer.print(" min-width={d:.2}", .{w});
-    if (style.max_width) |w| try writer.print(" max-width={d:.2}", .{w});
+    if (style.font_weight != .normal) try writer.print(" font-weight={s}", .{style.font_weight.toString()});
+    if (style.font_style != .normal) try writer.print(" font-style={s}", .{style.font_style.toString()});
+    if (style.text_decoration != .none) try writer.print(" text-decoration={s}", .{style.text_decoration.toString()});
+    try writeLengthDebug("width", style.width, writer);
+    try writeLengthDebug("height", style.height, writer);
+    try writeLengthDebug("min-width", style.min_width, writer);
+    try writeLengthDebug("max-width", style.max_width, writer);
     if (style.line_height != 18) try writer.print(" line-height={d:.2}", .{style.line_height});
     if (style.text_align != .left) try writer.print(" text-align={s}", .{style.text_align.toString()});
     if (style.box_sizing != .contentBox) try writer.print(" box-sizing={s}", .{style.box_sizing.toString()});
+    if (style.border_collapse != .separate) try writer.print(" border-collapse={s}", .{style.border_collapse.toString()});
     if (style.page_break_before != .auto) try writer.print(" page-break-before={s}", .{style.page_break_before.toString()});
     if (style.page_break_after != .auto) try writer.print(" page-break-after={s}", .{style.page_break_after.toString()});
+    if (style.page_break_inside != .auto) try writer.print(" page-break-inside={s}", .{style.page_break_inside.toString()});
     if (style.orphans != 2) try writer.print(" orphans={d}", .{style.orphans});
     if (style.widows != 2) try writer.print(" widows={d}", .{style.widows});
     if (style.border_top_style != .none) try writer.print(" border-top-style={s}", .{style.border_top_style.toString()});
@@ -947,6 +1069,14 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     }
 
     try writer.writeAll("]");
+}
+
+fn writeLengthDebug(name: []const u8, length: Length, writer: *std.Io.Writer) !void {
+    switch (length) {
+        .auto => {},
+        .px => |value| try writer.print(" {s}={d:.2}", .{ name, value }),
+        .percent => |ratio| try writer.print(" {s}={d:.2}%", .{ name, ratio * 100 }),
+    }
 }
 
 fn writeEdgeDebug(name: []const u8, edge: EdgeSizes, writer: *std.Io.Writer) !void {

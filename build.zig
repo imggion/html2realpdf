@@ -65,6 +65,10 @@ pub fn build(b: *std.Build) void {
     });
 
     wasm_mod.export_symbol_names = &.{
+        "html2realpdf_abi_version",
+        "pdf_context_create",
+        "pdf_context_free",
+        "pdf_context_register_font",
         "alloc",
         "free",
         "tokenize_html",
@@ -74,6 +78,19 @@ pub fn build(b: *std.Build) void {
         "box_tree_output_len",
         "cascade_tree_html",
         "cascade_tree_output_len",
+        "render_html_to_pdf",
+        "render_html_to_pdf_with_options",
+        "render_html_to_pdf_with_json_options",
+        "render_html_to_pdf_with_context_json_options",
+        "pdf_result_status",
+        "pdf_result_data_ptr",
+        "pdf_result_data_len",
+        "pdf_result_page_count",
+        "pdf_result_error_ptr",
+        "pdf_result_error_len",
+        "pdf_result_diagnostics_ptr",
+        "pdf_result_diagnostics_len",
+        "pdf_result_free",
     };
 
     const wasm = b.addExecutable(.{

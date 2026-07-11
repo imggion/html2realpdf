@@ -144,7 +144,24 @@ const wasmBytes = readFileSync(WASM_PATH);
 const snapshots = JSON.parse(readFileSync(SNAPSHOTS_PATH, "utf-8"));
 
 const { instance } = await WebAssembly.instantiate(wasmBytes, {});
-const { alloc, free, memory, tokenize_html, dom_tree_html, dom_tree_output_len, box_tree_html, box_tree_output_len, cascade_tree_html, cascade_tree_output_len } = instance.exports;
+const {
+  alloc,
+  free,
+  memory,
+  tokenize_html,
+  dom_tree_html,
+  dom_tree_output_len,
+  box_tree_html,
+  box_tree_output_len,
+  cascade_tree_html,
+  cascade_tree_output_len,
+  render_html_to_pdf,
+  pdf_result_status,
+  pdf_result_data_ptr,
+  pdf_result_data_len,
+  pdf_result_page_count,
+  pdf_result_free,
+} = instance.exports;
 
 function stringToWasm(str) {
   const bytes = encoder.encode(str);
@@ -154,11 +171,11 @@ function stringToWasm(str) {
   return [ptr, bytes.length];
 }
 
-function runStringPipeline(fn, html) {
+function runStringPipeline(fn, outputLength, html) {
   const [ptr, len] = stringToWasm(html);
   try {
     const outPtr = fn(ptr, len);
-    const outLen = dom_tree_output_len();
+    const outLen = outputLength();
     const bytes = new Uint8Array(memory.buffer, outPtr, outLen);
     const str = decoder.decode(bytes);
     free(outPtr, outLen);
@@ -198,13 +215,13 @@ for (const test of testCases) {
       break;
     }
     case "dom":
-      actual = runStringPipeline(dom_tree_html, test.html);
+      actual = runStringPipeline(dom_tree_html, dom_tree_output_len, test.html);
       break;
     case "box":
-      actual = runStringPipeline(box_tree_html, test.html);
+      actual = runStringPipeline(box_tree_html, box_tree_output_len, test.html);
       break;
     case "cascade":
-      actual = runStringPipeline(cascade_tree_html, test.html);
+      actual = runStringPipeline(cascade_tree_html, cascade_tree_output_len, test.html);
       break;
   }
 
@@ -232,6 +249,38 @@ for (const test of testCases) {
     if (diffsShown === 0 && expLines.length !== actLines.length) {
       console.log(`  Length mismatch: expected ${expLines.length} lines, got ${actLines.length}`);
     }
+  }
+}
+
+{
+  const [ptr, len] = stringToWasm(htmlInvoiceTable);
+  let result = 0;
+  try {
+    result = render_html_to_pdf(ptr, len);
+    if (result === 0) throw new Error("render_html_to_pdf returned no result");
+    if (pdf_result_status(result) !== 0) throw new Error(`PDF status ${pdf_result_status(result)}`);
+
+    const dataPtr = pdf_result_data_ptr(result);
+    const dataLen = pdf_result_data_len(result);
+    const bytes = new Uint8Array(memory.buffer, dataPtr, dataLen).slice();
+    const pdfText = decoder.decode(bytes);
+
+    if (!pdfText.startsWith("%PDF-1.7") || !pdfText.endsWith("%%EOF\n")) {
+      throw new Error("invalid PDF header or trailer");
+    }
+    if (pdfText.includes("/Subtype /Image")) {
+      throw new Error("document was flattened into a full-page image");
+    }
+    if (pdf_result_page_count(result) < 1) throw new Error("invalid PDF page count");
+
+    passed++;
+    console.log(`PASS: real_pdf (${dataLen} bytes, ${pdf_result_page_count(result)} page(s))`);
+  } catch (error) {
+    failed++;
+    console.log(`FAIL: real_pdf — ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    if (result !== 0) pdf_result_free(result);
+    free(ptr, len);
   }
 }
 

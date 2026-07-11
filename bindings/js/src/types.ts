@@ -1,0 +1,110 @@
+export type RefLike<T> = { readonly current: T | null };
+
+export type HtmlSource = string | Element | RefLike<Element>;
+
+export type LengthUnit = "pt" | "px" | "mm" | "cm" | "in";
+export type PageFormat = "a4" | "letter" | readonly [width: number, height: number];
+export type PageOrientation = "portrait" | "landscape";
+export type Margin = number | readonly [vertical: number, horizontal: number] | readonly [top: number, left: number, bottom: number, right: number];
+
+export interface PageOptions {
+  format?: PageFormat;
+  orientation?: PageOrientation;
+  unit?: LengthUnit;
+  margin?: Margin;
+}
+
+export type RenderPhase = "snapshot" | "wasm" | "complete";
+
+export interface RenderProgress {
+  phase: RenderPhase;
+  completed: number;
+  total: number;
+}
+
+export interface Diagnostic {
+  code: string;
+  severity: "warning" | "error";
+  message: string;
+}
+
+export interface ResourceRequest {
+  kind: "image";
+  url: URL;
+}
+
+export type ResourceResolver = (request: ResourceRequest) => Blob | string | null | Promise<Blob | string | null>;
+
+export interface PageBreakRules {
+  before?: string | readonly string[];
+  after?: string | readonly string[];
+  avoid?: string | readonly string[];
+  avoidAll?: boolean;
+  legacy?: boolean;
+}
+
+export interface PdfMetadata {
+  title?: string;
+  author?: string;
+  subject?: string;
+  keywords?: string | readonly string[];
+  creator?: string;
+}
+
+export interface RenderOptions {
+  page?: PageOptions;
+  filename?: string;
+  strict?: boolean;
+  baseUrl?: string | URL;
+  resourcePolicy?: "error" | "omit";
+  resourceResolver?: ResourceResolver;
+  pageBreak?: PageBreakRules;
+  metadata?: PdfMetadata;
+  enableLinks?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (progress: RenderProgress) => void;
+}
+
+export interface RendererInit {
+  execution?: "worker" | "main";
+  wasmUrl?: string | URL;
+  fonts?: readonly FontRegistration[];
+}
+
+export interface FontRegistration {
+  family: string;
+  data: ArrayBuffer | Uint8Array;
+  weight?: number | "normal" | "bold";
+  style?: "normal" | "italic";
+}
+
+export interface CompatJsPdfOptions {
+  unit?: LengthUnit;
+  format?: PageFormat;
+  orientation?: PageOrientation;
+}
+
+export interface CompatPageBreakOptions {
+  mode?: "css" | "legacy" | "avoid-all" | readonly ("css" | "legacy" | "avoid-all")[];
+  before?: string | readonly string[];
+  after?: string | readonly string[];
+  avoid?: string | readonly string[];
+}
+
+export interface Html2PdfOptions {
+  margin?: Margin;
+  filename?: string;
+  enableLinks?: boolean;
+  pagebreak?: CompatPageBreakOptions;
+  jsPDF?: CompatJsPdfOptions;
+  html2canvas?: object;
+  image?: { type?: "jpeg" | "png" | "webp"; quality?: number };
+}
+
+export type PdfOutputType =
+  | "arraybuffer"
+  | "blob"
+  | "bloburl"
+  | "bloburi"
+  | "datauristring"
+  | "dataurlstring";

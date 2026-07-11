@@ -12,23 +12,31 @@ Read these local docs before changing code:
 
 ## Repo Summary
 
-- Early-stage Zig package named `html2realpdf`; current implemented behavior is an HTML tokenizer, a tolerant DOM tree builder, and a first Box Tree builder, with native CLI and WebAssembly entrypoints.
+- Zig/WebAssembly HTML-to-real-PDF renderer named `html2realpdf`; the pipeline now includes tokenizer, tolerant flat DOM, CSS cascade, flat Box Tree, layout, pagination, display list, TrueType font handling, image resources, PDF 1.7 output, and a typed npm wrapper.
 - Zig version is `0.16.0`; use the 0.16 docs: https://ziglang.org/documentation/0.16.0/ and stdlib docs: https://ziglang.org/documentation/0.16.0/std/.
-- Active source lives in `src/`; browser WASM smoke-test files live in `tests/web/`.
+- Active renderer source lives in `src/`; the npm package lives in `bindings/js/`; browser and snapshot verification live in `tests/web/`; the real React-ref integration fixture lives in `tests/react/`.
 - `build.zig` defines the native executable from `src/main.zig`, the package/root module from `src/root.zig`, and the wasm executable from `src/wasm.zig`; reusable parser/tree modules are exported from `src/root.zig`.
-- `tests/web/` can call WASM exports for token count, DOM ASCII tree, and Box Tree ASCII tree with styles.
-- There is no app framework, routing layer, styling system, persistent state layer, or external package dependency currently configured.
+- `tests/web/` covers structural dumps plus real PDF generation, the embedded canvas viewer, complex invoice/report fixtures, download, DOM/ref rendering, SVG charts, and transparent canvas resources.
+- Rounded box painting uses a uniform `border-radius` propagated through layout and display-list commands into native PDF Bézier paths; keep per-corner and clipping behavior out until tested explicitly.
+- The browser fixture set includes portrait reports and an A4 landscape presentation deck; keep both available from `tests/web/index.html` and in automated browser verification.
+- `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
+- The browser package is framework-agnostic; React refs are supported structurally without a React dependency.
 
 ## Commands
 
 - `zig build` builds the default native executable into `zig-out/bin/html2realpdf`.
 - `zig build run` runs the native CLI target.
-- `zig build wasm -Doptimize=ReleaseSmall` builds `zig-out/bin/libhtml2realpdf.wasm`.
+- `zig build wasm -Doptimize=ReleaseSmall` builds only `zig-out/bin/libhtml2realpdf.wasm`; `make wasm` additionally rebuilds the typed bindings and content-addressed browser runtime used by `tests/web/`.
 - `zig test src/html.zig` runs the current inline tokenizer tests.
 - `zig test src/dom.zig` runs the current inline DOM parser tests.
 - `zig test src/box.zig` runs the current inline Box Tree tests.
+- `zig test src/render.zig` runs the complete renderer/PDF pipeline tests.
+- `npm --prefix bindings/js test` builds the WASM/package and runs the Node package tests.
+- `node tests/web/verify_snapshots.mjs` verifies WASM structural snapshots and PDF handles.
+- `make test-react` builds the React integration fixture; `make react` starts its Vite development server after rebuilding WASM and bindings.
+- `make test-release` runs the Zig, package, React-build, and snapshot suites.
 - `zig fmt --check build.zig src/*.zig` checks Zig formatting.
-- `make debug`, `make release`, `make wasm`, `make run`, `make test`, and `make clean` wrap common commands.
+- `make debug`, `make release`, `make wasm`, `make run`, `make react`, `make test`, `make test-react`, and `make clean` wrap common commands.
 - `make test-debug-tokenizer` prints a tokenizer dump through the debug-only tokenizer test.
 - `make test-debug-dom` prints a DOM ASCII tree through the debug-only DOM test.
 - `make test-debug-box` prints a Box Tree ASCII tree with styles through the debug-only Box Tree test.
@@ -39,6 +47,11 @@ Read these local docs before changing code:
 - Prefer small, explicit changes that fit the current Zig module layout.
 - Keep tokenizer and parsing control flow readable; avoid nested ternaries, clever state shortcuts, and giant multi-purpose functions when a local helper or state branch would be clearer.
 - Keep Box Tree construction in `src/box.zig`; use flat `BoxId` links like `dom.NodeId` instead of recursive owned child arrays.
+- Keep continuous layout, pagination, display-list generation, and PDF serialization in their focused modules; do not merge phase ownership into `box.zig` or `wasm.zig`.
+- Resolve table-cell percentage widths into column tracks before cell layout; once a track is assigned, the cell must fill it instead of resolving its percentage again inside that track.
+- Preserve the result-handle/context ownership contract in `src/wasm.zig` and ABI version checks in `bindings/js/src/wasm.ts`.
+- Keep PDF preview rendering in `bindings/js/src/preview.ts`; it must remain an in-page canvas component and must not fall back to iframe/object browser PDF plugins.
+- Keep `bindings/js/.browser-build/manifest.json` content-addressed through `prepare-browser-build.mjs`; the test harness must not import mutable unversioned `dist/*.js` modules.
 - Use Zig doc comments deliberately: `//!` for module intent and `///` for exported types/functions or private helpers with non-obvious tradeoffs.
 - Documentation should explain why a shape exists, ownership/lifetime constraints, or phase boundaries; do not restate obvious names like `toString` returning a string.
 - Keep doc examples tiny and only when they make usage faster to understand.

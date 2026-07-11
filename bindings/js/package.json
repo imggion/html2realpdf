@@ -1,0 +1,47 @@
+{
+  "name": "@imggion/html2realpdf",
+  "version": "0.1.0-alpha.0",
+  "description": "Browser-first HTML to real, selectable PDF rendering powered by Zig and WebAssembly",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "clean": "node ./scripts/clean.mjs",
+    "build": "node ./scripts/build.mjs && tsc -p tsconfig.json && node ./scripts/prepare-browser-build.mjs",
+    "build:bindings": "node ./scripts/build.mjs --skip-wasm-build && tsc -p tsconfig.json && node ./scripts/prepare-browser-build.mjs",
+    "test": "npm run build && node --test ./test/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "html",
+    "pdf",
+    "wasm",
+    "webassembly",
+    "typescript",
+    "react"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.16.0"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "5.4.624",
+    "typescript": "^7.0.2"
+  }
+}

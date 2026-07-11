@@ -1,46 +1,199 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>html2realpdf wasm test</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>html2realpdf browser harness</title>
     <style>
-      body { font-family: system-ui, sans-serif; padding: 20px; }
-      section { margin-bottom: 24px; }
-      h3 { font-size: 14px; color: #555; margin: 16px 0 8px; }
-      button { margin: 4px; padding: 6px 14px; cursor: pointer; }
-      #output {
-        background: #f5f5f5; border: 1px solid #ddd;
-        padding: 12px; margin-top: 12px;
-        white-space: pre; font-size: 12px; line-height: 1.4;
-        max-height: 500px; overflow: auto;
+      :root {
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --ink: #172033;
+        --muted: #607080;
+        --line: #d8e0e9;
+        --surface: #ffffff;
+        --canvas: #f2f5f8;
+        --primary: #1d4ed8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        -webkit-font-smoothing: antialiased;
+        background: var(--canvas);
+        color: var(--ink);
+        margin: 0;
+        min-width: 320px;
+      }
+      button { font: inherit; touch-action: manipulation; }
+      .page-header {
+        background: #10243e;
+        color: #fff;
+        padding: 40px max(24px, calc((100vw - 1160px) / 2));
+      }
+      .page-header p { color: #b8c7dc; margin: 8px 0 0; max-width: 720px; }
+      h1 { font-size: clamp(28px, 5vw, 42px); letter-spacing: -0.03em; margin: 0; text-wrap: balance; }
+      h2 { font-size: 20px; margin: 0; text-wrap: balance; }
+      h3 { color: var(--muted); font-size: 12px; letter-spacing: 0.08em; margin: 0 0 12px; text-transform: uppercase; }
+      main { margin: 0 auto; max-width: 1200px; padding: 28px 20px 64px; }
+      .panel {
+        background: var(--surface);
+        border-radius: 14px;
+        box-shadow: 0 0 0 1px rgba(23, 32, 51, 0.08);
+        margin-bottom: 20px;
+        padding: 20px;
+      }
+      .panel-heading { margin-bottom: 16px; }
+      .panel-heading p { color: var(--muted); font-size: 14px; line-height: 1.55; margin: 6px 0 0; }
+      .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
+      button {
+        background: #fff;
+        border: 0;
+        border-radius: 9px;
+        box-shadow: 0 0 0 1px rgba(23, 32, 51, 0.18);
+        color: var(--ink);
+        cursor: pointer;
+        min-height: 44px;
+        padding: 0 14px;
+      }
+      button.primary { background: var(--primary); box-shadow: none; color: #fff; }
+      button:focus-visible { outline: 2px solid #111; outline-offset: 2px; }
+      button:disabled { cursor: not-allowed; opacity: 0.48; }
+      .status {
+        color: var(--muted);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+        min-height: 20px;
+      }
+      #test-results, #output {
+        background: #101828;
+        border-radius: 10px;
+        color: #d9e2ef;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        margin: 14px 0 0;
+        max-height: 500px;
+        overflow: auto;
+        padding: 14px;
+        white-space: pre-wrap;
+      }
+      #test-results:empty, #output:empty { display: none; }
+      #pdf-preview {
+        margin-top: 18px;
+        min-height: 520px;
+      }
+      .preview-empty {
+        align-items: center;
+        background: #e9edf2;
+        border-radius: 14px;
+        color: #64748b;
+        display: flex;
+        justify-content: center;
+        min-height: 520px;
+        padding: 32px;
+        text-align: center;
+      }
+      #package-source {
+        background: #eff6ff;
+        border-left: 4px solid #1d4ed8;
+        margin: 16px 0;
+        max-width: 620px;
+        padding: 18px;
+      }
+      #package-source h2 { color: #1d4ed8; }
+      @media (hover: hover) and (pointer: fine) {
+        button:not(:disabled):hover { background: #f5f7fa; }
+        button.primary:not(:disabled):hover { background: #1e40af; }
+      }
+      @media (max-width: 620px) {
+        .page-header { padding-bottom: 30px; padding-top: 30px; }
+        main { padding-left: 12px; padding-right: 12px; }
+        .panel { border-radius: 10px; padding: 16px; }
+        .button-row button { flex: 1 1 100%; }
       }
     </style>
   </head>
   <body>
-    <section>
-      <h3>Base pipeline</h3>
-      <button id="tokenize" type="button">tokenize</button>
-      <button id="dom-tree" type="button">dom tree</button>
-      <button id="box-tree" type="button">box tree</button>
-      <button id="cascade-tree" type="button">cascade dump</button>
-    </section>
+    <header class="page-header">
+      <h1>html2realpdf browser harness</h1>
+      <p>Generate real, selectable PDFs and inspect every rendered page directly inside this test page.</p>
+    </header>
 
-    <section>
-       <h3>Box Tree — tables and advanced layout</h3>
-      <button id="box-invoice" type="button">invoice table</button>
-      <button id="box-anon-row" type="button">anonymous table-row</button>
-      <button id="box-inline-block" type="button">inline-block cards</button>
-      <button id="cascade-invoice" type="button">cascade invoice</button>
-    </section>
+    <main>
+      <section class="panel">
+        <div class="panel-heading">
+          <h3>Parser and structure</h3>
+          <h2>Core pipeline diagnostics</h2>
+        </div>
+        <div class="button-row">
+          <button id="tokenize" type="button">Tokenizer</button>
+          <button id="dom-tree" type="button">DOM tree</button>
+          <button id="box-tree" type="button">Box tree</button>
+          <button id="cascade-tree" type="button">Cascade dump</button>
+          <button id="box-invoice" type="button">Invoice table</button>
+          <button id="box-anon-row" type="button">Anonymous table row</button>
+          <button id="box-inline-block" type="button">Inline-block cards</button>
+          <button id="cascade-invoice" type="button">Invoice cascade</button>
+        </div>
+        <pre id="output" aria-live="polite"></pre>
+      </section>
 
-    <section>
-      <h3>WASM Snapshot Tests</h3>
-      <button id="run-wasm-tests" type="button">Run All Tests</button>
-      <pre id="test-results" aria-live="polite"></pre>
-    </section>
+      <section class="panel">
+        <div class="panel-heading">
+          <h3>Automated browser verification</h3>
+          <h2>WASM and package integration tests</h2>
+          <p>Runs structural snapshots, real PDF checks, complex fixtures, and the embedded canvas viewer.</p>
+        </div>
+        <button class="primary" id="run-wasm-tests" type="button">Run all browser tests</button>
+        <pre id="test-results" aria-live="polite"></pre>
+      </section>
 
-    <pre id="output" aria-live="polite"></pre>
+      <section class="panel">
+        <div class="panel-heading">
+          <h3>Complex document fixtures</h3>
+          <h2>Generate and preview production-style PDFs</h2>
+          <p>Choose a fixture, then inspect its pages in the integrated viewer. No browser PDF plugin or iframe is used.</p>
+        </div>
+        <div class="button-row">
+          <button id="generate-pdf" type="button">Smoke invoice</button>
+          <button id="generate-complex-invoice" type="button">Colored invoice</button>
+          <button id="generate-report" type="button">Analytics report</button>
+          <button id="generate-rounded-report" type="button">Rounded tables</button>
+          <button id="generate-presentation" type="button">Presentation deck</button>
+          <button class="primary" id="preview-pdf" type="button">Preview selected PDF</button>
+          <button id="download-pdf" type="button">Download selected PDF</button>
+        </div>
+        <p class="status" id="pdf-status" aria-live="polite">No PDF generated yet.</p>
+        <div id="pdf-preview" aria-label="Generated PDF preview">
+          <div class="preview-empty">Generate a fixture to render its pages here.</div>
+        </div>
+        <textarea id="pdf-export" hidden aria-hidden="true"></textarea>
+      </section>
 
-    <script type="module" src="./test.js"></script>
+      <section class="panel">
+        <div class="panel-heading">
+          <h3>Public package API</h3>
+          <h2>DOM and React-ref equivalent source</h2>
+        </div>
+        <div id="package-source">
+          <h2>DOM source example</h2>
+          <p>This element exercises the same native DOM value exposed by a React ref.</p>
+          <p>Unicode text remains searchable: caffè, naïve, €uro.</p>
+          <p><strong>Bold text</strong>, <em>italic text</em>, and a <a href="https://example.com">real link annotation</a>.</p>
+          <svg width="24" height="24" viewBox="0 0 24 24" aria-label="Inline SVG snapshot">
+            <circle cx="12" cy="12" r="10" fill="#16a34a"></circle>
+          </svg>
+          <canvas id="package-canvas" width="24" height="24" aria-label="Transparent canvas snapshot"></canvas>
+        </div>
+        <div class="button-row">
+          <button id="package-render" type="button">Render DOM with package API</button>
+          <button id="package-preview" type="button">Preview DOM PDF</button>
+        </div>
+        <p class="status" id="package-status" aria-live="polite">Package API has not rendered yet.</p>
+      </section>
+    </main>
+
+    <script type="module">
+      import(`./test.js?cache=${Date.now()}`);
+    </script>
   </body>
 </html>
