@@ -13,6 +13,7 @@ pub const selectors = @import("css/selectors.zig");
 pub const values = @import("css/values.zig");
 pub const expressions = @import("css/expressions.zig");
 pub const variables = @import("css/variables.zig");
+pub const shorthands = @import("css/shorthands.zig");
 pub const computed = @import("css/computed.zig");
 pub const cascade = @import("css/cascade.zig");
 pub const properties = @import("css/properties.zig");
@@ -324,6 +325,21 @@ test "child combinator does not match grandchild" {
     const span_id = document.nodes.items[div_id].first_child.?;
     const p_id = document.nodes.items[span_id].first_child.?;
     try std.testing.expect(!matchesSelector(ss.rules[0].selectors[0], p_id, &document));
+}
+
+test "CSS escapes match identifiers and declaration names" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>p.\\66 oo#\\62 ar, .\\31 23 { c\\6flor: rebeccapurple; }</style><p class='foo' id='bar'>escaped</p><div class='123'>digit</div>",
+    );
+    defer fixture.deinit(allocator);
+
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const paragraph = fixture.document.nodes.items[style_id].next_sibling.?;
+    const digit = fixture.document.nodes.items[paragraph].next_sibling.?;
+    try std.testing.expectEqualStrings("rebeccapurple", fixture.styles[paragraph].color);
+    try std.testing.expectEqualStrings("rebeccapurple", fixture.styles[digit].color);
 }
 
 test "specificity calculation" {

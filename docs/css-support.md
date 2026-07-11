@@ -30,7 +30,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; adjacent block margin collapse |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |
-| color/background color | Y | Y | Y | Y | Y | Y | Y | named/hex colors and `currentColor`; alpha still flattens before PDF paint |
+| color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `currentColor`, and native PDF alpha via ExtGState |
 | font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | built-in Noto Sans and registered TTF faces |
 | line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | no shaping, kerning, or per-glyph fallback yet |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
@@ -44,6 +44,8 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `float` | Y | Y | Y | - | - | - | Y | only none renders; others fail clearly |
 | selectors | Y | Y | - | - | - | - | Y | type, class, ID, universal, compound, descendant, child |
 | `!important`, inheritance, source order | Y | Y | Y | - | - | - | Y | author origin and inline style ordering |
+| supported shorthands | Y | Y | Y | - | - | - | Y | expanded to physical longhands before computed values |
+| escaped CSS identifiers | Y | Y | Y | - | - | - | Y | simple and hexadecimal escapes, including leading-digit class names |
 | CSS-wide keywords | Y | Y | Y | - | - | - | Y | `initial`, `inherit`, `unset`, `revert` |
 | custom properties / `var()` | Y | Y | Y | - | - | - | Y | inherited scopes, nested fallback, cycle detection |
 | browser pseudo-elements | Y | Y | Y | Y | Y | Y | Y | `::before`/`::after` strings and `attr()` become synthetic nodes; counters pending |
@@ -56,8 +58,8 @@ Playwright E2E make the matrix verifiable.
 
 ## Explicitly unsupported in the current profile
 
-- typed alpha/compositing and non-color typed values such as angles,
-  transforms, and images;
+- non-color typed values such as angles, transforms, and images; group opacity
+  and blend/compositing modes remain pending;
 - generated counters and complex pseudo-element `content` values;
 - Flexbox, Grid, floats, positioned/sticky layout, stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;

@@ -25,6 +25,7 @@ Read these local docs before changing code:
 - `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
 - The browser package is framework-agnostic; React refs are supported structurally without a React dependency.
 - Browser snapshots support deterministic screen/print media, explicit viewports, computed pseudo-elements, and opt-in open Shadow DOM flattening; native/WASM warnings use owned structured diagnostics.
+- CSS rgba/hex-alpha colors remain native vectors and use PDF ExtGState rather than flattening; supported shorthands expand into physical longhands before computed-value application.
 
 ## Commands
 

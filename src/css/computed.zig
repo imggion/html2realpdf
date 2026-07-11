@@ -20,13 +20,13 @@ const parseLength = values.parseLength;
 const parseDimension = values.parseDimension;
 const parseDimensionWithContext = values.parseDimensionWithContext;
 const parseLineHeight = values.parseLineHeight;
-const parseEdges = values.parseEdges;
 const parseTextAlign = values.parseTextAlign;
 const parseTextDecoration = values.parseTextDecoration;
 const parseBoxSizing = values.parseBoxSizing;
 const parseBorderCollapse = values.parseBorderCollapse;
 const parsePageBreak = values.parsePageBreak;
 const parseBorderStyle = values.parseBorderStyle;
+const parseBorderWidth = values.parseBorderWidth;
 const parsePositiveInteger = values.parsePositiveInteger;
 
 pub const Context = struct {
@@ -50,17 +50,15 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "background",          "background-color", "border",           "border-bottom",      "border-bottom-color",  "border-bottom-style",
-    "border-bottom-width", "border-collapse",  "border-color",     "border-left",        "border-left-color",    "border-left-style",
-    "border-left-width",   "border-radius",    "border-right",     "border-right-color", "border-right-style",   "border-right-width",
-    "border-style",        "border-top",       "border-top-color", "border-top-style",   "border-top-width",     "box-sizing",
-    "break-after",         "break-before",     "break-inside",     "color",              "display",              "float",
-    "font-family",         "font-size",        "font-style",       "font-weight",        "height",               "letter-spacing",
-    "line-height",         "margin",           "margin-bottom",    "margin-left",        "margin-right",         "margin-top",
-    "max-height",          "max-width",        "min-height",       "min-width",          "orphans",              "padding",
-    "padding-bottom",      "padding-left",     "padding-right",    "padding-top",        "page-break-after",     "page-break-before",
-    "page-break-inside",   "position",         "text-align",       "text-decoration",    "text-decoration-line", "white-space",
-    "widows",              "width",
+    "background-color",  "border-bottom-color", "border-bottom-style", "border-bottom-width", "border-collapse",    "border-left-color",
+    "border-left-style", "border-left-width",   "border-radius",       "border-right-color",  "border-right-style", "border-right-width",
+    "border-top-color",  "border-top-style",    "border-top-width",    "box-sizing",          "break-after",        "break-before",
+    "break-inside",      "color",               "display",             "float",               "font-family",        "font-size",
+    "font-style",        "font-weight",         "height",              "letter-spacing",      "line-height",        "margin-bottom",
+    "margin-left",       "margin-right",        "margin-top",          "max-height",          "max-width",          "min-height",
+    "min-width",         "orphans",             "padding-bottom",      "padding-left",        "padding-right",      "padding-top",
+    "page-break-after",  "page-break-before",   "page-break-inside",   "position",            "text-align",         "text-decoration-line",
+    "white-space",       "widows",              "width",
 };
 
 pub fn supportsProperty(name: []const u8) bool {
@@ -105,7 +103,7 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
             if (context.parent_style) |parent| parent.color else (box.Style{}).color
         else
             value;
-    } else if (eqlProp(name, "background") or eqlProp(name, "background-color")) {
+    } else if (eqlProp(name, "background-color")) {
         style.background = if (eqlProp(normalized, "currentColor")) style.color else value;
     } else if (eqlProp(name, "width")) {
         if (try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(style.font_size))) |w| style.width = w;
@@ -129,7 +127,7 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
         }
     } else if (eqlProp(name, "text-align")) {
         if (parseTextAlign(value)) |ta| style.text_align = ta;
-    } else if (eqlProp(name, "text-decoration") or eqlProp(name, "text-decoration-line")) {
+    } else if (eqlProp(name, "text-decoration-line")) {
         if (parseTextDecoration(value)) |decoration| style.text_decoration = decoration;
     } else if (eqlProp(name, "box-sizing")) {
         if (parseBoxSizing(value)) |bs| style.box_sizing = bs;
@@ -147,8 +145,6 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
         if (parsePositiveInteger(value)) |o| style.orphans = o;
     } else if (eqlProp(name, "widows")) {
         if (parsePositiveInteger(value)) |w| style.widows = w;
-    } else if (eqlProp(name, "margin")) {
-        style.margin = parseEdges(value);
     } else if (eqlProp(name, "margin-top")) {
         if (parseLength(value)) |l| style.margin.top = l;
     } else if (eqlProp(name, "margin-right")) {
@@ -157,8 +153,6 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
         if (parseLength(value)) |l| style.margin.bottom = l;
     } else if (eqlProp(name, "margin-left")) {
         if (parseLength(value)) |l| style.margin.left = l;
-    } else if (eqlProp(name, "padding")) {
-        style.padding = parseEdges(value);
     } else if (eqlProp(name, "padding-top")) {
         if (parseLength(value)) |l| style.padding.top = l;
     } else if (eqlProp(name, "padding-right")) {
@@ -167,23 +161,6 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
         if (parseLength(value)) |l| style.padding.bottom = l;
     } else if (eqlProp(name, "padding-left")) {
         if (parseLength(value)) |l| style.padding.left = l;
-    } else if (eqlProp(name, "border")) {
-        applyBorderShorthand(style, value, .all);
-    } else if (eqlProp(name, "border-top")) {
-        applyBorderShorthand(style, value, .top);
-    } else if (eqlProp(name, "border-right")) {
-        applyBorderShorthand(style, value, .right);
-    } else if (eqlProp(name, "border-bottom")) {
-        applyBorderShorthand(style, value, .bottom);
-    } else if (eqlProp(name, "border-left")) {
-        applyBorderShorthand(style, value, .left);
-    } else if (eqlProp(name, "border-style")) {
-        if (parseBorderStyle(value)) |bs| {
-            style.border_top_style = bs;
-            style.border_right_style = bs;
-            style.border_bottom_style = bs;
-            style.border_left_style = bs;
-        }
     } else if (eqlProp(name, "border-top-style")) {
         if (parseBorderStyle(value)) |bs| style.border_top_style = bs;
     } else if (eqlProp(name, "border-right-style")) {
@@ -192,12 +169,6 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
         if (parseBorderStyle(value)) |bs| style.border_bottom_style = bs;
     } else if (eqlProp(name, "border-left-style")) {
         if (parseBorderStyle(value)) |bs| style.border_left_style = bs;
-    } else if (eqlProp(name, "border-color")) {
-        const color = if (eqlProp(normalized, "currentColor")) style.color else value;
-        style.border_top_color = color;
-        style.border_right_color = color;
-        style.border_bottom_color = color;
-        style.border_left_color = color;
     } else if (eqlProp(name, "border-top-color")) {
         style.border_top_color = if (eqlProp(normalized, "currentColor")) style.color else value;
     } else if (eqlProp(name, "border-right-color")) {
@@ -207,13 +178,13 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
     } else if (eqlProp(name, "border-left-color")) {
         style.border_left_color = if (eqlProp(normalized, "currentColor")) style.color else value;
     } else if (eqlProp(name, "border-top-width")) {
-        if (parseLength(value)) |l| style.border.top = l;
+        if (parseBorderWidth(value)) |l| style.border.top = l;
     } else if (eqlProp(name, "border-right-width")) {
-        if (parseLength(value)) |l| style.border.right = l;
+        if (parseBorderWidth(value)) |l| style.border.right = l;
     } else if (eqlProp(name, "border-bottom-width")) {
-        if (parseLength(value)) |l| style.border.bottom = l;
+        if (parseBorderWidth(value)) |l| style.border.bottom = l;
     } else if (eqlProp(name, "border-left-width")) {
-        if (parseLength(value)) |l| style.border.left = l;
+        if (parseBorderWidth(value)) |l| style.border.left = l;
     }
 }
 
@@ -269,65 +240,4 @@ fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) 
         target.border_bottom_style = source.border_bottom_style;
         target.border_left_style = source.border_left_style;
     } else if (eqlProp(name, "border-top-color")) target.border_top_color = source.border_top_color else if (eqlProp(name, "border-right-color")) target.border_right_color = source.border_right_color else if (eqlProp(name, "border-bottom-color")) target.border_bottom_color = source.border_bottom_color else if (eqlProp(name, "border-left-color")) target.border_left_color = source.border_left_color else if (eqlProp(name, "border-top-style")) target.border_top_style = source.border_top_style else if (eqlProp(name, "border-right-style")) target.border_right_style = source.border_right_style else if (eqlProp(name, "border-bottom-style")) target.border_bottom_style = source.border_bottom_style else if (eqlProp(name, "border-left-style")) target.border_left_style = source.border_left_style else if (eqlProp(name, "border-top-width")) target.border.top = source.border.top else if (eqlProp(name, "border-right-width")) target.border.right = source.border.right else if (eqlProp(name, "border-bottom-width")) target.border.bottom = source.border.bottom else if (eqlProp(name, "border-left-width")) target.border.left = source.border.left;
-}
-
-const BorderSide = enum { all, top, right, bottom, left };
-
-const BorderShorthand = struct {
-    width: f32 = 3,
-    border_style: box.BorderStyle = .none,
-    color: ?[]const u8 = null,
-};
-
-fn applyBorderShorthand(style: *box.Style, value: []const u8, side: BorderSide) void {
-    var parsed = BorderShorthand{};
-    var saw_width = false;
-    var saw_style = false;
-    var tokens = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
-    while (tokens.next()) |token| {
-        if (!saw_width) {
-            if (parseBorderWidth(token)) |width| {
-                parsed.width = width;
-                saw_width = true;
-                continue;
-            }
-        }
-        if (!saw_style) {
-            if (parseBorderStyle(token)) |border_style| {
-                parsed.border_style = border_style;
-                saw_style = true;
-                continue;
-            }
-        }
-        parsed.color = token;
-    }
-    const color = parsed.color orelse style.color;
-
-    if (side == .all or side == .top) {
-        style.border.top = parsed.width;
-        style.border_top_style = parsed.border_style;
-        style.border_top_color = color;
-    }
-    if (side == .all or side == .right) {
-        style.border.right = parsed.width;
-        style.border_right_style = parsed.border_style;
-        style.border_right_color = color;
-    }
-    if (side == .all or side == .bottom) {
-        style.border.bottom = parsed.width;
-        style.border_bottom_style = parsed.border_style;
-        style.border_bottom_color = color;
-    }
-    if (side == .all or side == .left) {
-        style.border.left = parsed.width;
-        style.border_left_style = parsed.border_style;
-        style.border_left_color = color;
-    }
-}
-
-fn parseBorderWidth(value: []const u8) ?f32 {
-    if (eqlProp(value, "thin")) return 1;
-    if (eqlProp(value, "medium")) return 3;
-    if (eqlProp(value, "thick")) return 5;
-    return parseLength(value);
 }

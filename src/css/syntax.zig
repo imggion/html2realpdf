@@ -408,11 +408,34 @@ const CssParser = struct {
         const start = self.pos;
         if (!cssIdentStart(self.peek())) return "";
 
-        _ = self.next();
-        while (!self.eof() and cssIdentChar(self.peek())) {
-            _ = self.next();
+        while (!self.eof()) {
+            if (self.peek() == '\\') {
+                if (!self.consumeIdentEscape()) break;
+            } else if (cssIdentChar(self.peek())) {
+                _ = self.next();
+            } else {
+                break;
+            }
         }
         return self.input[start..self.pos];
+    }
+
+    fn consumeIdentEscape(self: *CssParser) bool {
+        if (self.peek() != '\\' or self.pos + 1 >= self.input.len) return false;
+        const escaped = self.input[self.pos + 1];
+        if (escaped == '\n' or escaped == '\r' or escaped == 0x0C) return false;
+        self.advance(2);
+        if (!std.ascii.isHex(escaped)) return true;
+
+        var digits: usize = 1;
+        while (!self.eof() and digits < 6 and std.ascii.isHex(self.peek())) : (digits += 1) {
+            _ = self.next();
+        }
+        if (!self.eof() and cssWhitespace(self.peek())) {
+            const first = self.next();
+            if (first == '\r' and self.peek() == '\n') _ = self.next();
+        }
+        return true;
     }
 
     fn parseDeclarations(self: *CssParser) ![]Declaration {
@@ -531,7 +554,15 @@ const CssParser = struct {
     fn parseDeclarationName(self: *CssParser) []const u8 {
         const start = self.pos;
         if (!self.startsDeclarationName()) return "";
-        while (!self.eof() and cssIdentChar(self.peek())) _ = self.next();
+        while (!self.eof()) {
+            if (self.peek() == '\\') {
+                if (!self.consumeIdentEscape()) break;
+            } else if (cssIdentChar(self.peek())) {
+                _ = self.next();
+            } else {
+                break;
+            }
+        }
         return self.input[start..self.pos];
     }
 
@@ -583,11 +614,73 @@ fn cssWhitespace(c: u8) bool {
 }
 
 fn cssIdentStart(c: u8) bool {
-    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c > 0x7F;
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c == '-' or c == '\\' or c > 0x7F;
 }
 
 fn cssIdentChar(c: u8) bool {
-    return cssIdentStart(c) or (c >= '0' and c <= '9') or c == '-';
+    return cssIdentStart(c) or (c >= '0' and c <= '9');
+}
+
+pub fn identifierEquals(css_identifier: []const u8, value: []const u8, ascii_insensitive: bool) bool {
+    var css_index: usize = 0;
+    var value_index: usize = 0;
+    while (true) {
+        const css_codepoint = nextCssIdentifierCodepoint(css_identifier, &css_index);
+        const value_codepoint = nextUtf8Codepoint(value, &value_index);
+        if (css_codepoint == null or value_codepoint == null) return css_codepoint == null and value_codepoint == null;
+        const left = if (ascii_insensitive and css_codepoint.? <= 0x7F) std.ascii.toLower(@intCast(css_codepoint.?)) else css_codepoint.?;
+        const right = if (ascii_insensitive and value_codepoint.? <= 0x7F) std.ascii.toLower(@intCast(value_codepoint.?)) else value_codepoint.?;
+        if (left != right) return false;
+    }
+}
+
+fn nextCssIdentifierCodepoint(input: []const u8, index: *usize) ?u21 {
+    if (index.* >= input.len) return null;
+    if (input[index.*] != '\\') return nextUtf8Codepoint(input, index);
+    index.* += 1;
+    if (index.* >= input.len) return 0xFFFD;
+
+    if (std.ascii.isHex(input[index.*])) {
+        var value: u32 = 0;
+        var digits: usize = 0;
+        while (index.* < input.len and digits < 6 and std.ascii.isHex(input[index.*])) : (digits += 1) {
+            value = value * 16 + hexValue(input[index.*]);
+            index.* += 1;
+        }
+        if (index.* < input.len and cssWhitespace(input[index.*])) {
+            const first = input[index.*];
+            index.* += 1;
+            if (first == '\r' and index.* < input.len and input[index.*] == '\n') index.* += 1;
+        }
+        if (value == 0 or value > 0x10FFFF or (value >= 0xD800 and value <= 0xDFFF)) return 0xFFFD;
+        return @intCast(value);
+    }
+
+    return nextUtf8Codepoint(input, index);
+}
+
+fn nextUtf8Codepoint(input: []const u8, index: *usize) ?u21 {
+    if (index.* >= input.len) return null;
+    const length = std.unicode.utf8ByteSequenceLength(input[index.*]) catch {
+        index.* += 1;
+        return 0xFFFD;
+    };
+    if (index.* + length > input.len) {
+        index.* = input.len;
+        return 0xFFFD;
+    }
+    const codepoint = std.unicode.utf8Decode(input[index.* .. index.* + length]) catch 0xFFFD;
+    index.* += length;
+    return codepoint;
+}
+
+fn hexValue(byte: u8) u8 {
+    return switch (byte) {
+        '0'...'9' => byte - '0',
+        'a'...'f' => byte - 'a' + 10,
+        'A'...'F' => byte - 'A' + 10,
+        else => 0,
+    };
 }
 
 // ---------------------------------------------------------------

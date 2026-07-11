@@ -333,9 +333,9 @@ function materializeComputedStyle(
   for (const property of properties) {
     const value = property === "display" ? display : computed.getPropertyValue(property);
     if (isFlowDimension(property) && !shouldMaterializeFlowDimension(original, property, isSnapshotRoot)) continue;
-    // The Zig color parser currently flattens alpha over white. Serializing a
-    // transparent background for every descendant would therefore paint white
-    // boxes over a colored ancestor instead of preserving browser compositing.
+    // A fully transparent background has no paint effect. Omitting it keeps
+    // the display list compact while semi-transparent colors retain real PDF
+    // alpha through ExtGState.
     if (property === "background-color" && isFullyTransparentColor(value)) continue;
     if (value) declarations.push(`${property}:${value}`);
   }

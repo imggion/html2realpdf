@@ -6,9 +6,10 @@
 const std = @import("std");
 const box = @import("../box.zig");
 const expressions = @import("expressions.zig");
+const syntax = @import("syntax.zig");
 
 pub fn eqlProp(a: []const u8, b: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(a, b);
+    return syntax.identifierEquals(a, b, true);
 }
 
 pub fn parseDisplay(value: []const u8) ?box.Display {
@@ -218,6 +219,13 @@ pub fn parseBorderStyle(value: []const u8) ?box.BorderStyle {
     if (eqlProp(v, "dashed")) return .dashed;
     if (eqlProp(v, "dotted")) return .dotted;
     return null;
+}
+
+pub fn parseBorderWidth(value: []const u8) ?f32 {
+    if (eqlProp(value, "thin")) return 1;
+    if (eqlProp(value, "medium")) return 3;
+    if (eqlProp(value, "thick")) return 5;
+    return parseLength(value);
 }
 
 pub fn parsePositiveInteger(value: []const u8) ?u32 {

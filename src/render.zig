@@ -180,6 +180,21 @@ test "return structured diagnostics for ignored CSS declarations" {
     try std.testing.expect(std.mem.indexOf(u8, result.diagnostics_json, "\"phase\":\"computed\"") != null);
 }
 
+test "preserve CSS alpha as a native PDF graphics state" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<p style=\"background:rgba(255, 0, 0, 0.5);color:rgba(0, 0, 255, 0.75)\">alpha</p>",
+        .{},
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/ExtGState <<") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/ca 0.5000 /CA 0.5000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/ca 0.7500 /CA 0.7500") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
+}
+
 test "render anchor elements as PDF link annotations" {
     const allocator = std.testing.allocator;
     var result = try renderHtml(

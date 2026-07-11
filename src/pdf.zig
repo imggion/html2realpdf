@@ -97,6 +97,52 @@ const FontUsage = struct {
     }
 };
 
+const AlphaUsage = struct {
+    values: std.ArrayList(f32),
+    has_transparency: bool = false,
+
+    fn init(allocator: std.mem.Allocator) !AlphaUsage {
+        var values = try std.ArrayList(f32).initCapacity(allocator, 1);
+        try values.append(allocator, 1);
+        return .{ .values = values };
+    }
+
+    fn deinit(self: *AlphaUsage, allocator: std.mem.Allocator) void {
+        self.values.deinit(allocator);
+    }
+
+    fn collect(self: *AlphaUsage, allocator: std.mem.Allocator, list: *const display_list.DisplayList) !void {
+        for (list.commands.items) |page_command| {
+            const alpha: ?f32 = switch (page_command.command) {
+                .fill_rect => |command| command.color.alpha,
+                .fill_rounded_rect => |command| command.color.alpha,
+                .stroke_rounded_rect => |command| command.color.alpha,
+                .stroke_line => |command| command.color.alpha,
+                .text => |command| command.color.alpha,
+                .link, .image => null,
+            };
+            if (alpha) |value| try self.add(allocator, value);
+        }
+    }
+
+    fn add(self: *AlphaUsage, allocator: std.mem.Allocator, raw: f32) !void {
+        const value = std.math.clamp(raw, 0, 1);
+        if (value < 0.9999) self.has_transparency = true;
+        for (self.values.items) |existing| {
+            if (@abs(existing - value) <= 0.0001) return;
+        }
+        try self.values.append(allocator, value);
+    }
+
+    fn index(self: *const AlphaUsage, raw: f32) usize {
+        const value = std.math.clamp(raw, 0, 1);
+        for (self.values.items, 0..) |existing, alpha_index| {
+            if (@abs(existing - value) <= 0.0001) return alpha_index;
+        }
+        return 0;
+    }
+};
+
 pub fn write(allocator: std.mem.Allocator, list: *const display_list.DisplayList) ![]u8 {
     return writeWithOptions(allocator, list, .{});
 }
@@ -107,6 +153,9 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     var font_usage = try FontUsage.init(allocator, options.font_registry);
     defer font_usage.deinit(allocator);
     try font_usage.collect(list);
+    var alpha_usage = try AlphaUsage.init(allocator);
+    defer alpha_usage.deinit(allocator);
+    try alpha_usage.collect(allocator, list);
 
     const first_page_id = 3 + font_usage.fonts.items.len * font_object_span;
     const page_object_count = first_page_id - 1 + list.page_count * 2;
@@ -159,6 +208,13 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
             try writer.print(" /F{d} {d} 0 R", .{ used_index + 1, type0FontObjectId(used_index) });
         }
         try writer.writeAll(" >>");
+        if (alpha_usage.has_transparency) {
+            try writer.writeAll(" /ExtGState <<");
+            for (alpha_usage.values.items, 0..) |alpha, alpha_index| {
+                try writer.print(" /GS{d} << /Type /ExtGState /ca {d:.4} /CA {d:.4} >>", .{ alpha_index, alpha, alpha });
+            }
+            try writer.writeAll(" >>");
+        }
         var image_index: usize = 0;
         var wrote_images = false;
         for (list.commands.items) |command| {
@@ -192,7 +248,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
         if (wrote_annots) try writer.writeAll(" ]");
         try writer.writeAll(" >>\nendobj\n");
 
-        const content = try pageContent(allocator, list, page_index, &font_usage);
+        const content = try pageContent(allocator, list, page_index, &font_usage, &alpha_usage);
         defer allocator.free(content);
         const compressed_content = try image_decoder.compressZlib(allocator, content);
         defer allocator.free(compressed_content);
@@ -247,6 +303,7 @@ fn pageContent(
     list: *const display_list.DisplayList,
     page_index: usize,
     font_usage: *const FontUsage,
+    alpha_usage: *const AlphaUsage,
 ) ![]u8 {
     var content = std.Io.Writer.Allocating.init(allocator);
     errdefer content.deinit();
@@ -266,6 +323,7 @@ fn pageContent(
             .fill_rect => |fill| {
                 const x = margins.left + fill.rect.x * scale;
                 const y = page_height - margins.top - (fill.rect.y + fill.rect.height) * scale;
+                try writeAlphaState(writer, alpha_usage, fill.color.alpha);
                 try writeFillColor(writer, fill.color);
                 try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} re f\n", .{
                     x,
@@ -279,6 +337,7 @@ fn pageContent(
                 const y = page_height - margins.top - (fill.rect.y + fill.rect.height) * scale;
                 const width = fill.rect.width * scale;
                 const height = fill.rect.height * scale;
+                try writeAlphaState(writer, alpha_usage, fill.color.alpha);
                 try writeFillColor(writer, fill.color);
                 try writeRoundedRectPath(writer, x, y, width, height, fill.radius * scale);
                 try writer.writeAll("f\n");
@@ -288,6 +347,7 @@ fn pageContent(
                 const y = page_height - margins.top - (stroke.rect.y + stroke.rect.height) * scale;
                 const width = stroke.rect.width * scale;
                 const height = stroke.rect.height * scale;
+                try writeAlphaState(writer, alpha_usage, stroke.color.alpha);
                 try writeStrokeColor(writer, stroke.color);
                 switch (stroke.style) {
                     .none, .solid => try writer.writeAll("[] 0 d 0 J\n"),
@@ -303,6 +363,7 @@ fn pageContent(
                 const y1 = page_height - margins.top - line.from.y * scale;
                 const x2 = margins.left + line.to.x * scale;
                 const y2 = page_height - margins.top - line.to.y * scale;
+                try writeAlphaState(writer, alpha_usage, line.color.alpha);
                 try writeStrokeColor(writer, line.color);
                 switch (line.style) {
                     .none, .solid => try writer.writeAll("[] 0 d 0 J\n"),
@@ -323,6 +384,7 @@ fn pageContent(
                 const font_size_points = run.font_size * scale;
                 const x = margins.left + run.position.x * scale;
                 const baseline = page_height - margins.top - (run.position.y + run.font_size * metrics.ascentRatio()) * scale;
+                try writeAlphaState(writer, alpha_usage, run.color.alpha);
                 try writeFillColor(writer, run.color);
                 try writer.print("BT /F{d} {d:.3} Tf {d:.3} Tc 1 0 0 1 {d:.3} {d:.3} Tm <", .{
                     used_font_index + 1,
@@ -360,6 +422,7 @@ fn pageContent(
                 const image_index = imageIndexAt(list, command_index);
                 const x = margins.left + image_command.rect.x * scale;
                 const y = page_height - margins.top - (image_command.rect.y + image_command.rect.height) * scale;
+                try writeAlphaState(writer, alpha_usage, 1);
                 try writer.print("q {d:.3} 0 0 {d:.3} {d:.3} {d:.3} cm /Im{d} Do Q\n", .{
                     image_command.rect.width * scale,
                     image_command.rect.height * scale,
@@ -547,7 +610,7 @@ fn writePdfTextString(writer: *std.Io.Writer, text: []const u8) !void {
 }
 
 fn colorsEqual(a: geometry.Color, b: geometry.Color) bool {
-    return a.red == b.red and a.green == b.green and a.blue == b.blue;
+    return a.red == b.red and a.green == b.green and a.blue == b.blue and a.alpha == b.alpha;
 }
 
 fn beginObject(output: *std.Io.Writer.Allocating, offsets: []usize, object_id: usize) !void {
@@ -715,6 +778,11 @@ fn writeFillColor(writer: *std.Io.Writer, color: geometry.Color) !void {
     try writer.print("{d:.4} {d:.4} {d:.4} rg\n", .{ color.red, color.green, color.blue });
 }
 
+fn writeAlphaState(writer: *std.Io.Writer, usage: *const AlphaUsage, alpha: f32) !void {
+    if (!usage.has_transparency) return;
+    try writer.print("/GS{d} gs\n", .{usage.index(alpha)});
+}
+
 fn writeStrokeColor(writer: *std.Io.Writer, color: geometry.Color) !void {
     try writer.print("{d:.4} {d:.4} {d:.4} RG\n", .{ color.red, color.green, color.blue });
 }
@@ -782,4 +850,38 @@ test "write a valid-looking multi-page PDF with selectable text commands" {
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/Subtype /Link") != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "https://example.com") != null);
     try std.testing.expect(std.mem.endsWith(u8, bytes, "%%EOF\n"));
+}
+
+test "write real fill and stroke alpha through PDF ExtGState" {
+    const pagination = @import("pagination.zig");
+    const allocator = std.testing.allocator;
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 2);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .command = .{ .fill_rect = .{
+            .rect = .{ .x = 10, .y = 10, .width = 80, .height = 30 },
+            .color = .{ .red = 1, .green = 0, .blue = 0, .alpha = 0.5 },
+        } },
+    });
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .command = .{ .stroke_line = .{
+            .from = .{ .x = 10, .y = 50 },
+            .to = .{ .x = 90, .y = 50 },
+            .width = 2,
+            .color = .{ .red = 0, .green = 0, .blue = 1, .alpha = 0.25 },
+        } },
+    });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    const bytes = try write(allocator, &list);
+    defer allocator.free(bytes);
+
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ExtGState <<") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.5000 /CA 0.5000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.2500 /CA 0.2500") != null);
 }

@@ -89,5 +89,6 @@ fn colorsEqual(left: geometry.Color, right: geometry.Color) bool {
     const tolerance: f32 = 0.0001;
     return @abs(left.red - right.red) <= tolerance and
         @abs(left.green - right.green) <= tolerance and
-        @abs(left.blue - right.blue) <= tolerance;
+        @abs(left.blue - right.blue) <= tolerance and
+        @abs(left.alpha - right.alpha) <= tolerance;
 }

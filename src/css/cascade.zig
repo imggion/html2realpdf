@@ -9,6 +9,7 @@ const selectors = @import("selectors.zig");
 const computed = @import("computed.zig");
 const expressions = @import("expressions.zig");
 const variables = @import("variables.zig");
+const shorthands = @import("shorthands.zig");
 const diagnostics = @import("../diagnostics.zig");
 
 const Stylesheet = syntax.Stylesheet;
@@ -171,12 +172,8 @@ fn applyMatchedDeclarations(
         const rule = stylesheets[match.stylesheet_idx].rules[match.rule_idx];
         for (rule.declarations) |declaration| {
             if (declaration.important != important or isCustomProperty(declaration.name)) continue;
-            if (!computed.supportsProperty(declaration.name)) {
-                try reportUnsupportedProperty(computed_context.allocator, computed_context, declaration.name);
-                continue;
-            }
             const resolved = try variables.resolve(scratch, custom_scope, declaration.value) orelse continue;
-            try applyDeclaration(computed_context, style, declaration.name, resolved);
+            try applyCascadedDeclaration(style, declaration.name, resolved, declaration.important, computed_context, scratch);
         }
     }
 }
@@ -202,13 +199,31 @@ fn applyInlineStyle(
 
     for (stylesheet.rules[0].declarations) |declaration| {
         if (declaration.important != important or isCustomProperty(declaration.name)) continue;
-        if (!computed.supportsProperty(declaration.name)) {
-            try reportUnsupportedProperty(computed_context.allocator, computed_context, declaration.name);
-            continue;
-        }
         const resolved = try variables.resolve(scratch, custom_scope, declaration.value) orelse continue;
-        try applyDeclaration(computed_context, style, declaration.name, resolved);
+        try applyCascadedDeclaration(style, declaration.name, resolved, declaration.important, computed_context, scratch);
     }
+}
+
+fn applyCascadedDeclaration(
+    style: *box.Style,
+    name: []const u8,
+    value: []const u8,
+    important: bool,
+    computed_context: computed.Context,
+    scratch: std.mem.Allocator,
+) !void {
+    if (try shorthands.expand(scratch, name, value, important)) |expansion| {
+        defer expansion.deinit(scratch);
+        for (expansion.declarations) |longhand| {
+            try applyDeclaration(computed_context, style, longhand.name, longhand.value);
+        }
+        return;
+    }
+    if (!computed.supportsProperty(name)) {
+        try reportUnsupportedProperty(computed_context.allocator, computed_context, name);
+        return;
+    }
+    try applyDeclaration(computed_context, style, name, value);
 }
 
 fn reportUnsupportedProperty(

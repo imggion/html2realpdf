@@ -39,7 +39,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "break-after", .stage = layout },
     .{ .name = "break-before", .stage = layout },
     .{ .name = "break-inside", .stage = layout },
-    .{ .name = "color", .stage = full, .notes = "currentColor supported; alpha compositing pending" },
+    .{ .name = "color", .stage = full, .notes = "currentColor and native PDF alpha via ExtGState" },
     .{ .name = "display", .stage = layout, .notes = "block inline inline-block and table roles" },
     .{ .name = "float", .stage = computed_only, .notes = "non-none rejected by renderer" },
     .{ .name = "font-family", .stage = full },
@@ -66,11 +66,13 @@ pub const document_profile = [_]PropertySupport{
 
 pub const web_foundations = [_]FeatureSupport{
     .{ .name = "browser-media-snapshot", .stage = computed_only, .notes = "deterministic viewport and screen/print selection" },
+    .{ .name = "css-identifier-escapes", .stage = computed_only, .notes = "simple and hexadecimal escapes" },
     .{ .name = "css-wide-keywords", .stage = computed_only, .notes = "initial inherit unset revert" },
     .{ .name = "custom-properties", .stage = computed_only, .notes = "var fallback inheritance and cycle detection" },
     .{ .name = "math-functions", .stage = layout, .notes = "calc min max clamp with contextual percentages" },
     .{ .name = "pseudo-elements", .stage = full, .notes = "browser ::before/::after strings and attr; counters pending" },
     .{ .name = "shadow-dom", .stage = full, .notes = "opt-in open shadow root and slot flattening" },
+    .{ .name = "shorthand-expansion", .stage = computed_only, .notes = "supported shorthands become physical longhands before computed values" },
 };
 
 test "document profile entries are sorted and uniquely named" {

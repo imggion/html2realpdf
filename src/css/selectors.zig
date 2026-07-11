@@ -57,7 +57,7 @@ fn matchesCompound(tests: []const SelectorTest, node_id: dom.NodeId, document: *
         switch (t) {
             .universal => {},
             .tag => |tag| {
-                if (!std.ascii.eqlIgnoreCase(element.name, tag)) return false;
+                if (!syntax.identifierEquals(tag, element.name, true)) return false;
             },
             .class => |class_name| {
                 if (!matchesClass(element, class_name)) return false;
@@ -86,13 +86,13 @@ fn matchesClass(element: dom.Element, class_name: []const u8) bool {
 
 fn matchesId(element: dom.Element, id_value: []const u8) bool {
     const attr_value = getAttributeValue(element.attributes, "id") orelse return false;
-    return std.ascii.eqlIgnoreCase(attr_value, id_value);
+    return syntax.identifierEquals(id_value, attr_value, false);
 }
 
 fn hasToken(value: []const u8, token: []const u8) bool {
     var iter = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
     while (iter.next()) |t| {
-        if (std.mem.eql(u8, t, token)) return true;
+        if (syntax.identifierEquals(token, t, false)) return true;
     }
     return false;
 }
