@@ -25,6 +25,7 @@ Read these local docs before changing code:
 - Inline CSS Text support includes percentage `text-indent`, ASCII case transforms, emergency codepoint wrapping, mixed-font baseline alignment, `vertical-align`, and `word-spacing`; preserve word spacing through fragment/display-list state and PDF Type 0 `TJ` adjustments so geometry and selectable text remain aligned.
 - Text decorations retain combined line flags, color, thickness, and style through layout; double and wavy decorations remain vector stroke commands rather than raster effects.
 - The browser fixture set includes portrait reports and an A4 landscape presentation deck; keep both available from `tests/web/index.html` and in automated browser verification.
+- Browser pseudo-element snapshots resolve nested CSS counters before emitting synthetic text nodes; keep counter scope traversal in `bindings/js/src/snapshot.ts` rather than teaching the PDF core browser-only generated-content state.
 - `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
 - The browser package is framework-agnostic; React refs are supported structurally without a React dependency.
 - Browser snapshots support deterministic screen/print media, explicit viewports, computed pseudo-elements, and opt-in open Shadow DOM flattening; native/WASM warnings use owned structured diagnostics.

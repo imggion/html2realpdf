@@ -54,7 +54,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | escaped CSS identifiers | Y | Y | Y | - | - | - | Y | simple and hexadecimal escapes, including leading-digit class names |
 | CSS-wide keywords | Y | Y | Y | - | - | - | Y | `initial`, `inherit`, `unset`, `revert` |
 | custom properties / `var()` | Y | Y | Y | - | - | - | Y | inherited scopes, nested fallback, cycle detection |
-| browser pseudo-elements | Y | Y | Y | Y | Y | Y | Y | `::before`/`::after` strings and `attr()` become synthetic nodes; counters pending |
+| browser pseudo-elements | Y | Y | Y | Y | Y | Y | Y | `::before`/`::after` strings, `attr()`, and nested `counter()`/`counters()` become synthetic nodes |
 | browser media/viewport snapshot | Y | Y | Y | - | - | - | Y | deterministic viewport for strings, Elements, and refs; explicit `screen` or `print`; transitions/animations frozen |
 | open Shadow DOM snapshot | Y | Y | Y | Y | Y | Y | Y | opt-in composed-tree flattening with slots |
 | external stylesheet snapshot | Y | Y | Y | - | - | - | Y | HTML-string network access is mediated by `resourceResolver` and resource policy |
@@ -67,7 +67,7 @@ Playwright E2E make the matrix verifiable.
 
 - non-color typed values such as angles, transforms, and images; group opacity
   and blend/compositing modes remain pending;
-- generated counters and complex pseudo-element `content` values;
+- complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
 - Flexbox, Grid, floats, positioned/sticky layout, stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
 - complete Unicode shaping, bidi, ligatures, kerning, locale-aware case

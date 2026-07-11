@@ -621,13 +621,32 @@ async function verifyComputedVariablesAndPseudoElements() {
     .computed-profile-fixture { --accent: rgb(14, 116, 144); --gutter: 20px; width: calc(240px - var(--gutter)); color: var(--accent); }
     .computed-profile-fixture::before { content: "Prefix " attr(data-code) " \\2192 "; font-weight: 700; color: var(--accent); }
     .computed-profile-fixture::after { content: " suffix"; }
+    .counter-profile { counter-reset: item; }
+    .counter-profile ol { counter-reset: item; }
+    .counter-profile li { counter-increment: item; }
+    .counter-profile li::before { content: counters(item, ".") ". "; }
+    .counter-profile li::after { content: " [" counter(item, upper-roman) "]"; }
+    .sibling-counter h2:first-of-type { counter-reset: section 3; }
+    .sibling-counter h2:last-of-type { counter-reset: section 10; }
+    .sibling-counter h3 { counter-increment: section; }
+    .sibling-counter h3::before { content: counter(section) ". "; }
+    .sibling-counter p { counter-reset: step 1; counter-increment: step 4; counter-set: step 9; }
+    .sibling-counter p::before { content: counter(step) ". "; }
   `;
   const fixture = document.createElement("div");
   fixture.className = "computed-profile-fixture";
   fixture.dataset.code = "A17";
   fixture.textContent = "content";
+  const counterFixture = document.createElement("ol");
+  counterFixture.className = "counter-profile";
+  counterFixture.innerHTML = "<li>first<ol><li>nested one</li><li>nested two</li></ol></li><li>second</li>";
+  const siblingCounterFixture = document.createElement("div");
+  siblingCounterFixture.className = "sibling-counter";
+  siblingCounterFixture.innerHTML = "<h2>first scope</h2><h3>one</h3><h3>two</h3><h2>second scope</h2><h3>three</h3><p>set order</p>";
   document.head.append(style);
   document.body.append(fixture);
+  document.body.append(counterFixture);
+  document.body.append(siblingCounterFixture);
 
   try {
     const snapshot = await snapshotSource(fixture, { resourcePolicy: "error", enableLinks: true });
@@ -641,8 +660,35 @@ async function verifyComputedVariablesAndPseudoElements() {
     if (before?.textContent !== "Prefix A17 →") throw new Error(`::before content was not materialized: ${before?.textContent}`);
     if (after?.textContent !== " suffix") throw new Error("::after content was not materialized");
     if ((before instanceof HTMLElement ? before.style.fontWeight : "") !== "700") throw new Error("::before computed style was not captured");
+
+    const counterSnapshot = await snapshotSource(counterFixture, { resourcePolicy: "error" });
+    const counterTemplate = document.createElement("template");
+    counterTemplate.innerHTML = counterSnapshot.html;
+    const beforeCounters = [...counterTemplate.content.querySelectorAll("[data-html2realpdf-pseudo='before']")].map((node) => node.textContent);
+    const afterCounters = [...counterTemplate.content.querySelectorAll("[data-html2realpdf-pseudo='after']")].map((node) => node.textContent);
+    if (beforeCounters.join("|") !== "1. |1.1. |1.2. |2. ") throw new Error(`nested counters were not materialized: ${beforeCounters.join("|")}`);
+    if (afterCounters.join("|") !== " [I]| [II]| [I]| [II]") throw new Error(`counter styles were not materialized: ${afterCounters.join("|")}`);
+
+    const secondItem = counterFixture.children[1];
+    if (!secondItem) throw new Error("counter fixture lost its second item");
+    const subtreeSnapshot = await snapshotSource(secondItem, { resourcePolicy: "error" });
+    const subtreeTemplate = document.createElement("template");
+    subtreeTemplate.innerHTML = subtreeSnapshot.html;
+    if (subtreeTemplate.content.querySelector("[data-html2realpdf-pseudo='before']")?.textContent !== "2. ") {
+      throw new Error("Element/ref snapshot did not retain counter state from preceding siblings");
+    }
+
+    const siblingSnapshot = await snapshotSource(siblingCounterFixture, { resourcePolicy: "error" });
+    const siblingTemplate = document.createElement("template");
+    siblingTemplate.innerHTML = siblingSnapshot.html;
+    const siblingCounters = [...siblingTemplate.content.querySelectorAll("[data-html2realpdf-pseudo='before']")].map((node) => node.textContent);
+    if (siblingCounters.join("|") !== "4. |5. |11. |9. ") {
+      throw new Error(`sibling counter scope or operation order was wrong: ${siblingCounters.join("|")}`);
+    }
   } finally {
     fixture.remove();
+    counterFixture.remove();
+    siblingCounterFixture.remove();
     style.remove();
   }
 }

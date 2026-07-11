@@ -263,7 +263,8 @@ function synchronizeEnvironmentState(original: Element, clone: Element): void {
 
 async function snapshotElement(element: Element, options: SnapshotOptions): Promise<{ clone: Element; diagnostics: Diagnostic[] }> {
   const diagnostics: Diagnostic[] = [];
-  const clone = cloneSnapshotElement(element, options, diagnostics, true);
+  const counters = CounterState.forSnapshotRoot(element, options.includeShadowDom === true);
+  const clone = cloneSnapshotElement(element, options, diagnostics, true, counters);
 
   for (const active of clone.matches(ACTIVE_ELEMENTS) ? [clone] : clone.querySelectorAll(ACTIVE_ELEMENTS)) {
     active.remove();
@@ -350,18 +351,25 @@ function cloneSnapshotElement(
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
   isSnapshotRoot: boolean,
+  counters: CounterState,
 ): Element {
+  const leaveCounterScope = counters.enter(original);
   const target = original.cloneNode(false) as Element;
-  materializeComputedStyle(original, target, options, diagnostics, isSnapshotRoot);
+  try {
+    materializeComputedStyle(original, target, options, diagnostics, isSnapshotRoot);
+    materializePseudoElement(original, target, "::before", options, diagnostics, counters);
 
-  const childRoot = options.includeShadowDom && original.shadowRoot ? original.shadowRoot : original;
-  for (const child of childRoot.childNodes) appendSnapshotNode(target, child, options, diagnostics);
+    const childRoot = options.includeShadowDom && original.shadowRoot ? original.shadowRoot : original;
+    for (const child of childRoot.childNodes) appendSnapshotNode(target, child, options, diagnostics, counters);
 
-  materializePseudoElements(original, target, options, diagnostics);
-  const materialized = materializeLiveState(original, target);
-  removeEventHandlers(materialized);
-  if (childRoot !== original) materialized.setAttribute("data-html2realpdf-shadow-host", "open");
-  return materialized;
+    materializePseudoElement(original, target, "::after", options, diagnostics, counters);
+    const materialized = materializeLiveState(original, target);
+    removeEventHandlers(materialized);
+    if (childRoot !== original) materialized.setAttribute("data-html2realpdf-shadow-host", "open");
+    return materialized;
+  } finally {
+    leaveCounterScope();
+  }
 }
 
 function appendSnapshotNode(
@@ -369,6 +377,7 @@ function appendSnapshotNode(
   source: Node,
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
+  counters: CounterState,
 ): void {
   if (source.nodeType === Node.TEXT_NODE) {
     parent.append(parent.ownerDocument.createTextNode(source.textContent ?? ""));
@@ -381,10 +390,10 @@ function appendSnapshotNode(
     const slot = element as HTMLSlotElement;
     const assigned = slot.assignedNodes({ flatten: true });
     const nodes = assigned.length > 0 ? assigned : [...slot.childNodes];
-    for (const node of nodes) appendSnapshotNode(parent, node, options, diagnostics);
+    for (const node of nodes) appendSnapshotNode(parent, node, options, diagnostics, counters);
     return;
   }
-  parent.append(cloneSnapshotElement(element, options, diagnostics, false));
+  parent.append(cloneSnapshotElement(element, options, diagnostics, false, counters));
 }
 
 function forceRequestedMedia(document: Document, mediaType: MediaType, viewport: ViewportOptions): void {
@@ -501,6 +510,191 @@ function isRefLike(source: Exclude<HtmlSource, string>): source is { readonly cu
   return !(source instanceof Element) && "current" in source;
 }
 
+interface CounterOperation {
+  name: string;
+  value: number;
+}
+
+interface CounterInstance {
+  name: string;
+  creator: CounterNode;
+  value: number;
+}
+
+interface CounterNode {
+  parent: CounterNode | null;
+  previousSibling: CounterNode | null;
+  counters: CounterInstance[];
+}
+
+class CounterState {
+  readonly #elements = new Map<Element, CounterNode>();
+  readonly #pseudos = new Map<Element, Partial<Record<"::before" | "::after", CounterNode>>>();
+  #active: readonly CounterInstance[] = [];
+  #lastNode: CounterNode | null = null;
+
+  static forSnapshotRoot(root: Element, includeShadowDom: boolean): CounterState {
+    const state = new CounterState();
+    const treeRoot = root.ownerDocument.documentElement;
+    if (treeRoot?.contains(root)) state.buildElement(treeRoot, null, null, includeShadowDom, false);
+    else state.buildElement(root, null, null, includeShadowDom, false);
+    return state;
+  }
+
+  enter(element: Element): () => void {
+    const previous = this.#active;
+    this.#active = this.#elements.get(element)?.counters ?? [];
+    return () => {
+      this.#active = previous;
+    };
+  }
+
+  enterPseudo(element: Element, pseudo: "::before" | "::after"): () => void {
+    const previous = this.#active;
+    this.#active = this.#pseudos.get(element)?.[pseudo]?.counters ?? previous;
+    return () => {
+      this.#active = previous;
+    };
+  }
+
+  current(name: string): number {
+    return findInnermostCounter(this.#active, name)?.value ?? 0;
+  }
+
+  values(name: string): readonly number[] {
+    const values = this.#active.filter((counter) => counter.name === name).map((counter) => counter.value);
+    return values.length ? values : [0];
+  }
+
+  private buildElement(
+    element: Element,
+    parent: CounterNode | null,
+    previousSibling: CounterNode | null,
+    includeShadowDom: boolean,
+    suppressed: boolean,
+  ): CounterNode {
+    const node = this.createNode(parent, previousSibling);
+    this.#elements.set(element, node);
+    const view = element.ownerDocument.defaultView ?? window;
+    const computed = view.getComputedStyle(element);
+    const hidden = suppressed || computed.getPropertyValue("display") === "none";
+    if (!hidden) applyCounterProperties(node, computed);
+    this.#lastNode = node;
+
+    let childSibling: CounterNode | null = null;
+    const before = this.buildPseudo(element, "::before", node, childSibling, hidden);
+    if (before) childSibling = before;
+    for (const child of counterChildren(element, includeShadowDom)) {
+      childSibling = this.buildElement(child, node, childSibling, includeShadowDom, hidden);
+    }
+    this.buildPseudo(element, "::after", node, childSibling, hidden);
+    return node;
+  }
+
+  private buildPseudo(
+    element: Element,
+    pseudo: "::before" | "::after",
+    parent: CounterNode,
+    previousSibling: CounterNode | null,
+    suppressed: boolean,
+  ): CounterNode | null {
+    if (suppressed || isReplacedOrControl(element)) return null;
+    const view = element.ownerDocument.defaultView ?? window;
+    const computed = view.getComputedStyle(element, pseudo);
+    const content = computed.getPropertyValue("content").trim();
+    if (!content || content === "none" || content === "normal" || computed.getPropertyValue("display") === "none") return null;
+    const node = this.createNode(parent, previousSibling);
+    applyCounterProperties(node, computed);
+    const pseudos = this.#pseudos.get(element) ?? {};
+    pseudos[pseudo] = node;
+    this.#pseudos.set(element, pseudos);
+    this.#lastNode = node;
+    return node;
+  }
+
+  private createNode(parent: CounterNode | null, previousSibling: CounterNode | null): CounterNode {
+    const counters = parent ? cloneCounters(parent.counters) : [];
+    if (previousSibling) {
+      for (const counter of previousSibling.counters) {
+        if (!counters.some((candidate) => candidate.name === counter.name)) counters.push({ ...counter });
+      }
+    }
+    if (this.#lastNode) {
+      for (const source of this.#lastNode.counters) {
+        const target = counters.find((candidate) => candidate.name === source.name && candidate.creator === source.creator);
+        if (target) target.value = source.value;
+      }
+    }
+    return { parent, previousSibling, counters };
+  }
+}
+
+function counterChildren(element: Element, includeShadowDom: boolean): Element[] {
+  if (includeShadowDom && element.localName === "slot") {
+    const assigned = (element as HTMLSlotElement).assignedElements({ flatten: true });
+    return assigned.length ? assigned : [...element.children];
+  }
+  if (includeShadowDom && element.shadowRoot) return [...element.shadowRoot.children];
+  return [...element.children];
+}
+
+function cloneCounters(counters: readonly CounterInstance[]): CounterInstance[] {
+  return counters.map((counter) => ({ ...counter }));
+}
+
+function findInnermostCounter(counters: readonly CounterInstance[], name: string): CounterInstance | undefined {
+  for (let index = counters.length - 1; index >= 0; index -= 1) {
+    if (counters[index]?.name === name) return counters[index];
+  }
+  return undefined;
+}
+
+function applyCounterProperties(node: CounterNode, computed: CSSStyleDeclaration): void {
+  const resets = parseCounterOperations(computed.getPropertyValue("counter-reset"), 0);
+  for (let index = 0; index < resets.length; index += 1) {
+    const operation = resets[index];
+    if (!operation || resets.slice(index + 1).some((candidate) => candidate.name === operation.name)) continue;
+    instantiateCounter(node, operation.name, operation.value);
+  }
+  for (const operation of parseCounterOperations(computed.getPropertyValue("counter-increment"), 1)) {
+    const counter = findInnermostCounter(node.counters, operation.name) ?? instantiateCounter(node, operation.name, 0);
+    counter.value += operation.value;
+  }
+  for (const operation of parseCounterOperations(computed.getPropertyValue("counter-set"), 0)) {
+    const counter = findInnermostCounter(node.counters, operation.name) ?? instantiateCounter(node, operation.name, 0);
+    counter.value = operation.value;
+  }
+}
+
+function instantiateCounter(node: CounterNode, name: string, value: number): CounterInstance {
+  const innermost = findInnermostCounter(node.counters, name);
+  if (innermost && (innermost.creator === node || innermost.creator.parent === node.parent)) {
+    node.counters.splice(node.counters.indexOf(innermost), 1);
+  }
+  const counter = { name, creator: node, value };
+  node.counters.push(counter);
+  return counter;
+}
+
+function parseCounterOperations(value: string, defaultValue: number): CounterOperation[] {
+  const normalized = value.trim();
+  if (!normalized || normalized === "none") return [];
+  const tokens = normalized.split(/\s+/);
+  const operations: CounterOperation[] = [];
+  for (let index = 0; index < tokens.length;) {
+    const name = tokens[index++];
+    if (!name || name.startsWith("reversed(") || name === "none") return [];
+    let counterValue = defaultValue;
+    const explicitValue = tokens[index];
+    if (explicitValue && /^[+-]?\d+$/.test(explicitValue)) {
+      counterValue = Number.parseInt(explicitValue, 10);
+      index += 1;
+    }
+    operations.push({ name, value: counterValue });
+  }
+  return operations;
+}
+
 function materializeComputedStyle(
   original: Element,
   target: Element,
@@ -556,42 +750,37 @@ function materializeComputedStyle(
   target.setAttribute("style", declarations.join(";"));
 }
 
-function materializePseudoElements(
-  original: Element,
-  target: Element,
-  options: SnapshotOptions,
-  diagnostics: Diagnostic[],
-): void {
-  if (isReplacedOrControl(original)) return;
-  materializePseudoElement(original, target, "::before", options, diagnostics);
-  materializePseudoElement(original, target, "::after", options, diagnostics);
-}
-
 function materializePseudoElement(
   original: Element,
   target: Element,
   pseudo: "::before" | "::after",
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
+  counters: CounterState,
 ): void {
+  if (isReplacedOrControl(original)) return;
   const computed = (original.ownerDocument.defaultView ?? window).getComputedStyle(original, pseudo);
   const rawContent = computed.getPropertyValue("content").trim();
   if (!rawContent || rawContent === "none" || rawContent === "normal") return;
-  const content = resolveGeneratedContent(rawContent, original);
-  if (content === null) {
-    reportUnsupportedCss(`content:${rawContent}`, options, diagnostics);
-    return;
-  }
+  const leaveCounterScope = counters.enterPseudo(original, pseudo);
+  try {
+    const content = resolveGeneratedContent(rawContent, original, counters);
+    if (content === null) {
+      reportUnsupportedCss(`content:${rawContent}`, options, diagnostics);
+      return;
+    }
 
-  const synthetic = target.ownerDocument.createElement("span");
-  synthetic.dataset.html2realpdfPseudo = pseudo.slice(2);
-  synthetic.textContent = content;
-  materializeComputedStyle(original, synthetic, options, diagnostics, false, computed);
-  if (pseudo === "::before") target.prepend(synthetic);
-  else target.append(synthetic);
+    const synthetic = target.ownerDocument.createElement("span");
+    synthetic.dataset.html2realpdfPseudo = pseudo.slice(2);
+    synthetic.textContent = content;
+    materializeComputedStyle(original, synthetic, options, diagnostics, false, computed);
+    target.append(synthetic);
+  } finally {
+    leaveCounterScope();
+  }
 }
 
-function resolveGeneratedContent(value: string, original: Element): string | null {
+function resolveGeneratedContent(value: string, original: Element, counters: CounterState): string | null {
   let output = "";
   let index = 0;
   while (index < value.length) {
@@ -606,12 +795,22 @@ function resolveGeneratedContent(value: string, original: Element): string | nul
       continue;
     }
     if (value.startsWith("attr(", index)) {
-      const close = value.indexOf(")", index + 5);
-      if (close < 0) return null;
-      const name = value.slice(index + 5, close).trim().split(/\s+/)[0];
+      const parsed = consumeCssFunction(value, index, "attr");
+      if (!parsed) return null;
+      const name = parsed.value.trim().split(/\s+/)[0];
       if (!name) return null;
       output += original.getAttribute(name) ?? "";
-      index = close + 1;
+      index = parsed.next;
+      continue;
+    }
+    if (value.startsWith("counter(", index) || value.startsWith("counters(", index)) {
+      const plural = value.startsWith("counters(", index);
+      const parsed = consumeCssFunction(value, index, plural ? "counters" : "counter");
+      if (!parsed) return null;
+      const formatted = resolveCounterFunction(parsed.value, plural, counters);
+      if (formatted === null) return null;
+      output += formatted;
+      index = parsed.next;
       continue;
     }
     if (value.startsWith("open-quote", index) || value.startsWith("close-quote", index)) {
@@ -630,6 +829,133 @@ function resolveGeneratedContent(value: string, original: Element): string | nul
     return null;
   }
   return output;
+}
+
+function consumeCssFunction(source: string, start: number, name: string): { value: string; next: number } | null {
+  const prefix = `${name}(`;
+  if (!source.startsWith(prefix, start)) return null;
+  const valueStart = start + prefix.length;
+  let depth = 1;
+  let index = valueStart;
+  while (index < source.length) {
+    const character = source[index];
+    if (character === '"' || character === "'") {
+      const parsed = consumeCssString(source, index, character);
+      if (!parsed) return null;
+      index = parsed.next;
+      continue;
+    }
+    if (character === "\\") {
+      index = Math.min(index + 2, source.length);
+      continue;
+    }
+    if (character === "(") depth += 1;
+    else if (character === ")") {
+      depth -= 1;
+      if (depth === 0) return { value: source.slice(valueStart, index), next: index + 1 };
+    }
+    index += 1;
+  }
+  return null;
+}
+
+function resolveCounterFunction(value: string, plural: boolean, counters: CounterState): string | null {
+  const argumentsList = splitCssFunctionArguments(value);
+  const name = argumentsList[0]?.trim();
+  if (!name) return null;
+  const separator = plural ? parseCssStringArgument(argumentsList[1] ?? "") : "";
+  if (plural && separator === null) return null;
+  const styleIndex = plural ? 2 : 1;
+  const style = argumentsList[styleIndex]?.trim() || "decimal";
+  const values = plural ? counters.values(name) : [counters.current(name)];
+  const formatted = values.map((counterValue) => formatCounterValue(counterValue, style));
+  if (formatted.some((counterValue) => counterValue === null)) return null;
+  return formatted.join(separator ?? "");
+}
+
+function splitCssFunctionArguments(value: string): string[] {
+  const argumentsList: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let index = 0;
+  while (index < value.length) {
+    const character = value[index];
+    if (character === '"' || character === "'") {
+      const parsed = consumeCssString(value, index, character);
+      if (!parsed) return [];
+      index = parsed.next;
+      continue;
+    }
+    if (character === "(") depth += 1;
+    else if (character === ")") depth = Math.max(depth - 1, 0);
+    else if (character === "," && depth === 0) {
+      argumentsList.push(value.slice(start, index));
+      start = index + 1;
+    }
+    index += 1;
+  }
+  argumentsList.push(value.slice(start));
+  return argumentsList;
+}
+
+function parseCssStringArgument(value: string): string | null {
+  const normalized = value.trim();
+  const quote = normalized[0];
+  if (quote !== '"' && quote !== "'") return null;
+  const parsed = consumeCssString(normalized, 0, quote);
+  return parsed && normalized.slice(parsed.next).trim() === "" ? parsed.value : null;
+}
+
+function formatCounterValue(value: number, style: string): string | null {
+  switch (style.toLowerCase()) {
+    case "decimal":
+      return String(value);
+    case "decimal-leading-zero": {
+      const sign = value < 0 ? "-" : "";
+      return `${sign}${String(Math.abs(value)).padStart(2, "0")}`;
+    }
+    case "lower-alpha":
+    case "lower-latin":
+      return formatAlphabeticCounter(value, false);
+    case "upper-alpha":
+    case "upper-latin":
+      return formatAlphabeticCounter(value, true);
+    case "lower-roman":
+      return formatRomanCounter(value, false);
+    case "upper-roman":
+      return formatRomanCounter(value, true);
+    default:
+      return null;
+  }
+}
+
+function formatAlphabeticCounter(value: number, uppercase: boolean): string {
+  if (value <= 0) return String(value);
+  let output = "";
+  let remaining = value;
+  while (remaining > 0) {
+    remaining -= 1;
+    output = String.fromCharCode((uppercase ? 65 : 97) + remaining % 26) + output;
+    remaining = Math.floor(remaining / 26);
+  }
+  return output;
+}
+
+function formatRomanCounter(value: number, uppercase: boolean): string {
+  if (value <= 0 || value >= 4000) return String(value);
+  const symbols: readonly [number, string][] = [
+    [1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"],
+    [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"],
+  ];
+  let output = "";
+  let remaining = value;
+  for (const [amount, symbol] of symbols) {
+    while (remaining >= amount) {
+      output += symbol;
+      remaining -= amount;
+    }
+  }
+  return uppercase ? output : output.toLowerCase();
 }
 
 function consumeCssString(source: string, start: number, quote: string): { value: string; next: number } | null {
