@@ -27,6 +27,8 @@ coverage. A dash means the stage is not applicable or not implemented.
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | --- |
 | `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, and table roles |
 | width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, percentages, `calc()`, `min()`, `max()`, `clamp()`, viewport and font-relative units |
+| `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic-ratio fallback for replaced elements |
+| `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
 | margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; adjacent block margin collapse |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |

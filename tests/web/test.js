@@ -572,10 +572,19 @@ async function verifyDomSnapshotFidelity() {
     <ul><li>List item</li></ul>
     <label>Live value <input value="initial"></label>
     <button type="button">Action</button>
+    <img alt="fit probe" style="width:120px;height:80px;aspect-ratio:3/2;object-fit:cover;object-position:75% 25%">
   `;
   document.body.append(fixture);
   const input = fixture.querySelector("input");
   input.value = "React state value";
+  const fitCanvas = document.createElement("canvas");
+  fitCanvas.width = 2;
+  fitCanvas.height = 1;
+  const fitImage = fixture.querySelector("img");
+  if (fitImage) {
+    fitImage.src = fitCanvas.toDataURL("image/png");
+    await fitImage.decode();
+  }
 
   try {
     const snapshot = await snapshotSource({ current: fixture }, {
@@ -589,6 +598,7 @@ async function verifyDomSnapshotFidelity() {
     const listItem = root?.querySelector("li");
     const control = root?.querySelector("label span");
     const button = root?.querySelector("span[type='button']");
+    const image = root?.querySelector("img");
     if (!root?.style.backgroundColor) throw new Error("root background was not materialized");
     if (paragraph?.style.backgroundColor) throw new Error("transparent child background was serialized");
     if (paragraph?.style.height) throw new Error("auto block height was frozen into the snapshot");
@@ -608,6 +618,12 @@ async function verifyDomSnapshotFidelity() {
     if (control?.textContent !== "React state value") throw new Error("live input value was not captured");
     if (control?.style.display !== "inline-block") throw new Error("form control geometry was not preserved");
     if (button?.textContent !== "Action") throw new Error("button content was not captured");
+    if (image?.style.aspectRatio !== "3 / 2" || image.style.objectFit !== "cover" || image.style.objectPosition !== "75% 25%") {
+      throw new Error("replaced-element sizing properties were not captured");
+    }
+    if (image?.getAttribute("data-html2realpdf-intrinsic-width") !== "2" || image.getAttribute("data-html2realpdf-intrinsic-height") !== "1") {
+      throw new Error("image intrinsic dimensions were not captured");
+    }
   } finally {
     fixture.remove();
   }

@@ -55,6 +55,10 @@ pub const LinkAnnotation = struct {
 pub const Image = struct {
     rect: geometry.Rect,
     source: []const u8,
+    intrinsic_width: ?f32 = null,
+    intrinsic_height: ?f32 = null,
+    object_fit: box.ObjectFit = .fill,
+    object_position: box.ObjectPosition = .{},
 };
 
 pub const Command = union(enum) {

@@ -260,6 +260,39 @@ pub const TextOverflow = enum {
     }
 };
 
+pub const AspectRatio = struct {
+    ratio: ?f32 = null,
+    use_intrinsic: bool = true,
+
+    pub fn resolve(self: AspectRatio, intrinsic: ?f32) ?f32 {
+        if (self.use_intrinsic and intrinsic != null) return intrinsic;
+        return self.ratio orelse intrinsic;
+    }
+};
+
+pub const ObjectFit = enum {
+    fill,
+    contain,
+    cover,
+    none,
+    scaleDown,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .fill => "fill",
+            .contain => "contain",
+            .cover => "cover",
+            .none => "none",
+            .scaleDown => "scale-down",
+        };
+    }
+};
+
+pub const ObjectPosition = struct {
+    x: Length = .{ .percent = 0.5 },
+    y: Length = .{ .percent = 0.5 },
+};
+
 pub const VerticalAlign = union(enum) {
     baseline,
     sub,
@@ -468,6 +501,9 @@ pub const Style = struct {
     overflow_wrap: OverflowWrap = .normal,
     overflow: Overflow = .visible,
     text_overflow: TextOverflow = .clip,
+    aspect_ratio: AspectRatio = .{},
+    object_fit: ObjectFit = .fill,
+    object_position: ObjectPosition = .{},
     vertical_align: VerticalAlign = .baseline,
     text_decoration: TextDecoration = .none,
     text_decoration_style: TextDecorationStyle = .solid,
@@ -731,6 +767,9 @@ const BuildState = struct {
         style.vertical_align = .baseline;
         style.overflow = .visible;
         style.text_overflow = .clip;
+        style.aspect_ratio = .{};
+        style.object_fit = .fill;
+        style.object_position = .{};
 
         return style;
     }
@@ -1066,8 +1105,10 @@ fn isNonRenderingElement(name: []const u8) bool {
 /// Reading actual image headers belongs in a later resource loader; the Box Tree
 /// should not perform filesystem or network work.
 fn fillIntrinsicSize(box: *Box, element: dom.Element) void {
-    box.intrinsic_width = parsePositiveFloat(getAttributeValue(element.attributes, "width"));
-    box.intrinsic_height = parsePositiveFloat(getAttributeValue(element.attributes, "height"));
+    box.intrinsic_width = parsePositiveFloat(getAttributeValue(element.attributes, "data-html2realpdf-intrinsic-width")) orelse
+        parsePositiveFloat(getAttributeValue(element.attributes, "width"));
+    box.intrinsic_height = parsePositiveFloat(getAttributeValue(element.attributes, "data-html2realpdf-intrinsic-height")) orelse
+        parsePositiveFloat(getAttributeValue(element.attributes, "height"));
 
     if (box.intrinsic_width) |width| {
         if (box.intrinsic_height) |height| {

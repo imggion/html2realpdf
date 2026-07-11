@@ -27,6 +27,9 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "max-width",
   "min-height",
   "max-height",
+  "aspect-ratio",
+  "object-fit",
+  "object-position",
   "box-sizing",
   "margin-top",
   "margin-right",
@@ -1129,7 +1132,12 @@ function materializeLiveState(original: Element, target: Element): Element {
     }
   } else if (original.localName === "img" && target.localName === "img") {
     const source = original as HTMLImageElement;
-    if (source.currentSrc) (target as HTMLImageElement).src = source.currentSrc;
+    const image = target as HTMLImageElement;
+    if (source.currentSrc) image.src = source.currentSrc;
+    if (source.naturalWidth > 0 && source.naturalHeight > 0) {
+      image.dataset.html2realpdfIntrinsicWidth = String(source.naturalWidth);
+      image.dataset.html2realpdfIntrinsicHeight = String(source.naturalHeight);
+    }
   } else if (original.localName === "canvas" && target.localName === "canvas") {
     const canvas = original as HTMLCanvasElement;
     const replacement = target.ownerDocument.createElement("img");

@@ -480,8 +480,17 @@ pub fn Cursor(comptime State: type) type {
         }
 
         fn layoutAtomic(self: *Self, box_id: box.BoxId, source: box.Box, link_url: ?[]const u8) !void {
-            const width = source.style.width.resolve(self.width) orelse source.intrinsic_width orelse 24;
-            const height = source.style.height.resolve(self.state.page_height orelse 0) orelse source.intrinsic_height orelse 24;
+            const size = intrinsic.resolveReplacedSize(
+                source.style,
+                source.intrinsic_width,
+                source.intrinsic_height,
+                self.width,
+                self.state.page_height orelse self.width,
+                0,
+                0,
+            );
+            const width = size.width;
+            const height = size.height;
 
             if (self.has_content and self.x + width > self.start_x + self.width) self.newLine();
             self.line_height = @max(self.line_height, height);
@@ -495,6 +504,11 @@ pub fn Cursor(comptime State: type) type {
                 .vertical_align = source.style.vertical_align,
                 .link_url = link_url,
                 .image_source = self.state.attributeForBox(box_id, "src"),
+                .image_content_rect = .{ .x = self.x, .y = self.line_y, .width = width, .height = height },
+                .intrinsic_width = source.intrinsic_width,
+                .intrinsic_height = source.intrinsic_height,
+                .object_fit = source.style.object_fit,
+                .object_position = source.style.object_position,
             });
             self.x += width;
             self.has_content = true;

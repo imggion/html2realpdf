@@ -422,12 +422,19 @@ fn pageContent(
             .link => {},
             .image => |image_command| {
                 const image_index = imageIndexAt(list, command_index);
-                const x = margins.left + image_command.rect.x * scale;
-                const y = page_height - margins.top - (image_command.rect.y + image_command.rect.height) * scale;
+                const fitted = fittedImageRect(image_command);
+                const clip_x = margins.left + image_command.rect.x * scale;
+                const clip_y = page_height - margins.top - (image_command.rect.y + image_command.rect.height) * scale;
+                const x = margins.left + fitted.x * scale;
+                const y = page_height - margins.top - (fitted.y + fitted.height) * scale;
                 try writeAlphaState(writer, alpha_usage, 1);
-                try writer.print("q {d:.3} 0 0 {d:.3} {d:.3} {d:.3} cm /Im{d} Do Q\n", .{
+                try writer.print("q {d:.3} {d:.3} {d:.3} {d:.3} re W n {d:.3} 0 0 {d:.3} {d:.3} {d:.3} cm /Im{d} Do Q\n", .{
+                    clip_x,
+                    clip_y,
                     image_command.rect.width * scale,
                     image_command.rect.height * scale,
+                    fitted.width * scale,
+                    fitted.height * scale,
                     x,
                     y,
                     image_index + 1,
@@ -439,6 +446,34 @@ fn pageContent(
     try writer.writeAll("Q");
 
     return content.toOwnedSlice();
+}
+
+fn fittedImageRect(command: display_list.Image) geometry.Rect {
+    const intrinsic_width = command.intrinsic_width orelse return command.rect;
+    const intrinsic_height = command.intrinsic_height orelse return command.rect;
+    if (intrinsic_width <= 0 or intrinsic_height <= 0 or command.object_fit == .fill) return command.rect;
+
+    const contain_scale = @min(command.rect.width / intrinsic_width, command.rect.height / intrinsic_height);
+    const cover_scale = @max(command.rect.width / intrinsic_width, command.rect.height / intrinsic_height);
+    const used_scale: f32 = switch (command.object_fit) {
+        .fill => unreachable,
+        .contain => contain_scale,
+        .cover => cover_scale,
+        .none => 1,
+        .scaleDown => @min(contain_scale, 1),
+    };
+    const width = intrinsic_width * used_scale;
+    const height = intrinsic_height * used_scale;
+    const remaining_x = command.rect.width - width;
+    const remaining_y = command.rect.height - height;
+    const offset_x = command.object_position.x.resolve(remaining_x) orelse remaining_x * 0.5;
+    const offset_y = command.object_position.y.resolve(remaining_y) orelse remaining_y * 0.5;
+    return .{
+        .x = command.rect.x + offset_x,
+        .y = command.rect.y + offset_y,
+        .width = width,
+        .height = height,
+    };
 }
 
 fn writeClipRect(writer: *std.Io.Writer, list: *const display_list.DisplayList, clip: geometry.Rect) !void {
@@ -993,4 +1028,29 @@ test "wrap clipped paint commands in PDF graphics state" {
     defer allocator.free(content);
     try std.testing.expect(std.mem.indexOf(u8, content, " re W n\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "Q\nQ") != null);
+}
+
+test "fit and position native images inside their content box" {
+    const contain = fittedImageRect(.{
+        .rect = .{ .width = 100, .height = 100 },
+        .source = "data:image/png;base64,",
+        .intrinsic_width = 200,
+        .intrinsic_height = 100,
+        .object_fit = .contain,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 100), contain.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), contain.height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 25), contain.y, 0.001);
+
+    const cover = fittedImageRect(.{
+        .rect = .{ .width = 100, .height = 100 },
+        .source = "data:image/png;base64,",
+        .intrinsic_width = 200,
+        .intrinsic_height = 100,
+        .object_fit = .cover,
+        .object_position = .{ .x = .{ .percent = 1 }, .y = .{ .percent = 0.5 } },
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 200), cover.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -100), cover.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), cover.y, 0.001);
 }

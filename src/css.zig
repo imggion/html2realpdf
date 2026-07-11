@@ -50,6 +50,9 @@ const parseWordBreak = values.parseWordBreak;
 const parseOverflowWrap = values.parseOverflowWrap;
 const parseOverflow = values.parseOverflow;
 const parseTextOverflow = values.parseTextOverflow;
+const parseAspectRatio = values.parseAspectRatio;
+const parseObjectFit = values.parseObjectFit;
+const parseObjectPosition = values.parseObjectPosition;
 const parseVerticalAlignKeyword = values.parseVerticalAlignKeyword;
 const parseBoxSizing = values.parseBoxSizing;
 const parseBorderCollapse = values.parseBorderCollapse;
@@ -725,6 +728,10 @@ test "parse CSS Text inline properties" {
     try std.testing.expectEqual(box.Overflow.hidden, parseOverflow("hidden").?);
     try std.testing.expectEqual(box.Overflow.clip, parseOverflow("clip").?);
     try std.testing.expectEqual(box.TextOverflow.ellipsis, parseTextOverflow("ellipsis").?);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0 / 9.0), parseAspectRatio("16 / 9").?.ratio.?, 0.001);
+    try std.testing.expectEqual(box.ObjectFit.cover, parseObjectFit("cover").?);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), parseObjectPosition("right 25%").?.x.resolve(1).?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), parseObjectPosition("right 25%").?.y.resolve(1).?, 0.001);
 }
 
 test "parse value: box-sizing" {
@@ -884,6 +891,18 @@ test "cascade: overflow and text-overflow remain container properties" {
     try std.testing.expectEqual(box.TextOverflow.ellipsis, ct.styles[div_id].text_overflow);
     try std.testing.expectEqual(box.Overflow.visible, ct.styles[span_id].overflow);
     try std.testing.expectEqual(box.TextOverflow.clip, ct.styles[span_id].text_overflow);
+}
+
+test "cascade: replaced sizing and fit properties remain local" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='aspect-ratio:16/9;object-fit:cover;object-position:right 25%'><img></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const image_id = ct.document.nodes.items[div_id].first_child.?;
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0 / 9.0), ct.styles[div_id].aspect_ratio.ratio.?, 0.001);
+    try std.testing.expectEqual(box.ObjectFit.cover, ct.styles[div_id].object_fit);
+    try std.testing.expectEqual(box.ObjectFit.fill, ct.styles[image_id].object_fit);
+    try std.testing.expect(ct.styles[image_id].aspect_ratio.ratio == null);
 }
 
 test "cascade: page-break and orphans/widows" {

@@ -220,6 +220,72 @@ pub fn parseTextOverflow(value: []const u8) ?box.TextOverflow {
     return null;
 }
 
+pub fn parseAspectRatio(value: []const u8) ?box.AspectRatio {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "auto")) return .{};
+    var use_intrinsic = false;
+    var ratio_text = v;
+    if (v.len >= 4 and std.ascii.eqlIgnoreCase(v[0..4], "auto")) {
+        if (v.len == 4 or !std.ascii.isWhitespace(v[4])) return null;
+        use_intrinsic = true;
+        ratio_text = std.mem.trim(u8, v[4..], " \t\n\r\x0C");
+    }
+    var parts = std.mem.splitScalar(u8, ratio_text, '/');
+    const numerator_text = std.mem.trim(u8, parts.next() orelse return null, " \t\n\r\x0C");
+    const denominator_text = std.mem.trim(u8, parts.next() orelse "1", " \t\n\r\x0C");
+    if (parts.next() != null) return null;
+    const numerator = std.fmt.parseFloat(f32, numerator_text) catch return null;
+    const denominator = std.fmt.parseFloat(f32, denominator_text) catch return null;
+    if (numerator <= 0 or denominator <= 0) return null;
+    return .{ .ratio = numerator / denominator, .use_intrinsic = use_intrinsic };
+}
+
+pub fn parseObjectFit(value: []const u8) ?box.ObjectFit {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "fill")) return .fill;
+    if (eqlProp(v, "contain")) return .contain;
+    if (eqlProp(v, "cover")) return .cover;
+    if (eqlProp(v, "none")) return .none;
+    if (eqlProp(v, "scale-down")) return .scaleDown;
+    return null;
+}
+
+pub fn parseObjectPosition(value: []const u8) ?box.ObjectPosition {
+    var tokens = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
+    const first = tokens.next() orelse return null;
+    const second = tokens.next();
+    if (tokens.next() != null) return null;
+
+    if (second) |vertical_or_horizontal| {
+        if (isVerticalPosition(first) and isHorizontalPosition(vertical_or_horizontal)) {
+            return .{ .x = parsePositionComponent(vertical_or_horizontal, true) orelse return null, .y = parsePositionComponent(first, false) orelse return null };
+        }
+        return .{
+            .x = parsePositionComponent(first, true) orelse return null,
+            .y = parsePositionComponent(vertical_or_horizontal, false) orelse return null,
+        };
+    }
+    if (isVerticalPosition(first)) return .{ .y = parsePositionComponent(first, false) orelse return null };
+    return .{ .x = parsePositionComponent(first, true) orelse return null };
+}
+
+fn parsePositionComponent(value: []const u8, horizontal: bool) ?box.Length {
+    if (eqlProp(value, "center")) return .{ .percent = 0.5 };
+    if (horizontal and eqlProp(value, "left")) return .{ .percent = 0 };
+    if (horizontal and eqlProp(value, "right")) return .{ .percent = 1 };
+    if (!horizontal and eqlProp(value, "top")) return .{ .percent = 0 };
+    if (!horizontal and eqlProp(value, "bottom")) return .{ .percent = 1 };
+    return parseDimension(value, 16);
+}
+
+fn isHorizontalPosition(value: []const u8) bool {
+    return eqlProp(value, "left") or eqlProp(value, "right") or eqlProp(value, "center");
+}
+
+fn isVerticalPosition(value: []const u8) bool {
+    return eqlProp(value, "top") or eqlProp(value, "bottom") or eqlProp(value, "center");
+}
+
 pub fn parseVerticalAlignKeyword(value: []const u8) ?box.VerticalAlign {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (eqlProp(v, "baseline")) return .baseline;

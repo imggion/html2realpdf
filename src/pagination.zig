@@ -97,6 +97,7 @@ pub fn paginate(
             var page_fragment = fragment;
             page_fragment.rect.y = page_y;
             page_fragment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
+            page_fragment.image_content_rect = rectForPage(fragment.image_content_rect, page_index, content_height);
             try fragments.append(allocator, .{ .page_index = page_index, .fragment = page_fragment });
             page_count = @max(page_count, page_index + 1);
         }
@@ -164,6 +165,7 @@ fn appendSplitBox(
         segment.rect.y = page_y;
         segment.rect.height = segment_height;
         segment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
+        segment.image_content_rect = rectForPage(fragment.image_content_rect, page_index, content_height);
         if (segment_height < fragment.rect.height) segment.border_radius = 0;
         try output.append(allocator, .{ .page_index = page_index, .fragment = segment });
 
@@ -184,6 +186,12 @@ fn clipForPage(absolute_clip: ?geometry.Rect, page_index: usize, content_height:
     local.y = top;
     local.height = bottom - top;
     return local;
+}
+
+fn rectForPage(absolute_rect: ?geometry.Rect, page_index: usize, content_height: f32) ?geometry.Rect {
+    var rect = absolute_rect orelse return null;
+    rect.y -= @as(f32, @floatFromInt(page_index)) * content_height;
+    return rect;
 }
 
 test "paginate text and split tall box fragments" {

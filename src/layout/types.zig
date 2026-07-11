@@ -54,6 +54,11 @@ pub const Fragment = struct {
     page_break_inside: box.PageBreak = .auto,
     link_url: ?[]const u8 = null,
     image_source: ?[]const u8 = null,
+    image_content_rect: ?geometry.Rect = null,
+    intrinsic_width: ?f32 = null,
+    intrinsic_height: ?f32 = null,
+    object_fit: box.ObjectFit = .fill,
+    object_position: box.ObjectPosition = .{},
     table_id: ?box.BoxId = null,
     is_table_header: bool = false,
 };

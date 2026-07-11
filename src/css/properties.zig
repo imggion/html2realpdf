@@ -31,6 +31,7 @@ const layout = Stage{ .parsed = true, .cascaded = true, .computed = true, .laid_
 const computed_only = Stage{ .parsed = true, .cascaded = true, .computed = true, .tested = true };
 
 pub const document_profile = [_]PropertySupport{
+    .{ .name = "aspect-ratio", .stage = layout, .notes = "preferred ratio and intrinsic ratio fallback for replaced elements" },
     .{ .name = "background-color", .stage = full },
     .{ .name = "border", .stage = full, .notes = "uniform radius only" },
     .{ .name = "border-collapse", .stage = layout },
@@ -54,6 +55,8 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "max-width", .stage = layout },
     .{ .name = "min-height", .stage = layout },
     .{ .name = "min-width", .stage = layout },
+    .{ .name = "object-fit", .stage = full, .notes = "fill contain cover none and scale-down with PDF clipping" },
+    .{ .name = "object-position", .stage = full, .notes = "one- and two-value keyword or length-percentage positions" },
     .{ .name = "orphans", .stage = layout },
     .{ .name = "overflow", .stage = full, .notes = "rectangular descendant clipping; auto and scroll omit interactive scrollbars" },
     .{ .name = "overflow-wrap", .stage = full, .notes = "normal break-word and anywhere; Unicode segmentation pending" },

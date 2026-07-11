@@ -616,6 +616,34 @@ test "truncate nowrap overflow with a selectable ellipsis" {
     try std.testing.expect(!saw_hidden_tail);
 }
 
+test "size replaced elements from aspect ratio and captured intrinsic data" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source = "<p style='margin:0'><img data-html2realpdf-intrinsic-width='320' data-html2realpdf-intrinsic-height='200' style='width:160px;aspect-ratio:16/9;object-fit:cover'></p>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300 });
+    defer result.deinit(allocator);
+
+    for (result.fragments.items) |fragment| {
+        if (fragment.kind != .replaced) continue;
+        try std.testing.expectApproxEqAbs(@as(f32, 160), fragment.rect.width, 0.01);
+        try std.testing.expectApproxEqAbs(@as(f32, 90), fragment.rect.height, 0.01);
+        try std.testing.expectEqual(box.ObjectFit.cover, fragment.object_fit);
+        try std.testing.expectApproxEqAbs(@as(f32, 320), fragment.intrinsic_width.?, 0.01);
+        return;
+    }
+    return error.TestExpectedEqual;
+}
+
 test "layout inline-block children as an atomic inline group" {
     const html = @import("html.zig");
     const css = @import("css.zig");

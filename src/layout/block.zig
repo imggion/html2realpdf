@@ -41,8 +41,20 @@ pub fn layoutWithOptions(
     const outer_x = containing.x + margin.left;
     const available_outer_width = @max(containing.width - margin.left - margin.right, 1);
     const horizontal_non_content = border.left + border.right + padding.left + padding.right;
+    const vertical_non_content = border.top + border.bottom + padding.top + padding.bottom;
+    const replaced_size = if (source.kind == .replaced) intrinsic.resolveReplacedSize(
+        style,
+        source.intrinsic_width,
+        source.intrinsic_height,
+        available_outer_width,
+        containing.height,
+        horizontal_non_content,
+        vertical_non_content,
+    ) else null;
     var requested_content_width = if (options.fill_available_width)
         @max(available_outer_width - horizontal_non_content, 1)
+    else if (replaced_size) |size|
+        size.width
     else
         intrinsic.resolveContentDimension(style.width, available_outer_width, horizontal_non_content, style.box_sizing) orelse @max(available_outer_width - horizontal_non_content, 1);
     if (!options.fill_available_width) {
@@ -66,6 +78,10 @@ pub fn layoutWithOptions(
         .page_break_after = style.page_break_after,
         .page_break_inside = style.page_break_inside,
         .image_source = if (source.kind == .replaced) state.attributeForBox(box_id, "src") else null,
+        .intrinsic_width = source.intrinsic_width,
+        .intrinsic_height = source.intrinsic_height,
+        .object_fit = style.object_fit,
+        .object_position = style.object_position,
     });
 
     const content_x = outer_x + border.left + padding.left;
@@ -94,8 +110,7 @@ pub fn layoutWithOptions(
     }
 
     if (source.kind == .replaced) {
-        const intrinsic_height = source.intrinsic_height orelse source.style.height.resolve(containing.height) orelse source.intrinsic_width orelse 24;
-        child_cursor_y += intrinsic_height;
+        child_cursor_y += replaced_size.?.height;
     } else if (source.kind == .table) {
         child_cursor_y += try state.layoutTable(box_id, content_x, content_y, content_width);
     } else if (source.first_child) |_| {
@@ -126,13 +141,12 @@ pub fn layoutWithOptions(
         }
     }
 
-    const vertical_non_content = border.top + border.bottom + padding.top + padding.bottom;
     var content_height = @max(child_cursor_y - content_y, 0);
     if (intrinsic.resolveContentDimension(style.height, containing.height, vertical_non_content, style.box_sizing)) |height| content_height = @max(content_height, height);
     if (intrinsic.resolveContentDimension(style.min_height, containing.height, vertical_non_content, style.box_sizing)) |minimum| content_height = @max(content_height, minimum);
     if (intrinsic.resolveContentDimension(style.max_height, containing.height, vertical_non_content, style.box_sizing)) |maximum| content_height = @min(content_height, maximum);
     if (source.kind == .replaced) {
-        content_height = @max(content_height, source.intrinsic_height orelse 24);
+        content_height = @max(content_height, replaced_size.?.height);
     }
 
     var outer_height = border.top + padding.top + content_height + padding.bottom + border.bottom;
@@ -152,6 +166,14 @@ pub fn layoutWithOptions(
     }
 
     state.fragments.items[fragment_id].rect.height = outer_height;
+    if (source.kind == .replaced) {
+        state.fragments.items[fragment_id].image_content_rect = .{
+            .x = content_x,
+            .y = content_y,
+            .width = content_width,
+            .height = content_height,
+        };
+    }
 
     cursor_y.* = outer_y + outer_height + margin.bottom;
     if (style.page_break_after == .always) state.advanceToNextPage(cursor_y);

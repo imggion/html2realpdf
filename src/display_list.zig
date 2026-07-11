@@ -55,7 +55,14 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
             if (fragment.image_source) |source| {
                 try commands.append(allocator, .{
                     .page_index = paged.page_index,
-                    .command = .{ .image = .{ .rect = fragment.rect, .source = source } },
+                    .command = .{ .image = .{
+                        .rect = fragment.image_content_rect orelse fragment.rect,
+                        .source = source,
+                        .intrinsic_width = fragment.intrinsic_width,
+                        .intrinsic_height = fragment.intrinsic_height,
+                        .object_fit = fragment.object_fit,
+                        .object_position = fragment.object_position,
+                    } },
                 });
             } else if (edgeIsZero(fragment.border)) {
                 const placeholder = geometry.Color{ .red = 0.6, .green = 0.6, .blue = 0.6 };
