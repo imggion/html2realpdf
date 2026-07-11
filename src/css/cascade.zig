@@ -98,6 +98,12 @@ fn computeStylesRecursive(
         style.white_space = ps.white_space;
         style.text_decoration = ps.text_decoration;
         style.letter_spacing = ps.letter_spacing;
+        style.word_spacing = ps.word_spacing;
+        style.text_indent = ps.text_indent;
+        style.text_align = ps.text_align;
+        style.text_transform = ps.text_transform;
+        style.word_break = ps.word_break;
+        style.overflow_wrap = ps.overflow_wrap;
     }
 
     // Heading sizes are UA declarations, not inherited defaults. Preserve

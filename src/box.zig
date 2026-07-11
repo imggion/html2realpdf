@@ -180,6 +180,52 @@ pub const TextAlign = enum {
     }
 };
 
+/// Case conversion requested by CSS Text. The inline formatter applies the
+/// conversion before measuring so PDF glyph advances and layout stay equal.
+pub const TextTransform = enum {
+    none,
+    uppercase,
+    lowercase,
+    capitalize,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .uppercase => "uppercase",
+            .lowercase => "lowercase",
+            .capitalize => "capitalize",
+        };
+    }
+};
+
+pub const WordBreak = enum {
+    normal,
+    breakAll,
+    keepAll,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .normal => "normal",
+            .breakAll => "break-all",
+            .keepAll => "keep-all",
+        };
+    }
+};
+
+pub const OverflowWrap = enum {
+    normal,
+    breakWord,
+    anywhere,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .normal => "normal",
+            .breakWord => "break-word",
+            .anywhere => "anywhere",
+        };
+    }
+};
+
 pub const TextDecoration = enum {
     none,
     underline,
@@ -322,7 +368,12 @@ pub const Style = struct {
 
     line_height: f32 = 18,
     letter_spacing: f32 = 0,
+    word_spacing: f32 = 0,
+    text_indent: Length = .{ .px = 0 },
     text_align: TextAlign = .left,
+    text_transform: TextTransform = .none,
+    word_break: WordBreak = .normal,
+    overflow_wrap: OverflowWrap = .normal,
     text_decoration: TextDecoration = .none,
 
     box_sizing: BoxSizing = .contentBox,
@@ -1029,7 +1080,16 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     try writeLengthDebug("min-width", style.min_width, writer);
     try writeLengthDebug("max-width", style.max_width, writer);
     if (style.line_height != 18) try writer.print(" line-height={d:.2}", .{style.line_height});
+    if (style.letter_spacing != 0) try writer.print(" letter-spacing={d:.2}", .{style.letter_spacing});
+    if (style.word_spacing != 0) try writer.print(" word-spacing={d:.2}", .{style.word_spacing});
+    switch (style.text_indent) {
+        .px => |value| if (value != 0) try writer.print(" text-indent={d:.2}", .{value}),
+        else => try writeLengthDebug("text-indent", style.text_indent, writer),
+    }
     if (style.text_align != .left) try writer.print(" text-align={s}", .{style.text_align.toString()});
+    if (style.text_transform != .none) try writer.print(" text-transform={s}", .{style.text_transform.toString()});
+    if (style.word_break != .normal) try writer.print(" word-break={s}", .{style.word_break.toString()});
+    if (style.overflow_wrap != .normal) try writer.print(" overflow-wrap={s}", .{style.overflow_wrap.toString()});
     if (style.box_sizing != .contentBox) try writer.print(" box-sizing={s}", .{style.box_sizing.toString()});
     if (style.border_collapse != .separate) try writer.print(" border-collapse={s}", .{style.border_collapse.toString()});
     if (style.page_break_before != .auto) try writer.print(" page-break-before={s}", .{style.page_break_before.toString()});

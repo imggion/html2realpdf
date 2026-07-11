@@ -386,15 +386,15 @@ fn pageContent(
                 const baseline = page_height - margins.top - (run.position.y + run.font_size * metrics.ascentRatio()) * scale;
                 try writeAlphaState(writer, alpha_usage, run.color.alpha);
                 try writeFillColor(writer, run.color);
-                try writer.print("BT /F{d} {d:.3} Tf {d:.3} Tc 1 0 0 1 {d:.3} {d:.3} Tm <", .{
+                try writer.print("BT /F{d} {d:.3} Tf {d:.3} Tc 1 0 0 1 {d:.3} {d:.3} Tm ", .{
                     used_font_index + 1,
                     font_size_points,
                     run.letter_spacing * scale,
                     x,
                     baseline,
                 });
-                if (run.leading_space) try writeGlyphHex(writer, metrics, " ");
-                try writeGlyphHex(writer, metrics, run.text);
+                try beginTextGlyphs(writer, run.word_spacing);
+                try writeTextRunGlyphs(writer, metrics, run);
 
                 var previous_run = run;
                 while (command_index + 1 < list.commands.items.len) {
@@ -405,17 +405,17 @@ fn pageContent(
                     if (next_run.line_id != run.line_id or
                         next_run.font_size != run.font_size or
                         next_run.letter_spacing != run.letter_spacing or
+                        next_run.word_spacing != run.word_spacing or
                         font_usage.indexForRun(next_run) != used_font_index or
                         !colorsEqual(next_run.color, run.color) or
                         @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) > 0.1) break;
 
-                    if (next_run.leading_space) try writeGlyphHex(writer, metrics, " ");
-                    try writeGlyphHex(writer, metrics, next_run.text);
+                    try writeTextRunGlyphs(writer, metrics, next_run);
                     previous_run = next_run;
                     command_index += 1;
                 }
 
-                try writer.writeAll("> Tj ET\n");
+                try endTextGlyphs(writer, run.word_spacing);
             },
             .link => {},
             .image => |image_command| {
@@ -739,6 +739,40 @@ fn writeGlyphHex(writer: *std.Io.Writer, metrics: font.Metrics, text: []const u8
     }
 }
 
+fn beginTextGlyphs(writer: *std.Io.Writer, word_spacing: f32) !void {
+    try writer.writeAll(if (word_spacing == 0) "<" else "[<");
+}
+
+fn endTextGlyphs(writer: *std.Io.Writer, word_spacing: f32) !void {
+    try writer.writeAll(if (word_spacing == 0) "> Tj ET\n" else ">] TJ ET\n");
+}
+
+/// Emit explicit TJ adjustments after word separators. Type 0 fonts use
+/// two-byte character codes, so PDF's `Tw` operator cannot reliably identify
+/// U+0020; TJ keeps spacing deterministic for every embedded font subset.
+fn writeTextRunGlyphs(writer: *std.Io.Writer, metrics: font.Metrics, run: display_list.TextRun) !void {
+    if (run.leading_space) {
+        try writeGlyphHex(writer, metrics, " ");
+        try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
+    }
+
+    var iterator = font.Utf8Iterator{ .bytes = run.text };
+    var chunk_start: usize = 0;
+    while (try iterator.next()) |codepoint| {
+        if (codepoint != ' ' or run.word_spacing == 0) continue;
+        try writeGlyphHex(writer, metrics, run.text[chunk_start..iterator.index]);
+        try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
+        chunk_start = iterator.index;
+    }
+    try writeGlyphHex(writer, metrics, run.text[chunk_start..]);
+}
+
+fn writeWordSpacingAdjustment(writer: *std.Io.Writer, word_spacing: f32, font_size: f32) !void {
+    if (word_spacing == 0) return;
+    const adjustment = -word_spacing * 1000 / @max(font_size, 0.001);
+    try writer.print("> {d:.3} <", .{adjustment});
+}
+
 fn writeUnicodeHex(writer: *std.Io.Writer, codepoint: u21) !void {
     if (codepoint <= 0xFFFF) {
         try writer.print("{X:0>4}", .{codepoint});
@@ -884,4 +918,24 @@ test "write real fill and stroke alpha through PDF ExtGState" {
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/ExtGState <<") != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.5000 /CA 0.5000") != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.2500 /CA 0.2500") != null);
+}
+
+test "write word spacing with Type 0 font TJ adjustments" {
+    const allocator = std.testing.allocator;
+    var output = std.Io.Writer.Allocating.init(allocator);
+    defer output.deinit();
+    const run = display_list.TextRun{
+        .position = .{},
+        .text = "one two",
+        .font_size = 16,
+        .word_spacing = 4,
+        .color = geometry.Color.black,
+    };
+    const metrics = font.resolve(null, run.font_family, run.font_weight, run.font_style).metrics();
+    try beginTextGlyphs(&output.writer, run.word_spacing);
+    try writeTextRunGlyphs(&output.writer, metrics, run);
+    try endTextGlyphs(&output.writer, run.word_spacing);
+    const content = output.written();
+    try std.testing.expect(std.mem.count(u8, content, "<") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, content, ">] TJ ET") != null);
 }

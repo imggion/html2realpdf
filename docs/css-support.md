@@ -33,6 +33,10 @@ coverage. A dash means the stage is not applicable or not implemented.
 | color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `currentColor`, and native PDF alpha via ExtGState |
 | font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | built-in Noto Sans and registered TTF faces |
 | line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | per-glyph registered font fallback and multi-font runs; shaping and kerning pending |
+| `word-spacing` | Y | Y | Y | Y | Y | Y | Y | U+0020 spacing is measured in layout and emitted with Type 0 font `TJ` adjustments |
+| `text-indent` | Y | Y | Y | Y | Y | Y | Y | lengths and percentages on the first formatted line |
+| `text-transform` | Y | Y | Y | Y | Y | Y | Y | none, uppercase, lowercase, capitalize; locale-aware Unicode case mapping pending |
+| `word-break` / `overflow-wrap` | Y | Y | Y | Y | Y | Y | Y | emergency UTF-8 codepoint wrapping for break-all, break-word, and anywhere; Unicode line segmentation pending |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
 | `text-align` | Y | Y | Y | Y | Y | Y | Y | left, center, right, justify |
 | `text-decoration` | Y | Y | Y | Y | Y | Y | Y | underline and line-through |
@@ -64,8 +68,9 @@ Playwright E2E make the matrix verifiable.
 - generated counters and complex pseudo-element `content` values;
 - Flexbox, Grid, floats, positioned/sticky layout, stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
-- complete Unicode shaping, bidi, ligatures, and kerning; fallback fonts must
-  currently be registered and named in the CSS family list;
+- complete Unicode shaping, bidi, ligatures, kerning, locale-aware case
+  conversion, and Unicode line segmentation; fallback faces must currently be
+  registered in the CSS family chain with their covered ranges;
 - CSS Fragmentation fragmentainers, `@page`, named pages, and margin boxes.
 
 These features are not silently represented as screenshots. Canvas and SVG

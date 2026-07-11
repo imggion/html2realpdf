@@ -178,6 +178,31 @@ pub fn parseTextAlign(value: []const u8) ?box.TextAlign {
     return null;
 }
 
+pub fn parseTextTransform(value: []const u8) ?box.TextTransform {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "none")) return .none;
+    if (eqlProp(v, "uppercase")) return .uppercase;
+    if (eqlProp(v, "lowercase")) return .lowercase;
+    if (eqlProp(v, "capitalize")) return .capitalize;
+    return null;
+}
+
+pub fn parseWordBreak(value: []const u8) ?box.WordBreak {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "normal")) return .normal;
+    if (eqlProp(v, "break-all")) return .breakAll;
+    if (eqlProp(v, "keep-all")) return .keepAll;
+    return null;
+}
+
+pub fn parseOverflowWrap(value: []const u8) ?box.OverflowWrap {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "normal")) return .normal;
+    if (eqlProp(v, "break-word")) return .breakWord;
+    if (eqlProp(v, "anywhere")) return .anywhere;
+    return null;
+}
+
 pub fn parseTextDecoration(value: []const u8) ?box.TextDecoration {
     var tokens = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
     while (tokens.next()) |token| {

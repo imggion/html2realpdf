@@ -45,6 +45,9 @@ const parseFontWeight = values.parseFontWeight;
 const parseFontStyle = values.parseFontStyle;
 const parseEdges = values.parseEdges;
 const parseTextAlign = values.parseTextAlign;
+const parseTextTransform = values.parseTextTransform;
+const parseWordBreak = values.parseWordBreak;
+const parseOverflowWrap = values.parseOverflowWrap;
 const parseBoxSizing = values.parseBoxSizing;
 const parseBorderCollapse = values.parseBorderCollapse;
 const parsePageBreak = values.parsePageBreak;
@@ -707,6 +710,15 @@ test "parse value: text-align" {
     try std.testing.expectEqual(box.TextAlign.justify, parseTextAlign("justify").?);
 }
 
+test "parse CSS Text inline properties" {
+    try std.testing.expectEqual(box.TextTransform.uppercase, parseTextTransform("uppercase").?);
+    try std.testing.expectEqual(box.TextTransform.capitalize, parseTextTransform("capitalize").?);
+    try std.testing.expectEqual(box.WordBreak.breakAll, parseWordBreak("break-all").?);
+    try std.testing.expectEqual(box.WordBreak.keepAll, parseWordBreak("keep-all").?);
+    try std.testing.expectEqual(box.OverflowWrap.breakWord, parseOverflowWrap("break-word").?);
+    try std.testing.expectEqual(box.OverflowWrap.anywhere, parseOverflowWrap("anywhere").?);
+}
+
 test "parse value: box-sizing" {
     try std.testing.expectEqual(box.BoxSizing.contentBox, parseBoxSizing("content-box").?);
     try std.testing.expectEqual(box.BoxSizing.borderBox, parseBoxSizing("border-box").?);
@@ -807,6 +819,23 @@ test "cascade: text-align and line-height" {
     const p_id = ct.document.nodes.items[style_id].next_sibling.?;
     try std.testing.expectEqual(box.TextAlign.center, ct.styles[p_id].text_align);
     try std.testing.expectEqual(@as(f32, 24), ct.styles[p_id].line_height);
+}
+
+test "cascade: CSS Text inline properties inherit as computed values" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<style>div { word-spacing: 3px; text-indent: 10%; text-transform: uppercase; word-break: break-all; overflow-wrap: anywhere; }</style>" ++
+        "<div><span>inline</span></div>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const div_id = ct.document.nodes.items[style_id].next_sibling.?;
+    const span_id = ct.document.nodes.items[div_id].first_child.?;
+
+    try std.testing.expectEqual(@as(f32, 3), ct.styles[div_id].word_spacing);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), ct.styles[div_id].text_indent.resolve(200).?, 0.01);
+    try std.testing.expectEqual(box.TextTransform.uppercase, ct.styles[span_id].text_transform);
+    try std.testing.expectEqual(box.WordBreak.breakAll, ct.styles[span_id].word_break);
+    try std.testing.expectEqual(box.OverflowWrap.anywhere, ct.styles[span_id].overflow_wrap);
+    try std.testing.expectEqual(@as(f32, 3), ct.styles[span_id].word_spacing);
 }
 
 test "cascade: page-break and orphans/widows" {

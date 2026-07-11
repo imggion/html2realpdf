@@ -22,8 +22,9 @@ pub fn Cursor(comptime State: type) type {
         line_id: usize,
         has_content: bool = false,
         pending_space: bool = false,
+        capitalize_next: bool = true,
 
-        pub fn init(state: *State, start_x: f32, start_y: f32, width: f32, text_align: box.TextAlign) Self {
+        pub fn init(state: *State, start_x: f32, start_y: f32, width: f32, text_align: box.TextAlign, text_indent: f32) Self {
             const line_id = state.next_line_id;
             state.next_line_id += 1;
             return .{
@@ -32,7 +33,7 @@ pub fn Cursor(comptime State: type) type {
                 .start_y = start_y,
                 .line_y = start_y,
                 .width = @max(width, 1),
-                .x = start_x,
+                .x = start_x + text_indent,
                 .line_height = 0,
                 .text_align = text_align,
                 .line_start_fragment = state.fragments.items.len,
@@ -82,12 +83,13 @@ pub fn Cursor(comptime State: type) type {
         }
 
         fn layoutText(self: *Self, box_id: box.BoxId, text: []const u8, style: box.Style, link_url: ?[]const u8) !void {
+            const transformed = try self.transformText(text, style.text_transform);
             switch (style.white_space) {
-                .normal => try self.layoutCollapsedText(box_id, text, style, link_url, true),
-                .nowrap => try self.layoutCollapsedText(box_id, text, style, link_url, false),
-                .preLine => try self.layoutPreLineText(box_id, text, style, link_url),
-                .pre => try self.layoutPreservedText(box_id, text, style, link_url, false),
-                .preWrap => try self.layoutPreservedText(box_id, text, style, link_url, true),
+                .normal => try self.layoutCollapsedText(box_id, transformed, style, link_url, true),
+                .nowrap => try self.layoutCollapsedText(box_id, transformed, style, link_url, false),
+                .preLine => try self.layoutPreLineText(box_id, transformed, style, link_url),
+                .pre => try self.layoutPreservedText(box_id, transformed, style, link_url, false),
+                .preWrap => try self.layoutPreservedText(box_id, transformed, style, link_url, true),
             }
         }
 
@@ -112,9 +114,18 @@ pub fn Cursor(comptime State: type) type {
                 const word_start = index;
                 while (index < text.len and !isHtmlWhitespace(text[index])) : (index += 1) {}
                 const word = text[word_start..index];
-                const word_width = intrinsic.measureText(self.state.font_registry, word, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing);
+                const word_width = self.measureStyledText(word, style);
                 var leading_space = saw_space and self.has_content;
-                var space_width = if (leading_space) intrinsic.measureText(self.state.font_registry, " ", style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing) else 0;
+                var space_width = if (leading_space) self.spaceWidth(style) else 0;
+
+                const break_inside = allow_wrap and (style.word_break == .breakAll or
+                    style.overflow_wrap == .anywhere or
+                    (style.overflow_wrap == .breakWord and word_width > self.width));
+                if (break_inside) {
+                    try self.layoutBreakableWord(box_id, word, leading_space, style, link_url);
+                    saw_space = false;
+                    continue;
+                }
 
                 if (allow_wrap and self.has_content and self.x + space_width + word_width > self.start_x + self.width) {
                     self.newLine();
@@ -173,7 +184,7 @@ pub fn Cursor(comptime State: type) type {
                 if (byte == '\t') {
                     if (chunk_start < index) try self.appendTextFragment(box_id, text[chunk_start..index], chunk_width, false, style, link_url);
                     const tab_text = "    ";
-                    const tab_width = intrinsic.measureText(self.state.font_registry, tab_text, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing);
+                    const tab_width = self.measureStyledText(tab_text, style);
                     if (allow_wrap and self.has_content and self.x + tab_width > self.start_x + self.width) self.newLine();
                     try self.appendTextFragment(box_id, tab_text, tab_width, false, style, link_url);
                     index += 1;
@@ -184,7 +195,7 @@ pub fn Cursor(comptime State: type) type {
 
                 const sequence_length = std.unicode.utf8ByteSequenceLength(byte) catch 1;
                 const end = @min(index + sequence_length, text.len);
-                const character_width = intrinsic.measureText(self.state.font_registry, text[index..end], style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing);
+                const character_width = self.measureStyledText(text[index..end], style);
                 if (allow_wrap and self.has_content and self.x + chunk_width + character_width > self.start_x + self.width) {
                     if (chunk_start < index) try self.appendTextFragment(box_id, text[chunk_start..index], chunk_width, false, style, link_url);
                     self.newLine();
@@ -195,6 +206,48 @@ pub fn Cursor(comptime State: type) type {
                 index = end;
             }
             if (chunk_start < text.len) try self.appendTextFragment(box_id, text[chunk_start..], chunk_width, false, style, link_url);
+        }
+
+        fn layoutBreakableWord(
+            self: *Self,
+            box_id: box.BoxId,
+            word: []const u8,
+            has_leading_space: bool,
+            style: box.Style,
+            link_url: ?[]const u8,
+        ) !void {
+            var leading_space = has_leading_space;
+            var leading_width = if (leading_space) self.spaceWidth(style) else 0;
+            if (self.has_content and self.x + leading_width >= self.start_x + self.width) {
+                self.newLine();
+                leading_space = false;
+                leading_width = 0;
+            }
+
+            var chunk_start: usize = 0;
+            var chunk_width: f32 = 0;
+            var index: usize = 0;
+            while (index < word.len) {
+                const sequence_length = std.unicode.utf8ByteSequenceLength(word[index]) catch 1;
+                const end = @min(index + sequence_length, word.len);
+                const character_width = self.measureStyledText(word[index..end], style);
+                if (chunk_start == index and self.has_content and self.x + leading_width + character_width > self.start_x + self.width) {
+                    self.newLine();
+                    leading_space = false;
+                    leading_width = 0;
+                }
+                if (chunk_start < index and self.x + leading_width + chunk_width + character_width > self.start_x + self.width) {
+                    try self.appendTextFragment(box_id, word[chunk_start..index], leading_width + chunk_width, leading_space, style, link_url);
+                    self.newLine();
+                    leading_space = false;
+                    leading_width = 0;
+                    chunk_start = index;
+                    chunk_width = 0;
+                }
+                chunk_width += character_width;
+                index = end;
+            }
+            if (chunk_start < word.len) try self.appendTextFragment(box_id, word[chunk_start..], leading_width + chunk_width, leading_space, style, link_url);
         }
 
         fn appendTextFragment(
@@ -241,9 +294,11 @@ pub fn Cursor(comptime State: type) type {
             const line_height = @max(style.line_height, style.font_size * 1.2);
             self.line_height = @max(self.line_height, line_height);
             var width = (resolved.metrics().widthCssPx(text, style.font_size) catch 0) +
-                style.letter_spacing * @as(f32, @floatFromInt(countCodepoints(text)));
+                style.letter_spacing * @as(f32, @floatFromInt(countCodepoints(text))) +
+                style.word_spacing * @as(f32, @floatFromInt(countWordSeparators(text)));
             if (leading_space) {
                 width += intrinsic.measureText(self.state.font_registry, " ", resolved.family, style.font_size, style.font_weight, style.font_style, style.letter_spacing);
+                width += style.word_spacing;
             }
             try self.state.fragments.append(self.state.allocator, .{
                 .kind = .text,
@@ -255,6 +310,7 @@ pub fn Cursor(comptime State: type) type {
                 .font_size = style.font_size,
                 .font_family = resolved.family,
                 .letter_spacing = style.letter_spacing,
+                .word_spacing = style.word_spacing,
                 .font_weight = style.font_weight,
                 .font_style = style.font_style,
                 .color = geometry.parseColor(style.color) orelse geometry.Color.black,
@@ -263,6 +319,58 @@ pub fn Cursor(comptime State: type) type {
             });
             self.x += width;
             self.has_content = true;
+        }
+
+        fn measureStyledText(self: *Self, text: []const u8, style: box.Style) f32 {
+            return intrinsic.measureText(self.state.font_registry, text, style.font_family, style.font_size, style.font_weight, style.font_style, style.letter_spacing) +
+                style.word_spacing * @as(f32, @floatFromInt(countWordSeparators(text)));
+        }
+
+        fn spaceWidth(self: *Self, style: box.Style) f32 {
+            return self.measureStyledText(" ", style);
+        }
+
+        fn transformText(self: *Self, text: []const u8, transform: box.TextTransform) ![]const u8 {
+            if (transform == .none) {
+                self.updateCapitalizeBoundary(text);
+                return text;
+            }
+            const transformed = try self.state.allocator.dupe(u8, text);
+            for (transformed) |*byte| {
+                if (byte.* >= 0x80) {
+                    self.capitalize_next = false;
+                    continue;
+                }
+                const is_letter = std.ascii.isAlphabetic(byte.*);
+                switch (transform) {
+                    .none => unreachable,
+                    .uppercase => if (is_letter) {
+                        byte.* = std.ascii.toUpper(byte.*);
+                    },
+                    .lowercase => if (is_letter) {
+                        byte.* = std.ascii.toLower(byte.*);
+                    },
+                    .capitalize => if (is_letter and self.capitalize_next) {
+                        byte.* = std.ascii.toUpper(byte.*);
+                    },
+                }
+                if (is_letter or std.ascii.isDigit(byte.*)) {
+                    self.capitalize_next = false;
+                } else if (isHtmlWhitespace(byte.*) or byte.* == '-' or byte.* == '/') {
+                    self.capitalize_next = true;
+                }
+            }
+            return transformed;
+        }
+
+        fn updateCapitalizeBoundary(self: *Self, text: []const u8) void {
+            for (text) |byte| {
+                if (byte >= 0x80 or std.ascii.isAlphanumeric(byte)) {
+                    self.capitalize_next = false;
+                } else if (isHtmlWhitespace(byte) or byte == '-' or byte == '/') {
+                    self.capitalize_next = true;
+                }
+            }
         }
 
         fn layoutAtomic(self: *Self, box_id: box.BoxId, source: box.Box, link_url: ?[]const u8) !void {
@@ -364,5 +472,13 @@ fn countCodepoints(text: []const u8) usize {
         const length = std.unicode.utf8ByteSequenceLength(text[index]) catch 1;
         index = @min(index + length, text.len);
     }
+    return count;
+}
+
+fn countWordSeparators(text: []const u8) usize {
+    var count: usize = 0;
+    for (text) |byte| if (byte == ' ') {
+        count += 1;
+    };
     return count;
 }

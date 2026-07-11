@@ -43,6 +43,7 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
                     .font_size = fragment.font_size,
                     .font_family = fragment.font_family,
                     .letter_spacing = fragment.letter_spacing,
+                    .word_spacing = fragment.word_spacing,
                     .font_weight = fragment.font_weight,
                     .font_style = fragment.font_style,
                     .color = fragment.color,

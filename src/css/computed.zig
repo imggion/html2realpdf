@@ -21,6 +21,9 @@ const parseDimension = values.parseDimension;
 const parseDimensionWithContext = values.parseDimensionWithContext;
 const parseLineHeight = values.parseLineHeight;
 const parseTextAlign = values.parseTextAlign;
+const parseTextTransform = values.parseTextTransform;
+const parseWordBreak = values.parseWordBreak;
+const parseOverflowWrap = values.parseOverflowWrap;
 const parseTextDecoration = values.parseTextDecoration;
 const parseBoxSizing = values.parseBoxSizing;
 const parseBorderCollapse = values.parseBorderCollapse;
@@ -50,15 +53,16 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "background-color",  "border-bottom-color", "border-bottom-style", "border-bottom-width", "border-collapse",    "border-left-color",
-    "border-left-style", "border-left-width",   "border-radius",       "border-right-color",  "border-right-style", "border-right-width",
-    "border-top-color",  "border-top-style",    "border-top-width",    "box-sizing",          "break-after",        "break-before",
-    "break-inside",      "color",               "display",             "float",               "font-family",        "font-size",
-    "font-style",        "font-weight",         "height",              "letter-spacing",      "line-height",        "margin-bottom",
-    "margin-left",       "margin-right",        "margin-top",          "max-height",          "max-width",          "min-height",
-    "min-width",         "orphans",             "padding-bottom",      "padding-left",        "padding-right",      "padding-top",
-    "page-break-after",  "page-break-before",   "page-break-inside",   "position",            "text-align",         "text-decoration-line",
-    "white-space",       "widows",              "width",
+    "background-color",     "border-bottom-color", "border-bottom-style", "border-bottom-width", "border-collapse",    "border-left-color",
+    "border-left-style",    "border-left-width",   "border-radius",       "border-right-color",  "border-right-style", "border-right-width",
+    "border-top-color",     "border-top-style",    "border-top-width",    "box-sizing",          "break-after",        "break-before",
+    "break-inside",         "color",               "display",             "float",               "font-family",        "font-size",
+    "font-style",           "font-weight",         "height",              "letter-spacing",      "line-height",        "margin-bottom",
+    "margin-left",          "margin-right",        "margin-top",          "max-height",          "max-width",          "min-height",
+    "min-width",            "orphans",             "padding-bottom",      "padding-left",        "padding-right",      "padding-top",
+    "overflow-wrap",        "page-break-after",    "page-break-before",   "page-break-inside",   "position",           "text-align",
+    "text-decoration-line", "text-indent",         "text-transform",      "white-space",         "widows",             "width",
+    "word-break",           "word-spacing",
 };
 
 pub fn supportsProperty(name: []const u8) bool {
@@ -125,8 +129,22 @@ pub fn applyDeclaration(context: Context, style: *box.Style, name: []const u8, v
         } else if (parseLength(value)) |spacing| {
             style.letter_spacing = spacing;
         }
+    } else if (eqlProp(name, "word-spacing")) {
+        if (eqlProp(normalized, "normal")) {
+            style.word_spacing = 0;
+        } else if (parseLength(value)) |spacing| {
+            style.word_spacing = spacing;
+        }
+    } else if (eqlProp(name, "text-indent")) {
+        if (try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(style.font_size))) |indent| style.text_indent = indent;
     } else if (eqlProp(name, "text-align")) {
         if (parseTextAlign(value)) |ta| style.text_align = ta;
+    } else if (eqlProp(name, "text-transform")) {
+        if (parseTextTransform(value)) |transform| style.text_transform = transform;
+    } else if (eqlProp(name, "word-break")) {
+        if (parseWordBreak(value)) |word_break| style.word_break = word_break;
+    } else if (eqlProp(name, "overflow-wrap")) {
+        if (parseOverflowWrap(value)) |overflow_wrap| style.overflow_wrap = overflow_wrap;
     } else if (eqlProp(name, "text-decoration-line")) {
         if (parseTextDecoration(value)) |decoration| style.text_decoration = decoration;
     } else if (eqlProp(name, "box-sizing")) {
@@ -213,13 +231,15 @@ fn applyCssWide(context: Context, style: *box.Style, name: []const u8, keyword: 
 fn isInheritedProperty(name: []const u8) bool {
     return eqlProp(name, "color") or eqlProp(name, "font-family") or eqlProp(name, "font-size") or
         eqlProp(name, "font-style") or eqlProp(name, "font-weight") or eqlProp(name, "line-height") or
-        eqlProp(name, "letter-spacing") or eqlProp(name, "text-align") or eqlProp(name, "text-decoration") or
+        eqlProp(name, "letter-spacing") or eqlProp(name, "word-spacing") or eqlProp(name, "text-align") or
+        eqlProp(name, "text-indent") or eqlProp(name, "text-transform") or eqlProp(name, "word-break") or
+        eqlProp(name, "overflow-wrap") or eqlProp(name, "text-decoration") or
         eqlProp(name, "text-decoration-line") or eqlProp(name, "white-space") or eqlProp(name, "orphans") or
         eqlProp(name, "widows");
 }
 
 fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) void {
-    if (eqlProp(name, "display")) target.display = source.display else if (eqlProp(name, "position")) target.position = source.position else if (eqlProp(name, "float")) target.float_direction = source.float_direction else if (eqlProp(name, "white-space")) target.white_space = source.white_space else if (eqlProp(name, "font-size")) target.font_size = source.font_size else if (eqlProp(name, "font-family")) target.font_family = source.font_family else if (eqlProp(name, "font-weight")) target.font_weight = source.font_weight else if (eqlProp(name, "font-style")) target.font_style = source.font_style else if (eqlProp(name, "color")) target.color = source.color else if (eqlProp(name, "background") or eqlProp(name, "background-color")) target.background = source.background else if (eqlProp(name, "width")) target.width = source.width else if (eqlProp(name, "height")) target.height = source.height else if (eqlProp(name, "min-width")) target.min_width = source.min_width else if (eqlProp(name, "max-width")) target.max_width = source.max_width else if (eqlProp(name, "min-height")) target.min_height = source.min_height else if (eqlProp(name, "max-height")) target.max_height = source.max_height else if (eqlProp(name, "line-height")) target.line_height = source.line_height else if (eqlProp(name, "letter-spacing")) target.letter_spacing = source.letter_spacing else if (eqlProp(name, "text-align")) target.text_align = source.text_align else if (eqlProp(name, "text-decoration") or eqlProp(name, "text-decoration-line")) target.text_decoration = source.text_decoration else if (eqlProp(name, "box-sizing")) target.box_sizing = source.box_sizing else if (eqlProp(name, "border-collapse")) target.border_collapse = source.border_collapse else if (eqlProp(name, "border-radius")) target.border_radius = source.border_radius else if (eqlProp(name, "page-break-before") or eqlProp(name, "break-before")) target.page_break_before = source.page_break_before else if (eqlProp(name, "page-break-after") or eqlProp(name, "break-after")) target.page_break_after = source.page_break_after else if (eqlProp(name, "page-break-inside") or eqlProp(name, "break-inside")) target.page_break_inside = source.page_break_inside else if (eqlProp(name, "orphans")) target.orphans = source.orphans else if (eqlProp(name, "widows")) target.widows = source.widows else if (eqlProp(name, "margin")) target.margin = source.margin else if (eqlProp(name, "margin-top")) target.margin.top = source.margin.top else if (eqlProp(name, "margin-right")) target.margin.right = source.margin.right else if (eqlProp(name, "margin-bottom")) target.margin.bottom = source.margin.bottom else if (eqlProp(name, "margin-left")) target.margin.left = source.margin.left else if (eqlProp(name, "padding")) target.padding = source.padding else if (eqlProp(name, "padding-top")) target.padding.top = source.padding.top else if (eqlProp(name, "padding-right")) target.padding.right = source.padding.right else if (eqlProp(name, "padding-bottom")) target.padding.bottom = source.padding.bottom else if (eqlProp(name, "padding-left")) target.padding.left = source.padding.left else if (eqlProp(name, "border")) {
+    if (eqlProp(name, "display")) target.display = source.display else if (eqlProp(name, "position")) target.position = source.position else if (eqlProp(name, "float")) target.float_direction = source.float_direction else if (eqlProp(name, "white-space")) target.white_space = source.white_space else if (eqlProp(name, "font-size")) target.font_size = source.font_size else if (eqlProp(name, "font-family")) target.font_family = source.font_family else if (eqlProp(name, "font-weight")) target.font_weight = source.font_weight else if (eqlProp(name, "font-style")) target.font_style = source.font_style else if (eqlProp(name, "color")) target.color = source.color else if (eqlProp(name, "background") or eqlProp(name, "background-color")) target.background = source.background else if (eqlProp(name, "width")) target.width = source.width else if (eqlProp(name, "height")) target.height = source.height else if (eqlProp(name, "min-width")) target.min_width = source.min_width else if (eqlProp(name, "max-width")) target.max_width = source.max_width else if (eqlProp(name, "min-height")) target.min_height = source.min_height else if (eqlProp(name, "max-height")) target.max_height = source.max_height else if (eqlProp(name, "line-height")) target.line_height = source.line_height else if (eqlProp(name, "letter-spacing")) target.letter_spacing = source.letter_spacing else if (eqlProp(name, "word-spacing")) target.word_spacing = source.word_spacing else if (eqlProp(name, "text-indent")) target.text_indent = source.text_indent else if (eqlProp(name, "text-align")) target.text_align = source.text_align else if (eqlProp(name, "text-transform")) target.text_transform = source.text_transform else if (eqlProp(name, "word-break")) target.word_break = source.word_break else if (eqlProp(name, "overflow-wrap")) target.overflow_wrap = source.overflow_wrap else if (eqlProp(name, "text-decoration") or eqlProp(name, "text-decoration-line")) target.text_decoration = source.text_decoration else if (eqlProp(name, "box-sizing")) target.box_sizing = source.box_sizing else if (eqlProp(name, "border-collapse")) target.border_collapse = source.border_collapse else if (eqlProp(name, "border-radius")) target.border_radius = source.border_radius else if (eqlProp(name, "page-break-before") or eqlProp(name, "break-before")) target.page_break_before = source.page_break_before else if (eqlProp(name, "page-break-after") or eqlProp(name, "break-after")) target.page_break_after = source.page_break_after else if (eqlProp(name, "page-break-inside") or eqlProp(name, "break-inside")) target.page_break_inside = source.page_break_inside else if (eqlProp(name, "orphans")) target.orphans = source.orphans else if (eqlProp(name, "widows")) target.widows = source.widows else if (eqlProp(name, "margin")) target.margin = source.margin else if (eqlProp(name, "margin-top")) target.margin.top = source.margin.top else if (eqlProp(name, "margin-right")) target.margin.right = source.margin.right else if (eqlProp(name, "margin-bottom")) target.margin.bottom = source.margin.bottom else if (eqlProp(name, "margin-left")) target.margin.left = source.margin.left else if (eqlProp(name, "padding")) target.padding = source.padding else if (eqlProp(name, "padding-top")) target.padding.top = source.padding.top else if (eqlProp(name, "padding-right")) target.padding.right = source.padding.right else if (eqlProp(name, "padding-bottom")) target.padding.bottom = source.padding.bottom else if (eqlProp(name, "padding-left")) target.padding.left = source.padding.left else if (eqlProp(name, "border")) {
         target.border = source.border;
         target.border_top_style = source.border_top_style;
         target.border_right_style = source.border_right_style;

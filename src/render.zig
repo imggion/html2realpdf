@@ -123,9 +123,14 @@ fn validateGlyphCoverage(tree: *const box.BoxTree, registry: ?*const font.Regist
         const text = source_box.text orelse continue;
         var iterator = font.Utf8Iterator{ .bytes = text };
         while (iterator.next() catch return Error.MissingGlyph) |codepoint| {
+            if (isCssControlWhitespace(codepoint)) continue;
             if (font.resolveForCodepoint(registry, source_box.style.font_family, source_box.style.font_weight, source_box.style.font_style, codepoint) == null) return Error.MissingGlyph;
         }
     }
+}
+
+fn isCssControlWhitespace(codepoint: u21) bool {
+    return codepoint == '\t' or codepoint == '\n' or codepoint == '\r' or codepoint == 0x0C;
 }
 
 test "render HTML into a real PDF byte stream" {
@@ -142,6 +147,17 @@ test "render HTML into a real PDF byte stream" {
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Type0") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/ToUnicode") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
+}
+
+test "ignore non-painted CSS control whitespace during glyph validation" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<p>\n\tselectable text\r\n</p>",
+        .{},
+    );
+    defer result.deinit(allocator);
+    try std.testing.expect(std.mem.startsWith(u8, result.bytes, "%PDF-1.7"));
 }
 
 test "reject positioned and floating layout instead of silently misrendering" {

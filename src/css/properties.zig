@@ -55,13 +55,18 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "min-height", .stage = layout },
     .{ .name = "min-width", .stage = layout },
     .{ .name = "orphans", .stage = layout },
+    .{ .name = "overflow-wrap", .stage = full, .notes = "normal break-word and anywhere; Unicode segmentation pending" },
     .{ .name = "padding", .stage = full },
     .{ .name = "position", .stage = computed_only, .notes = "non-static rejected by renderer" },
     .{ .name = "text-align", .stage = full },
     .{ .name = "text-decoration", .stage = full, .notes = "underline and line-through" },
+    .{ .name = "text-indent", .stage = full, .notes = "length and percentage on first formatted line" },
+    .{ .name = "text-transform", .stage = full, .notes = "locale-aware Unicode case mapping pending" },
     .{ .name = "white-space", .stage = layout },
     .{ .name = "widows", .stage = layout },
     .{ .name = "width", .stage = layout, .notes = "typed calc/min/max/clamp and viewport units" },
+    .{ .name = "word-break", .stage = full, .notes = "break-all with UTF-8 codepoint boundaries; Unicode segmentation pending" },
+    .{ .name = "word-spacing", .stage = full, .notes = "PDF Type 0 TJ adjustments" },
 };
 
 pub const web_foundations = [_]FeatureSupport{

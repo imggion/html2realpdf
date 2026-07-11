@@ -568,7 +568,7 @@ async function verifyDomSnapshotFidelity() {
   const fixture = document.createElement("section");
   fixture.style.backgroundColor = "rgb(15, 23, 42)";
   fixture.innerHTML = `
-    <p>Transparent child</p>
+    <p style="word-spacing: 3px; text-indent: 12px; text-transform: uppercase; word-break: break-all; overflow-wrap: anywhere">Transparent child</p>
     <ul><li>List item</li></ul>
     <label>Live value <input value="initial"></label>
     <button type="button">Action</button>
@@ -592,6 +592,11 @@ async function verifyDomSnapshotFidelity() {
     if (!root?.style.backgroundColor) throw new Error("root background was not materialized");
     if (paragraph?.style.backgroundColor) throw new Error("transparent child background was serialized");
     if (paragraph?.style.height) throw new Error("auto block height was frozen into the snapshot");
+    if (paragraph?.style.wordSpacing !== "3px") throw new Error("computed word-spacing was not captured");
+    if (paragraph?.style.textIndent !== "12px") throw new Error("computed text-indent was not captured");
+    if (paragraph?.style.textTransform !== "uppercase") throw new Error("computed text-transform was not captured");
+    if (paragraph?.style.wordBreak !== "break-all") throw new Error("computed word-break was not captured");
+    if (paragraph?.style.overflowWrap !== "anywhere") throw new Error("computed overflow-wrap was not captured");
     if (listItem?.style.display !== "block") throw new Error("list-item display was not normalized");
     if (control?.textContent !== "React state value") throw new Error("live input value was not captured");
     if (control?.style.display !== "inline-block") throw new Error("form control geometry was not preserved");

@@ -251,7 +251,9 @@ const State = struct {
         width: f32,
         text_align: box.TextAlign,
     ) !f32 {
-        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align);
+        const style = self.tree.boxes.items[parent_id].style;
+        const text_indent = style.text_indent.resolve(width) orelse 0;
+        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent);
         var child = self.tree.boxes.items[parent_id].first_child;
         while (child) |child_id| {
             try cursor.layoutBox(child_id, null);
@@ -268,7 +270,10 @@ const State = struct {
         width: f32,
         text_align: box.TextAlign,
     ) !f32 {
-        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align);
+        const first = self.tree.boxes.items[first_box];
+        const style = if (first.parent) |parent_id| self.tree.boxes.items[parent_id].style else first.style;
+        const text_indent = style.text_indent.resolve(width) orelse 0;
+        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent);
         try cursor.layoutBox(first_box, null);
         return cursor.finish();
     }
@@ -375,6 +380,60 @@ test "honor nowrap pre and justified line layout" {
     try std.testing.expect(pre_first_line.? != pre_second_line.?);
     try std.testing.expectEqual(justified_first.?.line_id, justified_second.?.line_id);
     try std.testing.expect(justified_second.?.rect.x > justified_first.?.rect.x + justified_first.?.rect.width);
+}
+
+test "apply text transform indent word spacing and emergency word breaks" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<p style=\"margin:0;width:100px;text-indent:20%;text-transform:uppercase\">hello world</p>" ++
+        "<p style=\"margin:0;width:28px;word-break:break-all\">abcdefghij</p>" ++
+        "<p style=\"margin:0;width:28px;overflow-wrap:break-word\">klmnopqrst</p>" ++
+        "<p style=\"margin:0;white-space:pre;word-spacing:10px\">A B</p>" ++
+        "<p style=\"margin:0;white-space:pre\">A B</p>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200 });
+    defer result.deinit(allocator);
+
+    var uppercase_x: ?f32 = null;
+    var break_all_first_line: ?usize = null;
+    var break_all_wrapped = false;
+    var break_word_first_line: ?usize = null;
+    var break_word_wrapped = false;
+    var spaced_width: ?f32 = null;
+    var normal_width: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        if (std.mem.eql(u8, text, "HELLO")) uppercase_x = fragment.rect.x;
+        if (std.mem.indexOf(u8, "abcdefghij", text) != null and text.len > 0) {
+            if (break_all_first_line) |line| {
+                if (fragment.line_id.? != line) break_all_wrapped = true;
+            } else break_all_first_line = fragment.line_id;
+        }
+        if (std.mem.indexOf(u8, "klmnopqrst", text) != null and text.len > 0) {
+            if (break_word_first_line) |line| {
+                if (fragment.line_id.? != line) break_word_wrapped = true;
+            } else break_word_first_line = fragment.line_id;
+        }
+        if (std.mem.eql(u8, text, "A B")) {
+            if (spaced_width == null) spaced_width = fragment.rect.width else normal_width = fragment.rect.width;
+        }
+    }
+
+    try std.testing.expectApproxEqAbs(@as(f32, 20), uppercase_x.?, 0.01);
+    try std.testing.expect(break_all_wrapped);
+    try std.testing.expect(break_word_wrapped);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), spaced_width.? - normal_width.?, 0.01);
 }
 
 test "layout inline-block children as an atomic inline group" {
