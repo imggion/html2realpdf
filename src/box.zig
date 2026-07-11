@@ -241,15 +241,61 @@ pub const VerticalAlign = union(enum) {
 pub const TextDecoration = enum {
     none,
     underline,
+    overline,
     lineThrough,
+    underlineOverline,
+    underlineLineThrough,
+    overlineLineThrough,
+    all,
+
+    pub fn hasUnderline(self: @This()) bool {
+        return self == .underline or self == .underlineOverline or self == .underlineLineThrough or self == .all;
+    }
+
+    pub fn hasOverline(self: @This()) bool {
+        return self == .overline or self == .underlineOverline or self == .overlineLineThrough or self == .all;
+    }
+
+    pub fn hasLineThrough(self: @This()) bool {
+        return self == .lineThrough or self == .underlineLineThrough or self == .overlineLineThrough or self == .all;
+    }
 
     pub fn toString(self: @This()) []const u8 {
         return switch (self) {
             .none => "none",
             .underline => "underline",
+            .overline => "overline",
             .lineThrough => "line-through",
+            .underlineOverline => "underline overline",
+            .underlineLineThrough => "underline line-through",
+            .overlineLineThrough => "overline line-through",
+            .all => "underline overline line-through",
         };
     }
+};
+
+pub const TextDecorationStyle = enum {
+    solid,
+    double,
+    dotted,
+    dashed,
+    wavy,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .solid => "solid",
+            .double => "double",
+            .dotted => "dotted",
+            .dashed => "dashed",
+            .wavy => "wavy",
+        };
+    }
+};
+
+pub const TextDecorationThickness = union(enum) {
+    auto,
+    fromFont,
+    length: Length,
 };
 
 /// Box sizing model: content-box or border-box.
@@ -388,6 +434,9 @@ pub const Style = struct {
     overflow_wrap: OverflowWrap = .normal,
     vertical_align: VerticalAlign = .baseline,
     text_decoration: TextDecoration = .none,
+    text_decoration_style: TextDecorationStyle = .solid,
+    text_decoration_color: ?[]const u8 = null,
+    text_decoration_thickness: TextDecorationThickness = .auto,
 
     box_sizing: BoxSizing = .contentBox,
     border_collapse: BorderCollapse = .separate,
@@ -1089,6 +1138,13 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     if (style.font_weight != .normal) try writer.print(" font-weight={s}", .{style.font_weight.toString()});
     if (style.font_style != .normal) try writer.print(" font-style={s}", .{style.font_style.toString()});
     if (style.text_decoration != .none) try writer.print(" text-decoration={s}", .{style.text_decoration.toString()});
+    if (style.text_decoration_style != .solid) try writer.print(" text-decoration-style={s}", .{style.text_decoration_style.toString()});
+    if (style.text_decoration_color) |color| try writer.print(" text-decoration-color={s}", .{color});
+    switch (style.text_decoration_thickness) {
+        .auto => {},
+        .fromFont => try writer.writeAll(" text-decoration-thickness=from-font"),
+        .length => |length| try writeLengthDebug("text-decoration-thickness", length, writer),
+    }
     try writeLengthDebug("width", style.width, writer);
     try writeLengthDebug("height", style.height, writer);
     try writeLengthDebug("min-width", style.min_width, writer);

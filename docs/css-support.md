@@ -40,7 +40,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `vertical-align` / inline baselines | Y | Y | Y | Y | Y | Y | Y | mixed text font metrics, keyword alignment, and length-percentage offsets; replaced and inline-block baselines pending |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
 | `text-align` | Y | Y | Y | Y | Y | Y | Y | left, center, right, justify |
-| `text-decoration` | Y | Y | Y | Y | Y | Y | Y | underline and line-through |
+| `text-decoration` | Y | Y | Y | Y | Y | Y | Y | combined underline/overline/line-through, color, thickness, solid/double/dotted/dashed/wavy vector styles |
 | `box-sizing` | Y | Y | Y | Y | - | Y | Y | content-box and border-box |
 | `border-collapse` | Y | Y | Y | Y | Y | Y | Y | table collapsed-border approximation |
 | break before/after/inside | Y | Y | Y | Y | - | Y | Y | page/always/avoid aliases |

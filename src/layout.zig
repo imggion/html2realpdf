@@ -479,6 +479,33 @@ test "align mixed inline font baselines and vertical-align offsets" {
     try std.testing.expectApproxEqAbs(@as(f32, 5), large_baseline.? - raised_baseline.?, 0.01);
 }
 
+test "carry text decoration paint through inline fragments" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source = "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300 });
+    defer result.deinit(allocator);
+    for (result.fragments.items) |fragment| {
+        if (fragment.text == null) continue;
+        try std.testing.expectEqual(box.TextDecoration.underlineOverline, fragment.text_decoration);
+        try std.testing.expectEqual(box.TextDecorationStyle.wavy, fragment.text_decoration_style);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.4), fragment.text_decoration_color.?.red, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, 2), fragment.text_decoration_thickness.?, 0.001);
+        return;
+    }
+    return error.TestExpectedEqual;
+}
+
 test "layout inline-block children as an atomic inline group" {
     const html = @import("html.zig");
     const css = @import("css.zig");

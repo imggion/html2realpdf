@@ -9,9 +9,11 @@ const Declaration = syntax.Declaration;
 pub const Expansion = struct {
     declarations: []const Declaration,
     owns_names: bool,
+    owns_values: bool = false,
 
     pub fn deinit(self: Expansion, allocator: std.mem.Allocator) void {
         if (self.owns_names) for (self.declarations) |declaration| allocator.free(declaration.name);
+        if (self.owns_values) for (self.declarations) |declaration| allocator.free(declaration.value);
         allocator.free(self.declarations);
     }
 };
@@ -33,8 +35,98 @@ pub fn expand(
     if (values.eqlProp(name, "border-bottom")) return try expandBorder(allocator, "bottom", value, important);
     if (values.eqlProp(name, "border-left")) return try expandBorder(allocator, "left", value, important);
     if (values.eqlProp(name, "background")) return try single(allocator, "background-color", value, important);
-    if (values.eqlProp(name, "text-decoration")) return try single(allocator, "text-decoration-line", value, important);
+    if (values.eqlProp(name, "text-decoration")) return try expandTextDecoration(allocator, value, important);
     return null;
+}
+
+fn expandTextDecoration(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+    important: bool,
+) !Expansion {
+    const components = splitComponents(value);
+    var line: []const u8 = "none";
+    var decoration_style: []const u8 = "solid";
+    var color: []const u8 = "currentColor";
+    var thickness: []const u8 = "auto";
+    var underline = false;
+    var overline = false;
+    var line_through = false;
+
+    if (components.len == 1 and isCssWideKeyword(components.items[0])) {
+        line = components.items[0];
+        decoration_style = components.items[0];
+        color = components.items[0];
+        thickness = components.items[0];
+    } else {
+        for (components.slice()) |component| {
+            if (values.eqlProp(component, "underline")) {
+                underline = true;
+            } else if (values.eqlProp(component, "overline")) {
+                overline = true;
+            } else if (values.eqlProp(component, "line-through")) {
+                line_through = true;
+            } else if (values.eqlProp(component, "none")) {
+                line = "none";
+            } else if (values.parseTextDecorationStyle(component) != null) {
+                decoration_style = component;
+            } else if (isTextDecorationThickness(component)) {
+                thickness = component;
+            } else {
+                color = component;
+            }
+        }
+    }
+
+    if (underline or overline or line_through) {
+        line = if (underline and overline and line_through)
+            "underline overline line-through"
+        else if (underline and overline)
+            "underline overline"
+        else if (underline and line_through)
+            "underline line-through"
+        else if (overline and line_through)
+            "overline line-through"
+        else if (underline)
+            "underline"
+        else if (overline)
+            "overline"
+        else
+            "line-through";
+    }
+
+    const names = [_][]const u8{
+        "text-decoration-line",
+        "text-decoration-style",
+        "text-decoration-color",
+        "text-decoration-thickness",
+    };
+    const resolved_values = [_][]const u8{ line, decoration_style, color, thickness };
+    const declarations = try allocator.alloc(Declaration, names.len);
+    for (names, resolved_values, 0..) |declaration_name, resolved_value, index| {
+        declarations[index] = .{
+            .name = declaration_name,
+            .value = resolved_value,
+            .important = important,
+        };
+    }
+    return .{ .declarations = declarations, .owns_names = false };
+}
+
+fn isCssWideKeyword(value: []const u8) bool {
+    return values.eqlProp(value, "initial") or values.eqlProp(value, "inherit") or
+        values.eqlProp(value, "unset") or values.eqlProp(value, "revert");
+}
+
+fn isTextDecorationThickness(value: []const u8) bool {
+    if (values.eqlProp(value, "auto") or values.eqlProp(value, "from-font")) return true;
+    if (values.parseDimension(value, 16) != null) return true;
+    return startsWithIgnoreCase(value, "calc(") or startsWithIgnoreCase(value, "min(") or
+        startsWithIgnoreCase(value, "max(") or startsWithIgnoreCase(value, "clamp(");
+}
+
+fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
+    return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
 }
 
 fn single(allocator: std.mem.Allocator, name: []const u8, value: []const u8, important: bool) !Expansion {
@@ -114,7 +206,7 @@ fn isBorderWidth(value: []const u8) bool {
 }
 
 const Components = struct {
-    items: [4][]const u8 = @splat(""),
+    items: [8][]const u8 = @splat(""),
     len: usize = 0,
 
     fn slice(self: *const Components) []const []const u8 {
@@ -182,4 +274,16 @@ test "expand border component quads with canonical longhand names" {
     try std.testing.expectEqualStrings("border-right-style", expansion.declarations[1].name);
     try std.testing.expectEqualStrings("solid", expansion.declarations[0].value);
     try std.testing.expectEqualStrings("dashed", expansion.declarations[1].value);
+}
+
+test "expand text-decoration into line style color and thickness" {
+    const allocator = std.testing.allocator;
+    const expansion = (try expand(allocator, "text-decoration", "underline overline 2px wavy rebeccapurple", true)).?;
+    defer expansion.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 4), expansion.declarations.len);
+    try std.testing.expectEqualStrings("underline overline", expansion.declarations[0].value);
+    try std.testing.expectEqualStrings("wavy", expansion.declarations[1].value);
+    try std.testing.expectEqualStrings("rebeccapurple", expansion.declarations[2].value);
+    try std.testing.expectEqualStrings("2px", expansion.declarations[3].value);
+    try std.testing.expect(expansion.declarations[0].important);
 }

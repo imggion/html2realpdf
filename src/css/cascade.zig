@@ -97,6 +97,9 @@ fn computeStylesRecursive(
         style.color = ps.color;
         style.white_space = ps.white_space;
         style.text_decoration = ps.text_decoration;
+        style.text_decoration_style = ps.text_decoration_style;
+        style.text_decoration_color = ps.text_decoration_color;
+        style.text_decoration_thickness = ps.text_decoration_thickness;
         style.letter_spacing = ps.letter_spacing;
         style.word_spacing = ps.word_spacing;
         style.text_indent = ps.text_indent;
@@ -114,7 +117,12 @@ fn computeStylesRecursive(
     if (ua_style.font_weight != .normal) style.font_weight = ua_style.font_weight;
     if (ua_style.font_style != .normal) style.font_style = ua_style.font_style;
     if (!std.mem.eql(u8, ua_style.color, (box.Style{}).color)) style.color = ua_style.color;
-    if (ua_style.text_decoration != .none) style.text_decoration = ua_style.text_decoration;
+    if (ua_style.text_decoration != .none) {
+        style.text_decoration = ua_style.text_decoration;
+        style.text_decoration_style = ua_style.text_decoration_style;
+        style.text_decoration_color = ua_style.text_decoration_color;
+        style.text_decoration_thickness = ua_style.text_decoration_thickness;
+    }
 
     var matches = try std.ArrayList(Match).initCapacity(scratch, 0);
     defer matches.deinit(scratch);

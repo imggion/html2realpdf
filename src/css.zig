@@ -854,6 +854,21 @@ test "cascade: vertical-align keeps keyword and percentage computed values" {
     }
 }
 
+test "cascade: text-decoration shorthand keeps line style color and thickness" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");
+    defer ct.deinit(allocator);
+    const p_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const style = ct.styles[p_id];
+    try std.testing.expectEqual(box.TextDecoration.underlineOverline, style.text_decoration);
+    try std.testing.expectEqual(box.TextDecorationStyle.wavy, style.text_decoration_style);
+    try std.testing.expectEqualStrings("rebeccapurple", style.text_decoration_color.?);
+    switch (style.text_decoration_thickness) {
+        .length => |length| try std.testing.expectApproxEqAbs(@as(f32, 2), length.resolve(style.font_size).?, 0.01),
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "cascade: page-break and orphans/widows" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<style>div { break-before: page; page-break-after: avoid; break-inside: avoid-page; orphans: 3; widows: 4; }</style><div>page</div>");

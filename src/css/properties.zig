@@ -59,7 +59,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "padding", .stage = full },
     .{ .name = "position", .stage = computed_only, .notes = "non-static rejected by renderer" },
     .{ .name = "text-align", .stage = full },
-    .{ .name = "text-decoration", .stage = full, .notes = "underline and line-through" },
+    .{ .name = "text-decoration", .stage = full, .notes = "combined lines color thickness and vector styles" },
     .{ .name = "text-indent", .stage = full, .notes = "length and percentage on first formatted line" },
     .{ .name = "text-transform", .stage = full, .notes = "locale-aware Unicode case mapping pending" },
     .{ .name = "vertical-align", .stage = full, .notes = "text baseline keywords and length-percentage offsets; replaced baselines pending" },

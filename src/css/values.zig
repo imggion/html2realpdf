@@ -218,10 +218,41 @@ pub fn parseVerticalAlignKeyword(value: []const u8) ?box.VerticalAlign {
 
 pub fn parseTextDecoration(value: []const u8) ?box.TextDecoration {
     var tokens = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
+    var underline = false;
+    var overline = false;
+    var line_through = false;
+    var recognized = false;
     while (tokens.next()) |token| {
-        if (eqlProp(token, "underline")) return .underline;
-        if (eqlProp(token, "line-through")) return .lineThrough;
+        if (eqlProp(token, "underline")) {
+            underline = true;
+            recognized = true;
+        } else if (eqlProp(token, "overline")) {
+            overline = true;
+            recognized = true;
+        } else if (eqlProp(token, "line-through")) {
+            line_through = true;
+            recognized = true;
+        }
         if (eqlProp(token, "none")) return .none;
+    }
+    if (!recognized) return null;
+    if (underline and overline and line_through) return .all;
+    if (underline and overline) return .underlineOverline;
+    if (underline and line_through) return .underlineLineThrough;
+    if (overline and line_through) return .overlineLineThrough;
+    if (underline) return .underline;
+    if (overline) return .overline;
+    return .lineThrough;
+}
+
+pub fn parseTextDecorationStyle(value: []const u8) ?box.TextDecorationStyle {
+    var tokens = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
+    while (tokens.next()) |token| {
+        if (eqlProp(token, "solid")) return .solid;
+        if (eqlProp(token, "double")) return .double;
+        if (eqlProp(token, "dotted")) return .dotted;
+        if (eqlProp(token, "dashed")) return .dashed;
+        if (eqlProp(token, "wavy")) return .wavy;
     }
     return null;
 }

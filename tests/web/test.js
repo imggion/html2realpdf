@@ -568,7 +568,7 @@ async function verifyDomSnapshotFidelity() {
   const fixture = document.createElement("section");
   fixture.style.backgroundColor = "rgb(15, 23, 42)";
   fixture.innerHTML = `
-    <p style="word-spacing: 3px; text-indent: 12px; text-transform: uppercase; word-break: break-all; overflow-wrap: anywhere; vertical-align: super">Transparent child</p>
+    <p style="word-spacing: 3px; text-indent: 12px; text-transform: uppercase; word-break: break-all; overflow-wrap: anywhere; vertical-align: super; text-decoration: underline overline wavy rgb(180, 20, 90) 2px">Transparent child</p>
     <ul><li>List item</li></ul>
     <label>Live value <input value="initial"></label>
     <button type="button">Action</button>
@@ -598,6 +598,10 @@ async function verifyDomSnapshotFidelity() {
     if (paragraph?.style.wordBreak !== "break-all") throw new Error("computed word-break was not captured");
     if (paragraph?.style.overflowWrap !== "anywhere") throw new Error("computed overflow-wrap was not captured");
     if (paragraph?.style.verticalAlign !== "super") throw new Error("computed vertical-align was not captured");
+    if (!paragraph?.style.textDecorationLine.includes("underline") || !paragraph.style.textDecorationLine.includes("overline")) throw new Error("computed text-decoration-line was not captured");
+    if (paragraph?.style.textDecorationStyle !== "wavy") throw new Error("computed text-decoration-style was not captured");
+    if (paragraph?.style.textDecorationColor !== "rgb(180, 20, 90)") throw new Error("computed text-decoration-color was not captured");
+    if (paragraph?.style.textDecorationThickness !== "2px") throw new Error("computed text-decoration-thickness was not captured");
     if (listItem?.style.display !== "block") throw new Error("list-item display was not normalized");
     if (control?.textContent !== "React state value") throw new Error("live input value was not captured");
     if (control?.style.display !== "inline-block") throw new Error("form control geometry was not preserved");

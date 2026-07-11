@@ -319,6 +319,9 @@ pub fn Cursor(comptime State: type) type {
                 .font_style = style.font_style,
                 .color = geometry.parseColor(style.color) orelse geometry.Color.black,
                 .text_decoration = style.text_decoration,
+                .text_decoration_style = style.text_decoration_style,
+                .text_decoration_color = if (style.text_decoration_color) |value| geometry.parseColor(value) else null,
+                .text_decoration_thickness = resolveTextDecorationThickness(style),
                 .link_url = link_url,
             });
             self.x += width;
@@ -528,6 +531,13 @@ fn isBaselineAlignment(value: box.VerticalAlign) bool {
     return switch (value) {
         .baseline => true,
         else => false,
+    };
+}
+
+fn resolveTextDecorationThickness(style: box.Style) ?f32 {
+    return switch (style.text_decoration_thickness) {
+        .auto, .fromFont => null,
+        .length => |length| if (length.resolve(style.font_size)) |value| @max(value, 0) else null,
     };
 }
 
