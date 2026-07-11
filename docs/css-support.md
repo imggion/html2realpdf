@@ -48,6 +48,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `text-decoration` | Y | Y | Y | Y | Y | Y | Y | combined underline/overline/line-through, color, thickness, solid/double/dotted/dashed/wavy vector styles |
 | `box-sizing` | Y | Y | Y | Y | - | Y | Y | content-box and border-box |
 | `border-collapse` | Y | Y | Y | Y | Y | Y | Y | table collapsed-border approximation |
+| table formatting | Y | Y | Y | Y | Y | Y | Y | percentage tracks, rowspan/colspan, repeated headers, and top/middle/bottom/baseline cell alignment; captions and column groups pending |
 | break before/after/inside | Y | Y | Y | Y | - | Y | Y | page/always/avoid aliases |
 | `orphans` / `widows` | Y | Y | Y | Y | - | Y | Y | paragraph line constraints |
 | `position` | Y | Y | Y | - | - | - | Y | only static renders; others fail clearly |

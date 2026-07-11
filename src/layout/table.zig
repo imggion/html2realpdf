@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const box = @import("../box.zig");
+const font = @import("../font.zig");
 const geometry = @import("../geometry.zig");
 const intrinsic = @import("intrinsic.zig");
 const types = @import("types.zig");
@@ -13,6 +14,12 @@ const FragmentId = types.FragmentId;
 const Fragment = types.Fragment;
 const borderPaint = types.borderPaint;
 const resolveContentDimension = intrinsic.resolveContentDimension;
+
+const CellLayout = struct {
+    root: FragmentId,
+    end: usize,
+    natural_height: f32,
+};
 
 pub fn layout(
     state: anytype,
@@ -64,8 +71,8 @@ pub fn layout(
 
         var row_height: f32 = 0;
         var column_index: usize = 0;
-        var cell_roots = try std.ArrayList(FragmentId).initCapacity(state.allocator, column_count);
-        defer cell_roots.deinit(state.allocator);
+        var cell_layouts = try std.ArrayList(CellLayout).initCapacity(state.allocator, column_count);
+        defer cell_layouts.deinit(state.allocator);
         var new_spans = try std.ArrayList(NewSpan).initCapacity(state.allocator, 0);
         defer new_spans.deinit(state.allocator);
         var old_span_roots = try std.ArrayList(FragmentId).initCapacity(state.allocator, 0);
@@ -109,7 +116,11 @@ pub fn layout(
                     if (column_index > 0) state.fragments.items[cell_fragment_id].border.left = 0;
                     if (row_index > 0) state.fragments.items[cell_fragment_id].border.top = 0;
                 }
-                try cell_roots.append(state.allocator, cell_fragment_id);
+                try cell_layouts.append(state.allocator, .{
+                    .root = cell_fragment_id,
+                    .end = state.fragments.items.len,
+                    .natural_height = state.fragments.items[cell_fragment_id].rect.height,
+                });
                 for (occupied[column_index .. column_index + span]) |*slot| slot.* = true;
                 if (row_span > 1) try new_spans.append(state.allocator, .{
                     .first_column = column_index,
@@ -125,9 +136,7 @@ pub fn layout(
 
         row_height = @max(row_height, row_source.style.height.resolve(state.page_height orelse 0) orelse 1);
         state.fragments.items[row_fragment_id].rect.height = row_height;
-        for (cell_roots.items) |fragment_id| {
-            state.fragments.items[fragment_id].rect.height = @max(state.fragments.items[fragment_id].rect.height, row_height);
-        }
+        alignCellContents(state, cell_layouts.items, row_height);
         for (state.fragments.items[row_start_fragment..]) |*fragment| {
             fragment.table_id = table_id;
             fragment.is_table_header = is_header_row;
@@ -188,6 +197,50 @@ pub fn layout(
     }
 
     return row_y - start_y;
+}
+
+fn alignCellContents(state: anytype, cells: []const CellLayout, row_height: f32) void {
+    var row_baseline: ?f32 = null;
+    for (cells) |cell| {
+        const source = state.tree.boxes.items[state.fragments.items[cell.root].source_box];
+        if (source.style.vertical_align != .baseline) continue;
+        const baseline = firstTextBaseline(state, cell.root + 1, cell.end) orelse continue;
+        if (row_baseline == null or baseline > row_baseline.?) row_baseline = baseline;
+    }
+
+    for (cells) |cell| {
+        const root = &state.fragments.items[cell.root];
+        const source = state.tree.boxes.items[root.source_box];
+        const free_space = @max(row_height - cell.natural_height, 0);
+        const shift = switch (source.style.vertical_align) {
+            .middle => free_space / 2,
+            .bottom, .textBottom => free_space,
+            .baseline => if (row_baseline) |target|
+                if (firstTextBaseline(state, cell.root + 1, cell.end)) |baseline| @max(target - baseline, 0) else 0
+            else
+                0,
+            else => 0,
+        };
+        if (shift > 0) {
+            for (state.fragments.items[cell.root + 1 .. cell.end]) |*fragment| shiftFragmentY(fragment, shift);
+        }
+        root.rect.height = @max(root.rect.height, row_height);
+    }
+}
+
+fn firstTextBaseline(state: anytype, start: usize, end: usize) ?f32 {
+    for (state.fragments.items[start..end]) |fragment| {
+        if (fragment.kind != .text) continue;
+        const resolved = font.resolve(state.font_registry, fragment.font_family, fragment.font_weight, fragment.font_style);
+        return fragment.rect.y + fragment.font_size * resolved.metrics().ascentRatio();
+    }
+    return null;
+}
+
+fn shiftFragmentY(fragment: *Fragment, shift: f32) void {
+    fragment.rect.y += shift;
+    if (fragment.clip_rect) |*clip| clip.y += shift;
+    if (fragment.image_content_rect) |*content| content.y += shift;
 }
 
 fn cloneTableHeader(

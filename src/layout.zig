@@ -873,6 +873,50 @@ test "table layout places cells in shared row columns" {
     try std.testing.expectApproxEqAbs(cells[0].height, cells[1].height, 0.01);
 }
 
+test "table cells align top middle bottom and shared baselines" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:300px'>" ++
+        "<tr style='height:100px'><td style='vertical-align:top'>top</td><td style='vertical-align:middle'>middle</td><td style='vertical-align:bottom'>bottom</td></tr>" ++
+        "<tr><td style='font-size:12px;vertical-align:baseline'>small</td><td style='font-size:24px;vertical-align:baseline'>large</td></tr>" ++
+        "</table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300 });
+    defer result.deinit(allocator);
+
+    var top_y: ?f32 = null;
+    var middle_y: ?f32 = null;
+    var bottom_y: ?f32 = null;
+    var small_baseline: ?f32 = null;
+    var large_baseline: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        if (std.mem.eql(u8, text, "top")) top_y = fragment.rect.y;
+        if (std.mem.eql(u8, text, "middle")) middle_y = fragment.rect.y;
+        if (std.mem.eql(u8, text, "bottom")) bottom_y = fragment.rect.y;
+        if (std.mem.eql(u8, text, "small") or std.mem.eql(u8, text, "large")) {
+            const resolved = font.resolve(null, fragment.font_family, fragment.font_weight, fragment.font_style);
+            const baseline = fragment.rect.y + fragment.font_size * resolved.metrics().ascentRatio();
+            if (std.mem.eql(u8, text, "small")) small_baseline = baseline else large_baseline = baseline;
+        }
+    }
+
+    try std.testing.expect(top_y.? < middle_y.? and middle_y.? < bottom_y.?);
+    try std.testing.expectApproxEqAbs(middle_y.? - top_y.?, bottom_y.? - middle_y.?, 0.01);
+    try std.testing.expectApproxEqAbs(small_baseline.?, large_baseline.?, 0.01);
+}
+
 test "percentage table cells fill their allocated tracks" {
     const html = @import("html.zig");
     const css = @import("css.zig");
