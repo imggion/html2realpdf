@@ -11,6 +11,7 @@ const types = @import("types.zig");
 
 pub const Options = struct {
     fill_available_width: bool = false,
+    containing_block_height: ?f32 = null,
 };
 
 pub fn layout(
@@ -34,6 +35,7 @@ pub fn layoutWithOptions(
     const margin = source.margin;
     const border = source.border;
     const padding = source.padding;
+    const containing_height: ?f32 = if (state.web_sizing) options.containing_block_height else containing.height;
 
     if (style.page_break_before == .always) state.advanceToNextPage(cursor_y);
 
@@ -42,12 +44,13 @@ pub fn layoutWithOptions(
     const available_outer_width = @max(containing.width - margin.left - margin.right, 1);
     const horizontal_non_content = border.left + border.right + padding.left + padding.right;
     const vertical_non_content = border.top + border.bottom + padding.top + padding.bottom;
+    const specified_content_height = intrinsic.resolveContentDimensionOptional(style.height, containing_height, vertical_non_content, style.box_sizing);
     const replaced_size = if (source.kind == .replaced) intrinsic.resolveReplacedSize(
         style,
         source.intrinsic_width,
         source.intrinsic_height,
         available_outer_width,
-        containing.height,
+        containing_height,
         horizontal_non_content,
         vertical_non_content,
     ) else null;
@@ -122,10 +125,11 @@ pub fn layoutWithOptions(
                 if (isBlockLevel(child_box.kind)) {
                     const collapsed = collapseMargins(previous_bottom_margin, child_box.margin.top);
                     child_cursor_y -= previous_bottom_margin + child_box.margin.top - collapsed;
-                    _ = try state.layoutBlock(
+                    _ = try state.layoutBlockWithOptions(
                         child_id,
                         .{ .x = content_x, .y = content_y, .width = content_width },
                         &child_cursor_y,
+                        .{ .containing_block_height = if (state.web_sizing) specified_content_height else containing.height },
                     );
                     previous_bottom_margin = child_box.margin.bottom;
                 } else {
@@ -142,9 +146,11 @@ pub fn layoutWithOptions(
     }
 
     var content_height = @max(child_cursor_y - content_y, 0);
-    if (intrinsic.resolveContentDimension(style.height, containing.height, vertical_non_content, style.box_sizing)) |height| content_height = @max(content_height, height);
-    if (intrinsic.resolveContentDimension(style.min_height, containing.height, vertical_non_content, style.box_sizing)) |minimum| content_height = @max(content_height, minimum);
-    if (intrinsic.resolveContentDimension(style.max_height, containing.height, vertical_non_content, style.box_sizing)) |maximum| content_height = @min(content_height, maximum);
+    if (specified_content_height) |height| {
+        content_height = if (state.web_sizing) height else @max(content_height, height);
+    }
+    if (intrinsic.resolveContentDimensionOptional(style.min_height, containing_height, vertical_non_content, style.box_sizing)) |minimum| content_height = @max(content_height, minimum);
+    if (intrinsic.resolveContentDimensionOptional(style.max_height, containing_height, vertical_non_content, style.box_sizing)) |maximum| content_height = @min(content_height, maximum);
     if (source.kind == .replaced) {
         content_height = @max(content_height, replaced_size.?.height);
     }

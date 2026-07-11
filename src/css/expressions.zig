@@ -65,6 +65,27 @@ pub const Store = struct {
         };
     }
 
+    /// Reports whether resolving this expression requires a containing size.
+    /// Invalid or pathologically deep trees are treated conservatively.
+    pub fn dependsOnPercentage(self: *const Store, root: Id) bool {
+        return self.nodeDependsOnPercentage(root, 0);
+    }
+
+    fn nodeDependsOnPercentage(self: *const Store, id: Id, depth: u8) bool {
+        if (depth >= 64 or id >= self.nodes.items.len) return true;
+        const next_depth = depth + 1;
+        return switch (self.nodes.items[id]) {
+            .number => false,
+            .length => |length| length.percent != 0,
+            .negate => |child| self.nodeDependsOnPercentage(child, next_depth),
+            .add, .subtract, .multiply, .divide, .minimum, .maximum => |pair| self.nodeDependsOnPercentage(pair.left, next_depth) or
+                self.nodeDependsOnPercentage(pair.right, next_depth),
+            .clamp => |triple| self.nodeDependsOnPercentage(triple.minimum, next_depth) or
+                self.nodeDependsOnPercentage(triple.preferred, next_depth) or
+                self.nodeDependsOnPercentage(triple.maximum, next_depth),
+        };
+    }
+
     fn evaluate(self: *const Store, id: Id, reference: f32, depth: u8) ?Value {
         if (depth >= 64 or id >= self.nodes.items.len) return null;
         const next_depth = depth + 1;
@@ -101,6 +122,10 @@ pub const Reference = struct {
 
     pub fn resolve(self: Reference, containing_size: f32) ?f32 {
         return self.store.resolve(self.root, containing_size);
+    }
+
+    pub fn dependsOnPercentage(self: Reference) bool {
+        return self.store.dependsOnPercentage(self.root);
     }
 };
 
@@ -398,4 +423,18 @@ test "expression evaluator rejects dimensional multiplication and division by ze
     try std.testing.expect(invalid_product.resolve(100) == null);
     const division_by_zero = (try parse(allocator, &store, "calc(10px / 0)", .{})).?;
     try std.testing.expect(division_by_zero.resolve(100) == null);
+}
+
+test "detect expressions that require a percentage reference" {
+    const allocator = std.testing.allocator;
+    var store = try Store.init(allocator);
+    defer store.deinit(allocator);
+
+    const absolute = (try parse(allocator, &store, "calc(40px + 10px)", .{})).?;
+    const contextual = (try parse(allocator, &store, "calc(50% - 10px)", .{})).?;
+    const nested = (try parse(allocator, &store, "max(20px, min(75%, 200px))", .{})).?;
+
+    try std.testing.expect(!absolute.dependsOnPercentage());
+    try std.testing.expect(contextual.dependsOnPercentage());
+    try std.testing.expect(nested.dependsOnPercentage());
 }

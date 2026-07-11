@@ -99,6 +99,7 @@ pub fn renderHtml(
         .font_registry = options.font_registry,
         .shaping_mode = if (options.css_profile == .document) .identity else .harfbuzz,
         .atomic_inline_baselines = options.css_profile != .document,
+        .web_sizing = options.css_profile != .document,
     });
     defer laid_out.deinit(arena);
 

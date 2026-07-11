@@ -87,6 +87,7 @@ pub const Options = struct {
     font_registry: ?*const font.Registry = null,
     shaping_mode: font.ShapingMode = .identity,
     atomic_inline_baselines: bool = false,
+    web_sizing: bool = false,
 };
 
 pub fn borderPaint(style: box.Style) BorderPaint {

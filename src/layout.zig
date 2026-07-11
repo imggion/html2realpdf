@@ -44,6 +44,7 @@ pub fn layout(
         .font_registry = options.font_registry,
         .shaping_mode = options.shaping_mode,
         .atomic_inline_baselines = options.atomic_inline_baselines,
+        .web_sizing = options.web_sizing,
     };
     errdefer state.fragments.deinit(allocator);
 
@@ -52,7 +53,9 @@ pub fn layout(
         .width = @max(options.content_width, 1),
         .height = 0,
     };
-    _ = try state.layoutBlock(tree.root, containing, &cursor_y);
+    _ = try state.layoutBlockWithOptions(tree.root, containing, &cursor_y, .{
+        .containing_block_height = if (options.web_sizing) options.page_height else containing.height,
+    });
 
     return .{
         .fragments = state.fragments,
@@ -70,6 +73,7 @@ const State = struct {
     font_registry: ?*const font.Registry,
     shaping_mode: font.ShapingMode,
     atomic_inline_baselines: bool,
+    web_sizing: bool,
     next_line_id: usize = 0,
 
     const BlockLayoutOptions = struct {
@@ -82,9 +86,12 @@ const State = struct {
         containing: geometry.Rect,
         cursor_y: *f32,
     ) std.mem.Allocator.Error!geometry.Rect {
+        const options = block.Options{
+            .containing_block_height = if (self.web_sizing) null else containing.height,
+        };
         const fragment_start = self.fragments.items.len;
-        const rect = try block.layout(self, box_id, containing, cursor_y);
-        return self.finishBlockLayout(box_id, containing, cursor_y, fragment_start, rect);
+        const rect = try block.layoutWithOptions(self, box_id, containing, cursor_y, options);
+        return self.finishBlockLayout(box_id, containing, cursor_y, fragment_start, rect, options);
     }
 
     pub fn layoutBlockWithOptions(
@@ -96,7 +103,7 @@ const State = struct {
     ) std.mem.Allocator.Error!geometry.Rect {
         const fragment_start = self.fragments.items.len;
         const rect = try block.layoutWithOptions(self, box_id, containing, cursor_y, options);
-        return self.finishBlockLayout(box_id, containing, cursor_y, fragment_start, rect);
+        return self.finishBlockLayout(box_id, containing, cursor_y, fragment_start, rect, options);
     }
 
     fn finishBlockLayout(
@@ -106,6 +113,7 @@ const State = struct {
         cursor_y: *f32,
         fragment_start: usize,
         raw_rect: geometry.Rect,
+        options: block.Options,
     ) geometry.Rect {
         const source = self.tree.boxes.items[box_id];
         const style = source.style;
@@ -113,7 +121,8 @@ const State = struct {
 
         var rect = raw_rect;
         const vertical_edges = source.border.top + source.border.bottom + source.padding.top + source.padding.bottom;
-        if (intrinsic.resolveContentDimension(style.height, containing.height, vertical_edges, style.box_sizing)) |requested_content_height| {
+        const containing_height: ?f32 = if (self.web_sizing) options.containing_block_height else containing.height;
+        if (intrinsic.resolveContentDimensionOptional(style.height, containing_height, vertical_edges, style.box_sizing)) |requested_content_height| {
             const requested_outer_height = requested_content_height + vertical_edges;
             if (requested_outer_height < rect.height) {
                 const reduction = rect.height - requested_outer_height;
@@ -1068,6 +1077,54 @@ test "border-box dimensions include padding and borders" {
         return;
     }
     return error.TestExpectedEqual;
+}
+
+test "web sizing resolves percentage heights only through definite containing blocks" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:200px;background:#ff0000'>" ++
+        "<div style='height:50%;background:#00ff00'></div>" ++
+        "<div style='height:calc(50% - 10px);background:#0000ff'></div>" ++
+        "</div>" ++
+        "<div style='background:#ffff00'>" ++
+        "<div style='height:50%;background:#ff00ff'><div style='height:60px'></div></div>" ++
+        "<div style='height:calc(40px + 10px);background:#00ffff'></div>" ++
+        "</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 300,
+        .page_height = 400,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var definite_percent: ?f32 = null;
+    var definite_calc: ?f32 = null;
+    var indefinite_percent: ?f32 = null;
+    var absolute_calc: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const background = fragment.background orelse continue;
+        if (background.green == 1 and background.red == 0 and background.blue == 0) definite_percent = fragment.rect.height;
+        if (background.blue == 1 and background.red == 0 and background.green == 0) definite_calc = fragment.rect.height;
+        if (background.red == 1 and background.blue == 1 and background.green == 0) indefinite_percent = fragment.rect.height;
+        if (background.green == 1 and background.blue == 1 and background.red == 0) absolute_calc = fragment.rect.height;
+    }
+
+    try std.testing.expectApproxEqAbs(@as(f32, 100), definite_percent.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 90), definite_calc.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), indefinite_percent.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), absolute_calc.?, 0.01);
 }
 
 test "adjacent block margins collapse instead of adding" {
