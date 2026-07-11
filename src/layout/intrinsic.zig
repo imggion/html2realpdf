@@ -20,9 +20,5 @@ pub fn measureText(
     style: box.FontStyle,
     letter_spacing: f32,
 ) f32 {
-    const metrics = font.resolve(registry, family, weight, style).metrics();
-    var iterator = font.Utf8Iterator{ .bytes = text };
-    var glyph_count: usize = 0;
-    while (iterator.next() catch null) |_| glyph_count += 1;
-    return (metrics.widthCssPx(text, font_size) catch 0) + letter_spacing * @as(f32, @floatFromInt(glyph_count));
+    return font.measureWithFallback(registry, text, family, font_size, weight, style, letter_spacing) catch 0;
 }

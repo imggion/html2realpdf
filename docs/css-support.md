@@ -32,7 +32,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |
 | color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `currentColor`, and native PDF alpha via ExtGState |
 | font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | built-in Noto Sans and registered TTF faces |
-| line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | no shaping, kerning, or per-glyph fallback yet |
+| line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | per-glyph registered font fallback and multi-font runs; shaping and kerning pending |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
 | `text-align` | Y | Y | Y | Y | Y | Y | Y | left, center, right, justify |
 | `text-decoration` | Y | Y | Y | Y | Y | Y | Y | underline and line-through |
@@ -64,7 +64,8 @@ Playwright E2E make the matrix verifiable.
 - generated counters and complex pseudo-element `content` values;
 - Flexbox, Grid, floats, positioned/sticky layout, stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
-- complete Unicode shaping, bidi, ligatures, and per-glyph font fallback;
+- complete Unicode shaping, bidi, ligatures, and kerning; fallback fonts must
+  currently be registered and named in the CSS family list;
 - CSS Fragmentation fragmentainers, `@page`, named pages, and margin boxes.
 
 These features are not silently represented as screenshots. Canvas and SVG

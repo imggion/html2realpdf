@@ -27,6 +27,7 @@ Read these local docs before changing code:
 - Browser snapshots support deterministic screen/print media, explicit viewports, computed pseudo-elements, and opt-in open Shadow DOM flattening; native/WASM warnings use owned structured diagnostics.
 - HTML-string stylesheets are inert and must resolve through `resourceResolver`; Element/ref alternate-media snapshots preserve ancestor selectors, live controls, canvas pixels, and open shadow roots.
 - CSS rgba/hex-alpha colors remain native vectors and use PDF ExtGState rather than flattening; supported shorthands expand into physical longhands before computed-value application.
+- Registered font families may declare Unicode ranges; inline layout resolves and measures fallback per codepoint, then emits distinct selectable PDF text runs for each resolved face.
 
 ## Commands
 

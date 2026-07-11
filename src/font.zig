@@ -54,6 +54,16 @@ pub const RegisteredFont = struct {
     data: []const u8,
     weight: box.FontWeight = .normal,
     style: box.FontStyle = .normal,
+    unicode_ranges: []const UnicodeRange = &.{},
+};
+
+pub const UnicodeRange = struct {
+    start: u21,
+    end: u21,
+
+    pub fn contains(self: UnicodeRange, codepoint: u21) bool {
+        return codepoint >= self.start and codepoint <= self.end;
+    }
 };
 
 pub const Registry = struct {
@@ -62,6 +72,7 @@ pub const Registry = struct {
 
 pub const ResolvedFont = struct {
     id: usize,
+    family: []const u8,
     postscript_name: []const u8,
     data: []const u8,
     weight: box.FontWeight,
@@ -87,6 +98,7 @@ pub fn resolve(
                 if (!std.ascii.eqlIgnoreCase(registered.family, family)) continue;
                 if (registered.weight == weight and registered.style == style) return .{
                     .id = 4 + index,
+                    .family = registered.family,
                     .postscript_name = registered.postscript_name,
                     .data = registered.data,
                     .weight = registered.weight,
@@ -98,6 +110,7 @@ pub fn resolve(
                 const registered = available.fonts[index];
                 return .{
                     .id = 4 + index,
+                    .family = registered.family,
                     .postscript_name = registered.postscript_name,
                     .data = registered.data,
                     .weight = registered.weight,
@@ -110,11 +123,76 @@ pub fn resolve(
     const face = faceFor(weight, style);
     return .{
         .id = @intFromEnum(face),
+        .family = "Noto Sans",
         .postscript_name = face.postscriptName(),
         .data = face.bytes(),
         .weight = weight,
         .style = style,
     };
+}
+
+/// Resolves the first family in the CSS list that contains a concrete glyph.
+/// Style matching is preferred, then a family-local face fallback is allowed,
+/// and finally the built-in Noto Sans face is considered.
+pub fn resolveForCodepoint(
+    registry: ?*const Registry,
+    family_list: []const u8,
+    weight: box.FontWeight,
+    style: box.FontStyle,
+    codepoint: u21,
+) ?ResolvedFont {
+    if (registry) |available| {
+        var families = std.mem.splitScalar(u8, family_list, ',');
+        while (families.next()) |raw_family| {
+            const family = trimFamilyName(raw_family);
+            var fallback: ?ResolvedFont = null;
+            for (available.fonts, 0..) |registered, index| {
+                if (!std.ascii.eqlIgnoreCase(registered.family, family)) continue;
+                const candidate = ResolvedFont{
+                    .id = 4 + index,
+                    .family = registered.family,
+                    .postscript_name = registered.postscript_name,
+                    .data = registered.data,
+                    .weight = registered.weight,
+                    .style = registered.style,
+                };
+                if (!registeredSupportsCodepoint(registered, codepoint) or candidate.metrics().glyphId(codepoint) == 0) continue;
+                if (registered.weight == weight and registered.style == style) return candidate;
+                if (fallback == null) fallback = candidate;
+            }
+            if (fallback) |candidate| return candidate;
+        }
+    }
+
+    const built_in = resolve(null, family_list, weight, style);
+    return if (built_in.metrics().glyphId(codepoint) != 0) built_in else null;
+}
+
+fn registeredSupportsCodepoint(registered: RegisteredFont, codepoint: u21) bool {
+    if (registered.unicode_ranges.len == 0) return true;
+    for (registered.unicode_ranges) |range| if (range.contains(codepoint)) return true;
+    return false;
+}
+
+pub fn measureWithFallback(
+    registry: ?*const Registry,
+    text: []const u8,
+    family_list: []const u8,
+    font_size: f32,
+    weight: box.FontWeight,
+    style: box.FontStyle,
+    letter_spacing: f32,
+) Error!f32 {
+    var width: f32 = 0;
+    var iterator = Utf8Iterator{ .bytes = text };
+    while (try iterator.next()) |codepoint| {
+        const resolved = resolveForCodepoint(registry, family_list, weight, style, codepoint) orelse continue;
+        const metrics = resolved.metrics();
+        width += @as(f32, @floatFromInt(metrics.advanceWidth(metrics.glyphId(codepoint)))) * font_size /
+            @as(f32, @floatFromInt(metrics.units_per_em));
+        width += letter_spacing;
+    }
+    return width;
 }
 
 fn trimFamilyName(value: []const u8) []const u8 {

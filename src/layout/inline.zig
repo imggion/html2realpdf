@@ -5,6 +5,7 @@ const box = @import("../box.zig");
 const geometry = @import("../geometry.zig");
 const intrinsic = @import("intrinsic.zig");
 const types = @import("types.zig");
+const font = @import("../font.zig");
 
 pub fn Cursor(comptime State: type) type {
     return struct {
@@ -200,14 +201,50 @@ pub fn Cursor(comptime State: type) type {
             self: *Self,
             box_id: box.BoxId,
             text: []const u8,
-            width: f32,
+            _: f32,
             leading_space: bool,
             style: box.Style,
             link_url: ?[]const u8,
         ) !void {
             if (text.len == 0) return;
+            var iterator = font.Utf8Iterator{ .bytes = text };
+            var run_start: usize = 0;
+            var run_font: ?font.ResolvedFont = null;
+            var first_run = true;
+            while (true) {
+                const codepoint_start = iterator.index;
+                const codepoint = iterator.next() catch unreachable;
+                const resolved = if (codepoint) |value|
+                    font.resolveForCodepoint(self.state.font_registry, style.font_family, style.font_weight, style.font_style, value) orelse unreachable
+                else
+                    null;
+                if (run_font) |active| {
+                    if (resolved == null or resolved.?.id != active.id) {
+                        try self.appendResolvedTextFragment(box_id, text[run_start..codepoint_start], active, leading_space and first_run, style, link_url);
+                        first_run = false;
+                        run_start = codepoint_start;
+                    }
+                }
+                if (resolved) |next_font| run_font = next_font else break;
+            }
+        }
+
+        fn appendResolvedTextFragment(
+            self: *Self,
+            box_id: box.BoxId,
+            text: []const u8,
+            resolved: font.ResolvedFont,
+            leading_space: bool,
+            style: box.Style,
+            link_url: ?[]const u8,
+        ) !void {
             const line_height = @max(style.line_height, style.font_size * 1.2);
             self.line_height = @max(self.line_height, line_height);
+            var width = (resolved.metrics().widthCssPx(text, style.font_size) catch 0) +
+                style.letter_spacing * @as(f32, @floatFromInt(countCodepoints(text)));
+            if (leading_space) {
+                width += intrinsic.measureText(self.state.font_registry, " ", resolved.family, style.font_size, style.font_weight, style.font_style, style.letter_spacing);
+            }
             try self.state.fragments.append(self.state.allocator, .{
                 .kind = .text,
                 .source_box = box_id,
@@ -216,7 +253,7 @@ pub fn Cursor(comptime State: type) type {
                 .text = text,
                 .leading_space = leading_space,
                 .font_size = style.font_size,
-                .font_family = style.font_family,
+                .font_family = resolved.family,
                 .letter_spacing = style.letter_spacing,
                 .font_weight = style.font_weight,
                 .font_style = style.font_style,
@@ -318,4 +355,14 @@ pub fn Cursor(comptime State: type) type {
 
 fn isHtmlWhitespace(value: u8) bool {
     return value == ' ' or value == '\t' or value == '\n' or value == '\r' or value == 0x0C;
+}
+
+fn countCodepoints(text: []const u8) usize {
+    var count: usize = 0;
+    var index: usize = 0;
+    while (index < text.len) : (count += 1) {
+        const length = std.unicode.utf8ByteSequenceLength(text[index]) catch 1;
+        index = @min(index + length, text.len);
+    }
+    return count;
 }

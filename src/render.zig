@@ -121,11 +121,9 @@ pub fn renderHtml(
 fn validateGlyphCoverage(tree: *const box.BoxTree, registry: ?*const font.Registry) Error!void {
     for (tree.boxes.items) |source_box| {
         const text = source_box.text orelse continue;
-        const resolved = font.resolve(registry, source_box.style.font_family, source_box.style.font_weight, source_box.style.font_style);
-        const metrics = resolved.metrics();
         var iterator = font.Utf8Iterator{ .bytes = text };
         while (iterator.next() catch return Error.MissingGlyph) |codepoint| {
-            if (metrics.glyphId(codepoint) == 0) return Error.MissingGlyph;
+            if (font.resolveForCodepoint(registry, source_box.style.font_family, source_box.style.font_weight, source_box.style.font_style, codepoint) == null) return Error.MissingGlyph;
         }
     }
 }
@@ -234,6 +232,35 @@ test "resolve and embed a registered TrueType font family" {
     );
     defer result.deinit(allocator);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "HREALP+CustomReport-Regular") != null);
+}
+
+test "split one text node across registered per-glyph fallback fonts" {
+    const allocator = std.testing.allocator;
+    const uppercase = [_]font.UnicodeRange{.{ .start = 'A', .end = 'Z' }};
+    const registered = [_]font.RegisteredFont{
+        .{
+            .family = "Primary Latin",
+            .postscript_name = "PrimaryLatin-Regular",
+            .data = font.Face.regular.bytes(),
+            .unicode_ranges = &uppercase,
+        },
+        .{
+            .family = "Fallback Full",
+            .postscript_name = "FallbackFull-Regular",
+            .data = font.Face.regular.bytes(),
+        },
+    };
+    const registry = font.Registry{ .fonts = &registered };
+    var result = try renderHtml(
+        allocator,
+        "<p style=\"font-family:'Primary Latin','Fallback Full'\">Aé</p>",
+        .{ .font_registry = &registry },
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "HREALP+PrimaryLatin-Regular") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "HREALP+FallbackFull-Regular") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
 }
 
 test "render semantic bold and italic text with distinct PDF fonts" {

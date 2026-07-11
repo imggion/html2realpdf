@@ -70,6 +70,7 @@ pub const web_foundations = [_]FeatureSupport{
     .{ .name = "css-wide-keywords", .stage = computed_only, .notes = "initial inherit unset revert" },
     .{ .name = "custom-properties", .stage = computed_only, .notes = "var fallback inheritance and cycle detection" },
     .{ .name = "math-functions", .stage = layout, .notes = "calc min max clamp with contextual percentages" },
+    .{ .name = "per-glyph-font-fallback", .stage = full, .notes = "registered unicode-range faces split into measured PDF text runs" },
     .{ .name = "pseudo-elements", .stage = full, .notes = "browser ::before/::after strings and attr; counters pending" },
     .{ .name = "shadow-dom", .stage = full, .notes = "opt-in open shadow root and slot flattening" },
     .{ .name = "shorthand-expansion", .stage = computed_only, .notes = "supported shorthands become physical longhands before computed values" },
