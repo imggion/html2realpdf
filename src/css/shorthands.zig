@@ -54,9 +54,27 @@ pub fn expand(
     if (values.eqlProp(name, "flex")) return try expandFlex(allocator, value, important);
     if (values.eqlProp(name, "flex-flow")) return try expandFlexFlow(allocator, value, important);
     if (values.eqlProp(name, "gap")) return try expandGap(allocator, value, important);
+    if (values.eqlProp(name, "inset")) return try expandInset(allocator, value, important);
+    if (values.eqlProp(name, "inset-block")) return try expandLogicalPair(allocator, "inset-block", null, value, important);
+    if (values.eqlProp(name, "inset-inline")) return try expandLogicalPair(allocator, "inset-inline", null, value, important);
     if (values.eqlProp(name, "list-style")) return try expandListStyle(allocator, value, important);
     if (values.eqlProp(name, "text-decoration")) return try expandTextDecoration(allocator, value, important);
     return null;
+}
+
+fn expandInset(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
+    const components = splitComponents(value);
+    if (components.len == 0 or components.len > 4) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+    const top = components.items[0];
+    const right = if (components.len > 1) components.items[1] else top;
+    const bottom = if (components.len > 2) components.items[2] else top;
+    const left = if (components.len > 3) components.items[3] else right;
+    const declarations = try allocator.alloc(Declaration, 4);
+    declarations[0] = .{ .name = "top", .value = top, .important = important };
+    declarations[1] = .{ .name = "right", .value = right, .important = important };
+    declarations[2] = .{ .name = "bottom", .value = bottom, .important = important };
+    declarations[3] = .{ .name = "left", .value = left, .important = important };
+    return .{ .declarations = declarations, .owns_names = false };
 }
 
 fn expandFlex(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
@@ -521,4 +539,20 @@ test "expand flex flow sizing and gap shorthands" {
     defer gap.deinit(allocator);
     try std.testing.expectEqualStrings("8px", gap.declarations[0].value);
     try std.testing.expectEqualStrings("12px", gap.declarations[1].value);
+}
+
+test "expand physical and logical inset shorthands" {
+    const allocator = std.testing.allocator;
+    const physical = (try expand(allocator, "inset", "1px 2px 3px 4px", false)).?;
+    defer physical.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 4), physical.declarations.len);
+    try std.testing.expectEqualStrings("top", physical.declarations[0].name);
+    try std.testing.expectEqualStrings("right", physical.declarations[1].name);
+    try std.testing.expectEqualStrings("bottom", physical.declarations[2].name);
+    try std.testing.expectEqualStrings("left", physical.declarations[3].name);
+
+    const logical = (try expand(allocator, "inset-inline", "10% auto", false)).?;
+    defer logical.deinit(allocator);
+    try std.testing.expectEqualStrings("inset-inline-start", logical.declarations[0].name);
+    try std.testing.expectEqualStrings("inset-inline-end", logical.declarations[1].name);
 }

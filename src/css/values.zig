@@ -152,8 +152,19 @@ pub fn parsePosition(value: []const u8) ?box.Position {
     if (eqlProp(v, "static")) return .static;
     if (eqlProp(v, "relative")) return .relative;
     if (eqlProp(v, "absolute")) return .absolute;
+    if (eqlProp(v, "sticky")) return .sticky;
     if (eqlProp(v, "fixed")) return .fixed;
     return null;
+}
+
+pub fn parseOpacity(value: []const u8) ?f32 {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    const parsed = if (v.len > 1 and v[v.len - 1] == '%')
+        (std.fmt.parseFloat(f32, v[0 .. v.len - 1]) catch return null) / 100
+    else
+        std.fmt.parseFloat(f32, v) catch return null;
+    if (!std.math.isFinite(parsed)) return null;
+    return std.math.clamp(parsed, 0, 1);
 }
 
 pub fn parseFloatValue(value: []const u8) ?box.Float {

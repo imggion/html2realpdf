@@ -174,12 +174,13 @@ const AlphaUsage = struct {
     fn collect(self: *AlphaUsage, allocator: std.mem.Allocator, list: *const display_list.DisplayList) !void {
         for (list.commands.items) |page_command| {
             const alpha: ?f32 = switch (page_command.command) {
-                .fill_rect => |command| command.color.alpha,
-                .fill_rounded_rect => |command| command.color.alpha,
-                .stroke_rounded_rect => |command| command.color.alpha,
-                .stroke_line => |command| command.color.alpha,
-                .text => |command| command.color.alpha,
-                .link, .image => null,
+                .fill_rect => |command| command.color.alpha * page_command.opacity,
+                .fill_rounded_rect => |command| command.color.alpha * page_command.opacity,
+                .stroke_rounded_rect => |command| command.color.alpha * page_command.opacity,
+                .stroke_line => |command| command.color.alpha * page_command.opacity,
+                .text => |command| command.color.alpha * page_command.opacity,
+                .image => page_command.opacity,
+                .link => null,
             };
             if (alpha) |value| try self.add(allocator, value);
         }
@@ -385,7 +386,7 @@ fn pageContent(
             .fill_rect => |fill| {
                 const x = margins.left + fill.rect.x * scale;
                 const y = page_height - margins.top - (fill.rect.y + fill.rect.height) * scale;
-                try writeAlphaState(writer, alpha_usage, fill.color.alpha);
+                try writeAlphaState(writer, alpha_usage, fill.color.alpha * page_command.opacity);
                 try writeFillColor(writer, fill.color);
                 try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} re f\n", .{
                     x,
@@ -399,7 +400,7 @@ fn pageContent(
                 const y = page_height - margins.top - (fill.rect.y + fill.rect.height) * scale;
                 const width = fill.rect.width * scale;
                 const height = fill.rect.height * scale;
-                try writeAlphaState(writer, alpha_usage, fill.color.alpha);
+                try writeAlphaState(writer, alpha_usage, fill.color.alpha * page_command.opacity);
                 try writeFillColor(writer, fill.color);
                 try writeRoundedRectPath(writer, x, y, width, height, fill.radius * scale);
                 try writer.writeAll("f\n");
@@ -409,7 +410,7 @@ fn pageContent(
                 const y = page_height - margins.top - (stroke.rect.y + stroke.rect.height) * scale;
                 const width = stroke.rect.width * scale;
                 const height = stroke.rect.height * scale;
-                try writeAlphaState(writer, alpha_usage, stroke.color.alpha);
+                try writeAlphaState(writer, alpha_usage, stroke.color.alpha * page_command.opacity);
                 try writeStrokeColor(writer, stroke.color);
                 switch (stroke.style) {
                     .none, .solid => try writer.writeAll("[] 0 d 0 J\n"),
@@ -425,7 +426,7 @@ fn pageContent(
                 const y1 = page_height - margins.top - line.from.y * scale;
                 const x2 = margins.left + line.to.x * scale;
                 const y2 = page_height - margins.top - line.to.y * scale;
-                try writeAlphaState(writer, alpha_usage, line.color.alpha);
+                try writeAlphaState(writer, alpha_usage, line.color.alpha * page_command.opacity);
                 try writeStrokeColor(writer, line.color);
                 switch (line.style) {
                     .none, .solid => try writer.writeAll("[] 0 d 0 J\n"),
@@ -446,7 +447,7 @@ fn pageContent(
                 const font_size_points = run.font_size * scale;
                 const x = margins.left + run.position.x * scale;
                 const baseline = page_height - margins.top - (run.position.y + run.font_size * metrics.ascentRatio()) * scale;
-                try writeAlphaState(writer, alpha_usage, run.color.alpha);
+                try writeAlphaState(writer, alpha_usage, run.color.alpha * page_command.opacity);
                 try writeFillColor(writer, run.color);
                 if (requiresPositionedGlyphs(&font_usage.fonts.items[used_font_index], run)) {
                     try writePositionedTextRun(
@@ -483,6 +484,7 @@ fn pageContent(
                         next_run.word_spacing != run.word_spacing or
                         font_usage.indexForRun(next_run) != used_font_index or
                         !clipRectsEqual(next_command.clip_rect, page_command.clip_rect) or
+                        @abs(next_command.opacity - page_command.opacity) > 0.0001 or
                         !colorsEqual(next_run.color, run.color) or
                         @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) > 0.1) break;
 
@@ -501,7 +503,7 @@ fn pageContent(
                 const clip_y = page_height - margins.top - (image_command.rect.y + image_command.rect.height) * scale;
                 const x = margins.left + fitted.x * scale;
                 const y = page_height - margins.top - (fitted.y + fitted.height) * scale;
-                try writeAlphaState(writer, alpha_usage, 1);
+                try writeAlphaState(writer, alpha_usage, page_command.opacity);
                 try writer.print("q {d:.3} {d:.3} {d:.3} {d:.3} re W n {d:.3} 0 0 {d:.3} {d:.3} {d:.3} cm /Im{d} Do Q\n", .{
                     clip_x,
                     clip_y,
@@ -1169,6 +1171,7 @@ test "write real fill and stroke alpha through PDF ExtGState" {
     defer commands.deinit(allocator);
     try commands.append(allocator, .{
         .page_index = 0,
+        .opacity = 0.5,
         .command = .{ .fill_rect = .{
             .rect = .{ .x = 10, .y = 10, .width = 80, .height = 30 },
             .color = .{ .red = 1, .green = 0, .blue = 0, .alpha = 0.5 },
@@ -1176,6 +1179,7 @@ test "write real fill and stroke alpha through PDF ExtGState" {
     });
     try commands.append(allocator, .{
         .page_index = 0,
+        .opacity = 0.5,
         .command = .{ .stroke_line = .{
             .from = .{ .x = 10, .y = 50 },
             .to = .{ .x = 90, .y = 50 },
@@ -1192,8 +1196,8 @@ test "write real fill and stroke alpha through PDF ExtGState" {
     defer allocator.free(bytes);
 
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/ExtGState <<") != null);
-    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.5000 /CA 0.5000") != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.2500 /CA 0.2500") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.1250 /CA 0.1250") != null);
 }
 
 test "write word spacing with Type 0 font TJ adjustments" {

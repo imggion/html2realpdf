@@ -21,6 +21,13 @@ export interface SnapshotResult {
 
 const SUPPORTED_COMPUTED_PROPERTIES = [
   "display",
+  "position",
+  "top",
+  "right",
+  "bottom",
+  "left",
+  "z-index",
+  "opacity",
   "float",
   "clear",
   "flex-direction",
@@ -136,7 +143,8 @@ const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   ...SUPPORTED_COMPUTED_PROPERTIES,
   "margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left",
   "border-width", "border-style", "border-color", "background", "page-break-before", "page-break-after",
-  "page-break-inside", "list-style", "flex", "flex-flow", "gap", "orphans", "widows",
+  "page-break-inside", "list-style", "flex", "flex-flow", "gap", "inset", "inset-block", "inset-inline",
+  "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end", "orphans", "widows",
 ]);
 
 export async function snapshotSource(source: HtmlSource, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -740,7 +748,7 @@ function materializeComputedStyle(
   if (!SUPPORTED_DISPLAY.has(display) || ((display === "flex" || display === "inline-flex") && !usesWebLayout(options))) {
     throw new UnsupportedCssError(`display:${display} is outside the document/report layout profile`);
   }
-  if (position !== "static") {
+  if (position !== "static" && !usesWebLayout(options)) {
     throw new UnsupportedCssError(`position:${position} is outside the document/report layout profile`);
   }
   if (floatValue !== "none" && !usesWebLayout(options)) {
@@ -751,7 +759,6 @@ function materializeComputedStyle(
     const unsupportedComputed = [
       ["background-image", computed.getPropertyValue("background-image"), "none"],
       ["box-shadow", computed.getPropertyValue("box-shadow"), "none"],
-      ["opacity", computed.getPropertyValue("opacity"), "1"],
       ["transform", computed.getPropertyValue("transform"), "none"],
       ["filter", computed.getPropertyValue("filter"), "none"],
     ] as const;
@@ -1245,7 +1252,7 @@ function validateAuthoredLayout(property: string, value: string, options: Snapsh
   if (property === "display" && (!SUPPORTED_DISPLAY.has(value) || ((value === "flex" || value === "inline-flex") && !usesWebLayout(options)))) {
     throw new UnsupportedCssError(`display:${value} is outside the document/report layout profile`);
   }
-  if (property === "position" && value !== "static") {
+  if (property === "position" && value !== "static" && !usesWebLayout(options)) {
     throw new UnsupportedCssError(`position:${value} is outside the document/report layout profile`);
   }
   if (property === "float" && value !== "none" && !usesWebLayout(options)) {

@@ -87,7 +87,7 @@ pub fn renderHtml(
     for (styles) |style| {
         if (!style.layout_supported) return Error.UnsupportedDisplayLayout;
         if ((style.display == .flex or style.display == .inlineFlex) and options.css_profile == .document) return Error.UnsupportedDisplayLayout;
-        if (style.position != .static) return Error.UnsupportedPositionedLayout;
+        if (style.position != .static and options.css_profile == .document) return Error.UnsupportedPositionedLayout;
         if (style.float_direction != .none and options.css_profile == .document) return Error.UnsupportedFloatLayout;
     }
     var tree = try box.Builder.build(arena, &document, styles, document.root);
@@ -185,6 +185,18 @@ test "reject positioned and floating layout instead of silently misrendering" {
         Error.MissingGlyph,
         renderHtml(allocator, "<p>Unsupported emoji 😀</p>", .{}),
     );
+}
+
+test "render Web positioned layout as native PDF content" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<div style='position:relative;width:200px;height:100px'>" ++
+            "<span style='position:absolute;right:10px;top:12px'>positioned</span></div>",
+        .{ .css_profile = .web },
+    );
+    defer result.deinit(allocator);
+    try std.testing.expect(std.mem.startsWith(u8, result.bytes, "%PDF-1.7"));
 }
 
 test "render Web floats and clear as native PDF content" {

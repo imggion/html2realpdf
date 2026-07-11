@@ -113,6 +113,7 @@ pub const Position = enum {
     static,
     relative,
     absolute,
+    sticky,
     fixed,
 
     pub fn toString(self: @This()) []const u8 {
@@ -120,6 +121,7 @@ pub const Position = enum {
             .static => "static",
             .relative => "relative",
             .absolute => "absolute",
+            .sticky => "sticky",
             .fixed => "fixed",
         };
     }
@@ -655,6 +657,13 @@ pub const AutoEdges = struct {
     left: bool = false,
 };
 
+pub const Insets = struct {
+    top: Length = .auto,
+    right: Length = .auto,
+    bottom: Length = .auto,
+    left: Length = .auto,
+};
+
 /// Style data resolved enough for Box Tree construction.
 ///
 /// This is not the CSS parser format. The builder only needs properties that
@@ -664,6 +673,9 @@ pub const Style = struct {
     layout_supported: bool = true,
     display: Display = .inlineBox,
     position: Position = .static,
+    insets: Insets = .{},
+    z_index: ?i32 = null,
+    opacity: f32 = 1,
     float_direction: Float = .none,
     clear_direction: Clear = .none,
     white_space: WhiteSpace = .normal,
@@ -960,6 +972,9 @@ const BuildState = struct {
 
         style.display = .inlineBox;
         style.position = .static;
+        style.insets = .{};
+        style.z_index = null;
+        style.opacity = 1;
         style.float_direction = .none;
         style.clear_direction = .none;
         style.background = null;
@@ -1267,6 +1282,9 @@ fn isTableWrappableBox(box: Box) bool {
 fn anonymousStyle(parent: Style) Style {
     var style = parent;
     style.position = .static;
+    style.insets = .{};
+    style.z_index = null;
+    style.opacity = 1;
     style.float_direction = .none;
     style.clear_direction = .none;
     style.background = null;

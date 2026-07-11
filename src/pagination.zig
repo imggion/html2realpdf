@@ -83,7 +83,9 @@ pub fn paginate(
     var page_count: usize = 1;
 
     for (document.fragments.items) |fragment| {
-        if (fragment.kind == .box and fragment.rect.height > 0) {
+        if (fragment.fixed) {
+            try fragments.append(allocator, .{ .page_index = 0, .fragment = fragment });
+        } else if (fragment.kind == .box and fragment.rect.height > 0) {
             try appendSplitBox(allocator, &fragments, fragment, content_height, &page_count);
         } else {
             var page_index: usize = @intFromFloat(@floor(@max(fragment.rect.y, 0) / content_height));
@@ -109,12 +111,49 @@ pub fn paginate(
     // blank page. Text, images, borders, and non-white fills still determine
     // the final page count normally.
     page_count = visiblePageCount(fragments.items);
+    const first_page_fragment_count = fragments.items.len;
+    for (fragments.items[0..first_page_fragment_count]) |paged| {
+        if (!paged.fragment.fixed) continue;
+        for (1..page_count) |page_index| {
+            try fragments.append(allocator, .{ .page_index = page_index, .fragment = paged.fragment });
+        }
+    }
 
     return .{
         .fragments = fragments,
         .page_count = page_count,
         .page_spec = page_spec,
     };
+}
+
+test "fixed fragments repeat at page-relative coordinates" {
+    const allocator = std.testing.allocator;
+    var source = try std.ArrayList(layout.Fragment).initCapacity(allocator, 2);
+    defer source.deinit(allocator);
+    try source.append(allocator, .{
+        .kind = .text,
+        .source_box = 0,
+        .rect = .{ .y = 120, .width = 20, .height = 10 },
+        .text = "page two",
+    });
+    try source.append(allocator, .{
+        .kind = .text,
+        .source_box = 1,
+        .rect = .{ .x = 5, .y = 4, .width = 40, .height = 10 },
+        .text = "header",
+        .fixed = true,
+    });
+    const continuous = layout.LayoutDocument{ .fragments = source, .content_width = 100, .content_height = 130 };
+    var paged = try paginate(allocator, &continuous, .{ .width_points = 75, .height_points = 75 });
+    defer paged.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), paged.page_count);
+    var header_count: usize = 0;
+    for (paged.fragments.items) |fragment| {
+        if (!fragment.fragment.fixed) continue;
+        header_count += 1;
+        try std.testing.expectApproxEqAbs(@as(f32, 4), fragment.fragment.rect.y, 0.01);
+    }
+    try std.testing.expectEqual(@as(usize, 2), header_count);
 }
 
 fn visiblePageCount(fragments: []const PagedFragment) usize {

@@ -8,6 +8,7 @@ const { instance } = await WebAssembly.instantiate(wasm, {});
 const exports = instance.exports;
 const html = `
   <article style="font-family: Noto Sans; color: #172033">
+    <div style="position: fixed; left: 0; right: 0; top: 0; height: 8px; z-index: 50; background: #0f172a; opacity: .9"></div>
     <h1 style="color: #1d4ed8">Real PDF preview</h1>
     <p>This text is selectable: caffè, naïve, €uro.</p>
     <p style="text-transform: uppercase">Unicode transform: straße.</p>
@@ -52,6 +53,16 @@ const html = `
         <div style="flex: 1 1 170px; min-width: 150px; height: 72px; padding: 10px; background: #fef3c7"><strong>Active users</strong><br>4,812</div>
         <div style="flex: 1 1 170px; min-width: 150px; height: 72px; padding: 10px; background: #fae8ff"><strong>Retention</strong><br>91%</div>
       </div>
+    </section>
+    <section style="page-break-before: always; position: relative; width: 540px; height: 240px; padding: 20px; background: #f8fafc">
+      <h2 style="margin: 0; color: #0f172a">Positioned dashboard overlay</h2>
+      <div style="position: relative; left: 14px; top: 9px; width: 180px; height: 44px; padding: 10px; background: #dbeafe">Relative card, normal flow preserved</div>
+      <div style="position: absolute; right: 20px; top: 20px; width: 160px; height: 54px; padding: 10px; z-index: 2; background: #fef3c7">Absolute KPI badge</div>
+      <div style="position: absolute; left: 240px; top: 110px; width: 170px; height: 72px; overflow: hidden; background: #e2e8f0">
+        <div style="position: absolute; left: 110px; top: 12px; width: 100px; height: 48px; background: #16a34a"></div>
+      </div>
+      <div style="position: absolute; left: 40px; top: 135px; width: 145px; height: 70px; z-index: 1; background: #ea580c"></div>
+      <div style="position: absolute; left: 70px; top: 150px; width: 145px; height: 70px; z-index: 3; opacity: .55; background: #2563eb"></div>
     </section>
     <section style="box-decoration-break: clone; width: 400px; height: 820px; margin-top: 18px; padding: 12px; border: 5px solid #7c3aed; border-radius: 10px; background: #f5f3ff">
       <h2 style="margin-top: 0; color: #6d28d9">Cloned page decoration</h2>

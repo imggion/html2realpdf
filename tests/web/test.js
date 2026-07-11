@@ -615,7 +615,7 @@ async function verifyDomSnapshotFidelity() {
     if (paragraph?.style.textDecorationStyle !== "wavy") throw new Error("computed text-decoration-style was not captured");
     if (paragraph?.style.textDecorationColor !== "rgb(180, 20, 90)") throw new Error("computed text-decoration-color was not captured");
     if (paragraph?.style.textDecorationThickness !== "2px") throw new Error("computed text-decoration-thickness was not captured");
-    if (listItem?.style.display !== "block") throw new Error("list-item display was not normalized");
+    if (listItem?.style.display !== "list-item") throw new Error("list-item display was not preserved");
     if (control?.textContent !== "React state value") throw new Error("live input value was not captured");
     if (control?.style.display !== "inline-block") throw new Error("form control geometry was not preserved");
     if (button?.textContent !== "Action") throw new Error("button content was not captured");

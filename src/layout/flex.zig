@@ -75,7 +75,10 @@ pub fn layout(
     while (child) |child_id| : (source_index += 1) {
         const source = state.tree.boxes.items[child_id];
         child = source.next_sibling;
-        if (source.style.position == .absolute or source.style.position == .fixed) continue;
+        if (source.style.position == .absolute or source.style.position == .fixed) {
+            try state.deferPositioned(child_id, .{ .x = content.x, .y = content.y });
+            continue;
+        }
         try items.append(state.allocator, try makeItem(state, child_id, source_index, row_axis, content, specified_content_height));
     }
     if (items.items.len == 0) return specified_content_height orelse 0;

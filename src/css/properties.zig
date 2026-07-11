@@ -62,6 +62,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "font-weight", .stage = full },
     .{ .name = "gap", .stage = layout, .notes = "row and column shorthand for flex and grid" },
     .{ .name = "height", .stage = layout },
+    .{ .name = "inset", .stage = layout, .notes = "web and strict physical and logical positioned offsets" },
     .{ .name = "justify-content", .stage = layout, .notes = "web and strict flex main-axis distribution" },
     .{ .name = "letter-spacing", .stage = full },
     .{ .name = "line-height", .stage = full },
@@ -74,12 +75,13 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "min-width", .stage = layout },
     .{ .name = "object-fit", .stage = full, .notes = "fill contain cover none and scale-down with PDF clipping" },
     .{ .name = "object-position", .stage = full, .notes = "one- and two-value keyword or length-percentage positions" },
+    .{ .name = "opacity", .stage = full, .notes = "web and strict cumulative PDF graphics-state alpha" },
     .{ .name = "order", .stage = layout, .notes = "stable visual ordering of flex items" },
     .{ .name = "orphans", .stage = layout },
     .{ .name = "overflow", .stage = full, .notes = "rectangular descendant clipping; auto and scroll omit interactive scrollbars" },
     .{ .name = "overflow-wrap", .stage = full, .notes = "normal break-word and anywhere at extended grapheme boundaries" },
     .{ .name = "padding", .stage = full },
-    .{ .name = "position", .stage = computed_only, .notes = "non-static rejected by renderer" },
+    .{ .name = "position", .stage = layout, .notes = "web and strict relative absolute sticky print flow and repeated fixed page boxes; document rejects non-static" },
     .{ .name = "row-gap", .stage = layout, .notes = "web and strict flex main or cross gap" },
     .{ .name = "text-align", .stage = full },
     .{ .name = "text-decoration", .stage = full, .notes = "combined lines color thickness and vector styles" },
@@ -92,6 +94,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "width", .stage = layout, .notes = "typed calc/min/max/clamp, min-content/max-content/fit-content, and viewport units" },
     .{ .name = "word-break", .stage = full, .notes = "UAX #14 normal, break-all, and CJK keep-all with extended grapheme boundaries" },
     .{ .name = "word-spacing", .stage = full, .notes = "PDF Type 0 TJ adjustments" },
+    .{ .name = "z-index", .stage = full, .notes = "tree-derived negative normal auto-zero and positive stacking order" },
 };
 
 pub const web_foundations = [_]FeatureSupport{
@@ -106,6 +109,7 @@ pub const web_foundations = [_]FeatureSupport{
     .{ .name = "pseudo-elements", .stage = full, .notes = "browser ::before/::after strings attr and nested counters" },
     .{ .name = "shadow-dom", .stage = full, .notes = "opt-in open shadow root and slot flattening" },
     .{ .name = "shorthand-expansion", .stage = computed_only, .notes = "supported shorthands become physical longhands before computed values" },
+    .{ .name = "stacking-contexts", .stage = full, .notes = "positioned and opacity contexts retain atomic tree-derived paint order" },
     .{ .name = "unicode-line-breaking", .stage = full, .notes = "libunibreak UAX 14 opportunities plus CSS emergency wrapping" },
 };
 

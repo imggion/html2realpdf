@@ -52,6 +52,11 @@ pub fn Cursor(comptime State: type) type {
         pub fn layoutBox(self: *Self, box_id: box.BoxId, inherited_link: ?[]const u8, inherited_vertical_align: box.VerticalAlign) !void {
             if (self.truncated) return;
             const source = self.state.tree.boxes.items[box_id];
+            if (self.state.web_sizing and (source.style.position == .absolute or source.style.position == .fixed)) {
+                try self.state.deferPositioned(box_id, .{ .x = self.x, .y = self.line_y });
+                return;
+            }
+            const fragment_start = self.state.fragments.items.len;
             const effective_vertical_align = if (isBaselineAlignment(source.style.vertical_align)) inherited_vertical_align else source.style.vertical_align;
             var effective_source = source;
             effective_source.style.vertical_align = effective_vertical_align;
@@ -70,6 +75,9 @@ pub fn Cursor(comptime State: type) type {
                     }
                 },
                 else => {},
+            }
+            if (self.state.web_sizing and (source.style.position == .relative or source.style.position == .sticky) and source.kind != .inlineBlock) {
+                self.state.shiftRelativeFragments(box_id, fragment_start, self.width, self.state.page_height orelse 0);
             }
             if (source.style.page_break_after == .always) self.forcePageBreak();
         }

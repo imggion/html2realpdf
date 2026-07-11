@@ -219,7 +219,9 @@ pub fn layoutWithOptions(
             var child = source.first_child;
             while (child) |child_id| {
                 const child_box = state.tree.boxes.items[child_id];
-                if (state.web_sizing and child_box.style.float_direction != .none) {
+                if (state.web_sizing and (child_box.style.position == .absolute or child_box.style.position == .fixed)) {
+                    try state.deferPositioned(child_id, .{ .x = content_x, .y = child_cursor_y });
+                } else if (state.web_sizing and child_box.style.float_direction != .none) {
                     const required_width = try floatOuterWidth(state, child_id, content_width);
                     const float_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
                     const band = float_context.bandAt(float_y);

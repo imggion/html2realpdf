@@ -77,6 +77,7 @@ pub const PageCommand = struct {
     page_index: usize,
     command: Command,
     clip_rect: ?geometry.Rect = null,
+    opacity: f32 = 1,
 };
 
 pub const DisplayList = struct {

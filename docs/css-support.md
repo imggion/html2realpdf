@@ -12,8 +12,9 @@ label "CSS3".
   letters, tables, and presentation-like pages. Unsupported layout-critical
   behavior fails instead of being silently painted incorrectly.
 - **web** is the staged `0.2+` profile. It enables the Unicode typography,
-  browser snapshot, normal-flow, table, float, and Flexbox formatting contexts;
-  Grid, positioned layout, and web effects remain staged separately.
+  browser snapshot, normal-flow, table, float, Flexbox, and positioned-layout
+  formatting contexts; Grid and the remaining web effects are staged
+  separately.
 - **strict** uses the same layout engine and turns unsupported CSS into an
   immediate error at the browser snapshot boundary.
 
@@ -54,7 +55,10 @@ coverage. A dash means the stage is not applicable or not implemented.
 | table formatting | Y | Y | Y | Y | Y | Y | Y | intrinsic auto-layout tracks, percentage/column hints, rowspan/colspan, captions and column groups, repeated headers, and top/middle/bottom/baseline cell alignment including row spans |
 | break before/after/inside | Y | Y | Y | Y | - | Y | Y | page/always/avoid aliases |
 | `orphans` / `widows` | Y | Y | Y | Y | - | Y | Y | paragraph line constraints |
-| `position` | Y | Y | Y | - | - | - | Y | only static renders; others fail clearly |
+| `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; fixed fragments repeat at page-relative coordinates and sticky resolves as relative in paged media |
+| physical/logical inset | Y | Y | Y | Y | - | Y | Y | top/right/bottom/left plus block/inline logical forms; auto sizing, opposing-inset stretch, auto margins, and nearest positioned padding containing block |
+| `z-index` / stacking order | Y | Y | Y | Y | Y | Y | Y | negative, normal-flow, auto/zero, and positive positioned paint phases with atomic descendant traversal |
+| `opacity` | Y | Y | Y | Y | Y | Y | Y | cumulative element opacity is emitted as native PDF ExtGState alpha; isolated transparency groups remain pending |
 | `float` | Y | Y | Y | Y | Y | Y | Y | web/strict left and right exclusion bands with shrink-to-fit sizing; document rejects non-none |
 | `clear` | Y | Y | Y | Y | - | Y | Y | none, left, right, and both within the current block formatting context |
 | Flexbox container | Y | Y | Y | Y | Y | Y | Y | web/strict `flex` and `inline-flex`; row/column/reverse, wrap/wrap-reverse, gaps, justify/align items/content, baseline and RTL main-start |
@@ -76,10 +80,11 @@ Playwright E2E make the matrix verifiable.
 
 ## Explicitly unsupported in the current profile
 
-- non-color typed values such as angles, transforms, and images; group opacity
-  and blend/compositing modes remain pending;
+- non-color typed values such as angles, transforms, and images; isolated
+  opacity groups and blend/compositing modes remain pending;
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
-- Grid, positioned/sticky layout, and stacking contexts;
+- Grid and full Appendix E painting nuances beyond the supported positioned
+  stacking phases;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
 - vertical `writing-mode` values; logical box properties currently map within horizontal-tb;
 - CSS `unicode-bidi` isolate/override modes and language-specific case tailoring beyond Unicode `SpecialCasing.txt`;
@@ -105,7 +110,9 @@ the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
   result handle in Node.
 - `make test-browser` runs the browser harness and mounted React-ref preview on
   Chromium, Firefox, and WebKit, plus a Chromium differential gate that compares
-  Web Flexbox vector geometry with live DOM rectangles within `0.75` CSS px.
+  Web Flexbox and positioned-layout vector geometry with live DOM rectangles
+  within `0.75` CSS px; the positioned gate also verifies clipping, opacity,
+  stacking order, fixed-page repetition, and absence of raster fallback.
 - `make test-baseline` regenerates the versioned PDF fixtures in memory and
   compares their SHA-256 digests with the committed visual baseline manifest.
 - `make test-release` runs all of the above plus package and React builds.

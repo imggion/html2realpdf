@@ -1031,6 +1031,21 @@ test "cascade: flex shorthands produce typed non-inherited item and container va
     try std.testing.expectEqual(@as(f32, 0), ct.styles[item_id].margin.left);
 }
 
+test "cascade: positioned layout resolves physical logical and group properties" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='direction:rtl;position:sticky;inset-block:10px 20px;inset-inline:30px 40px;z-index:-2;opacity:75%'>positioned</div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const style = ct.styles[div_id];
+    try std.testing.expectEqual(box.Position.sticky, style.position);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), style.insets.top.resolve(100).?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), style.insets.bottom.resolve(100).?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), style.insets.right.resolve(100).?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), style.insets.left.resolve(100).?, 0.01);
+    try std.testing.expectEqual(@as(?i32, -2), style.z_index);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), style.opacity, 0.001);
+}
+
 test "cascade: text-decoration shorthand keeps line style color and thickness" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");

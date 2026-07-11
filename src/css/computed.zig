@@ -12,6 +12,7 @@ const diagnostics = @import("../diagnostics.zig");
 const eqlProp = values.eqlProp;
 const parseDisplay = values.parseDisplay;
 const parsePosition = values.parsePosition;
+const parseOpacity = values.parseOpacity;
 const parseFloatValue = values.parseFloatValue;
 const parseClear = values.parseClear;
 const parseWhiteSpace = values.parseWhiteSpace;
@@ -75,23 +76,24 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "align-content",       "align-items",           "align-self",           "aspect-ratio",          "background-color",
-    "border-bottom-color", "border-bottom-style",   "border-bottom-width",  "border-collapse",       "border-left-color",
-    "border-left-style",   "border-left-width",     "border-radius",        "border-right-color",    "border-right-style",
-    "border-right-width",  "border-top-color",      "border-top-style",     "border-top-width",      "box-decoration-break",
-    "box-sizing",          "break-after",           "break-before",         "break-inside",          "caption-side",
-    "clear",               "color",                 "column-gap",           "direction",             "display",
-    "flex-basis",          "flex-direction",        "flex-grow",            "flex-shrink",           "flex-wrap",
-    "float",               "font-family",           "font-size",            "font-style",            "font-weight",
-    "gap",                 "height",                "justify-content",      "letter-spacing",        "line-height",
-    "list-style-position", "list-style-type",       "margin-bottom",        "margin-left",           "margin-right",
-    "margin-top",          "max-height",            "max-width",            "min-height",            "min-width",
-    "object-fit",          "object-position",       "order",                "orphans",               "overflow",
-    "overflow-wrap",       "padding-bottom",        "padding-left",         "padding-right",         "padding-top",
-    "page-break-after",    "page-break-before",     "page-break-inside",    "position",              "row-gap",
-    "text-align",          "text-decoration-color", "text-decoration-line", "text-decoration-style", "text-decoration-thickness",
-    "text-indent",         "text-overflow",         "text-transform",       "vertical-align",        "white-space",
-    "widows",              "width",                 "word-break",           "word-spacing",
+    "align-content",         "align-items",          "align-self",            "aspect-ratio",              "background-color",
+    "border-bottom-color",   "border-bottom-style",  "border-bottom-width",   "border-collapse",           "border-left-color",
+    "border-left-style",     "border-left-width",    "border-radius",         "border-right-color",        "border-right-style",
+    "border-right-width",    "border-top-color",     "border-top-style",      "border-top-width",          "box-decoration-break",
+    "bottom",                "box-sizing",           "break-after",           "break-before",              "break-inside",
+    "caption-side",          "clear",                "color",                 "column-gap",                "direction",
+    "display",               "flex-basis",           "flex-direction",        "flex-grow",                 "flex-shrink",
+    "flex-wrap",             "float",                "font-family",           "font-size",                 "font-style",
+    "font-weight",           "gap",                  "height",                "justify-content",           "left",
+    "letter-spacing",        "line-height",          "list-style-position",   "list-style-type",           "margin-bottom",
+    "margin-left",           "margin-right",         "margin-top",            "max-height",                "max-width",
+    "min-height",            "min-width",            "object-fit",            "object-position",           "opacity",
+    "order",                 "orphans",              "overflow",              "overflow-wrap",             "padding-bottom",
+    "padding-left",          "padding-right",        "padding-top",           "page-break-after",          "page-break-before",
+    "page-break-inside",     "position",             "right",                 "row-gap",                   "text-align",
+    "text-decoration-color", "text-decoration-line", "text-decoration-style", "text-decoration-thickness", "text-indent",
+    "text-overflow",         "text-transform",       "top",                   "vertical-align",            "white-space",
+    "widows",                "width",                "word-break",            "word-spacing",              "z-index",
 };
 
 const logical_properties = [_][]const u8{
@@ -109,6 +111,10 @@ const logical_properties = [_][]const u8{
     "border-inline-start-style",
     "border-inline-start-width",
     "inline-size",
+    "inset-block-end",
+    "inset-block-start",
+    "inset-inline-end",
+    "inset-inline-start",
     "margin-block-end",
     "margin-block-start",
     "margin-inline-end",
@@ -153,6 +159,22 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
         }
     } else if (eqlProp(name, "position")) {
         if (parsePosition(value)) |p| style.position = p;
+    } else if (eqlProp(name, "top")) {
+        if (try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(style.font_size))) |inset| style.insets.top = inset;
+    } else if (eqlProp(name, "right")) {
+        if (try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(style.font_size))) |inset| style.insets.right = inset;
+    } else if (eqlProp(name, "bottom")) {
+        if (try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(style.font_size))) |inset| style.insets.bottom = inset;
+    } else if (eqlProp(name, "left")) {
+        if (try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(style.font_size))) |inset| style.insets.left = inset;
+    } else if (eqlProp(name, "z-index")) {
+        if (eqlProp(normalized, "auto")) {
+            style.z_index = null;
+        } else if (std.fmt.parseInt(i32, normalized, 10) catch null) |z_index| {
+            style.z_index = z_index;
+        }
+    } else if (eqlProp(name, "opacity")) {
+        if (parseOpacity(value)) |opacity| style.opacity = opacity;
     } else if (eqlProp(name, "direction")) {
         if (parseDirection(value)) |direction| style.direction = direction;
     } else if (eqlProp(name, "float")) {
@@ -360,6 +382,8 @@ fn physicalPropertyName(name: []const u8, direction: box.Direction) []const u8 {
 
     if (eqlProp(name, "margin-block-start")) return "margin-top";
     if (eqlProp(name, "margin-block-end")) return "margin-bottom";
+    if (eqlProp(name, "inset-block-start")) return "top";
+    if (eqlProp(name, "inset-block-end")) return "bottom";
     if (eqlProp(name, "padding-block-start")) return "padding-top";
     if (eqlProp(name, "padding-block-end")) return "padding-bottom";
     if (eqlProp(name, "border-block-start-width")) return "border-top-width";
@@ -372,6 +396,8 @@ fn physicalPropertyName(name: []const u8, direction: box.Direction) []const u8 {
     const start_is_left = direction == .ltr;
     if (eqlProp(name, "margin-inline-start")) return if (start_is_left) "margin-left" else "margin-right";
     if (eqlProp(name, "margin-inline-end")) return if (start_is_left) "margin-right" else "margin-left";
+    if (eqlProp(name, "inset-inline-start")) return if (start_is_left) "left" else "right";
+    if (eqlProp(name, "inset-inline-end")) return if (start_is_left) "right" else "left";
     if (eqlProp(name, "padding-inline-start")) return if (start_is_left) "padding-left" else "padding-right";
     if (eqlProp(name, "padding-inline-end")) return if (start_is_left) "padding-right" else "padding-left";
     if (eqlProp(name, "border-inline-start-width")) return if (start_is_left) "border-left-width" else "border-right-width";
@@ -441,6 +467,11 @@ fn copyMappedPhysicalProperty(target: *box.Style, source: *const box.Style, targ
         if (eqlProp(target_name, "margin-left")) target.margin.left = value else target.margin.right = value;
         return;
     }
+    if (eqlProp(target_name, "left") or eqlProp(target_name, "right")) {
+        const value = if (eqlProp(source_name, "left")) source.insets.left else source.insets.right;
+        if (eqlProp(target_name, "left")) target.insets.left = value else target.insets.right = value;
+        return;
+    }
     if (eqlProp(target_name, "padding-left") or eqlProp(target_name, "padding-right")) {
         const value = if (eqlProp(source_name, "padding-left")) source.padding.left else source.padding.right;
         if (eqlProp(target_name, "padding-left")) target.padding.left = value else target.padding.right = value;
@@ -476,6 +507,30 @@ fn isInheritedProperty(name: []const u8) bool {
 }
 
 fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) void {
+    if (eqlProp(name, "top")) {
+        target.insets.top = source.insets.top;
+        return;
+    }
+    if (eqlProp(name, "right")) {
+        target.insets.right = source.insets.right;
+        return;
+    }
+    if (eqlProp(name, "bottom")) {
+        target.insets.bottom = source.insets.bottom;
+        return;
+    }
+    if (eqlProp(name, "left")) {
+        target.insets.left = source.insets.left;
+        return;
+    }
+    if (eqlProp(name, "z-index")) {
+        target.z_index = source.z_index;
+        return;
+    }
+    if (eqlProp(name, "opacity")) {
+        target.opacity = source.opacity;
+        return;
+    }
     if (eqlProp(name, "flex-direction")) {
         target.flex_direction = source.flex_direction;
         return;

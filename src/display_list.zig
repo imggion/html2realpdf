@@ -25,8 +25,10 @@ pub const DisplayList = paint.types.DisplayList;
 pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocument) !DisplayList {
     var commands = try std.ArrayList(PageCommand).initCapacity(allocator, document.fragments.items.len * 2);
     errdefer commands.deinit(allocator);
+    const ordered = try paint.stacking.orderedFragments(allocator, document.fragments.items);
+    defer allocator.free(ordered);
 
-    for (document.fragments.items) |paged| {
+    for (ordered) |paged| {
         const fragment = paged.fragment;
         const command_start = commands.items.len;
         try paint.backgrounds.append(allocator, &commands, paged.page_index, fragment);
@@ -80,6 +82,7 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
         }
         for (commands.items[command_start..]) |*command| {
             command.clip_rect = fragment.clip_rect;
+            command.opacity = fragment.opacity;
         }
     }
 
@@ -186,4 +189,41 @@ test "propagate fragment clipping to every paint command" {
         return;
     };
     return error.TestExpectedEqual;
+}
+
+test "sort paged fragments by tree-derived stacking order" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(pagination.PagedFragment).initCapacity(allocator, 3);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{ .page_index = 0, .fragment = .{
+        .kind = .box,
+        .source_box = 2,
+        .rect = .{ .width = 10, .height = 10 },
+        .background = .{ .red = 1, .green = 0, .blue = 0 },
+        .paint_order = 3,
+    } });
+    try fragments.append(allocator, .{ .page_index = 0, .fragment = .{
+        .kind = .box,
+        .source_box = 0,
+        .rect = .{ .width = 10, .height = 10 },
+        .background = .{ .red = 0, .green = 0, .blue = 1 },
+        .paint_order = 1,
+    } });
+    try fragments.append(allocator, .{ .page_index = 0, .fragment = .{
+        .kind = .box,
+        .source_box = 1,
+        .rect = .{ .width = 10, .height = 10 },
+        .background = .{ .red = 0, .green = 1, .blue = 0 },
+        .paint_order = 2,
+    } });
+    const paged = pagination.PagedDocument{
+        .fragments = fragments,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var list = try build(allocator, &paged);
+    defer list.deinit(allocator);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), list.commands.items[0].command.fill_rect.color.blue, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), list.commands.items[1].command.fill_rect.color.green, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), list.commands.items[2].command.fill_rect.color.red, 0.001);
 }

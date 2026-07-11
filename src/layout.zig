@@ -49,6 +49,8 @@ pub fn layout(
     const margin_cache = try allocator.alloc(?block.MarginInfo, tree.boxes.items.len);
     defer allocator.free(margin_cache);
     @memset(margin_cache, null);
+    var pending_positioned = try std.ArrayList(positioned.Pending).initCapacity(allocator, 0);
+    defer pending_positioned.deinit(allocator);
     var state = State{
         .allocator = allocator,
         .tree = tree,
@@ -60,6 +62,7 @@ pub fn layout(
         .atomic_inline_baselines = options.atomic_inline_baselines,
         .web_sizing = options.web_sizing,
         .margin_cache = margin_cache,
+        .pending_positioned = &pending_positioned,
     };
     errdefer state.fragments.deinit(allocator);
 
@@ -71,6 +74,11 @@ pub fn layout(
     _ = try state.layoutBlockWithOptions(tree.root, containing, &cursor_y, .{
         .containing_block_height = if (options.web_sizing) options.page_height else containing.height,
     });
+    if (options.web_sizing) try positioned.layoutPending(&state, .{
+        .width = containing.width,
+        .height = options.page_height orelse @max(cursor_y, 1),
+    });
+    if (options.web_sizing) try positioned.assignPaintMetadata(&state);
 
     return .{
         .fragments = state.fragments,
@@ -90,6 +98,7 @@ const State = struct {
     atomic_inline_baselines: bool,
     web_sizing: bool,
     margin_cache: []?block.MarginInfo,
+    pending_positioned: *std.ArrayList(positioned.Pending),
     next_line_id: usize = 0,
 
     const BlockLayoutOptions = struct {
@@ -133,34 +142,63 @@ const State = struct {
     ) geometry.Rect {
         const source = self.tree.boxes.items[box_id];
         const style = source.style;
-        if (!style.overflow.clips() or fragment_start >= self.fragments.items.len) return raw_rect;
-
         var rect = raw_rect;
-        const vertical_edges = source.border.top + source.border.bottom + source.padding.top + source.padding.bottom;
-        const containing_height: ?f32 = if (self.web_sizing) options.containing_block_height else containing.height;
-        if (intrinsic.resolveContentDimensionOptional(style.height, containing_height, vertical_edges, style.box_sizing)) |requested_content_height| {
-            const requested_outer_height = requested_content_height + vertical_edges;
-            if (requested_outer_height < rect.height) {
-                const reduction = rect.height - requested_outer_height;
-                rect.height = requested_outer_height;
-                self.fragments.items[fragment_start].rect.height = requested_outer_height;
-                cursor_y.* -= reduction;
+        if (style.overflow.clips() and fragment_start < self.fragments.items.len) {
+            const vertical_edges = source.border.top + source.border.bottom + source.padding.top + source.padding.bottom;
+            const containing_height: ?f32 = if (self.web_sizing) options.containing_block_height else containing.height;
+            if (intrinsic.resolveContentDimensionOptional(style.height, containing_height, vertical_edges, style.box_sizing)) |requested_content_height| {
+                const requested_outer_height = requested_content_height + vertical_edges;
+                if (requested_outer_height < rect.height) {
+                    const reduction = rect.height - requested_outer_height;
+                    rect.height = requested_outer_height;
+                    self.fragments.items[fragment_start].rect.height = requested_outer_height;
+                    cursor_y.* -= reduction;
+                }
+            }
+
+            const clip = geometry.Rect{
+                .x = rect.x + source.border.left,
+                .y = rect.y + source.border.top,
+                .width = @max(rect.width - source.border.left - source.border.right, 0),
+                .height = @max(rect.height - source.border.top - source.border.bottom, 0),
+            };
+            for (self.fragments.items[fragment_start + 1 ..]) |*fragment| {
+                fragment.clip_rect = if (fragment.clip_rect) |existing|
+                    existing.intersection(clip) orelse geometry.Rect{ .x = clip.x, .y = clip.y }
+                else
+                    clip;
             }
         }
-
-        const clip = geometry.Rect{
-            .x = rect.x + source.border.left,
-            .y = rect.y + source.border.top,
-            .width = @max(rect.width - source.border.left - source.border.right, 0),
-            .height = @max(rect.height - source.border.top - source.border.bottom, 0),
-        };
-        for (self.fragments.items[fragment_start + 1 ..]) |*fragment| {
-            fragment.clip_rect = if (fragment.clip_rect) |existing|
-                existing.intersection(clip) orelse geometry.Rect{ .x = clip.x, .y = clip.y }
-            else
-                clip;
+        if (self.web_sizing and (style.position == .relative or style.position == .sticky)) {
+            self.shiftRelativeFragments(box_id, fragment_start, containing.width, options.containing_block_height orelse containing.height);
         }
         return rect;
+    }
+
+    pub fn deferPositioned(self: *State, box_id: box.BoxId, static_position: geometry.Point) !void {
+        try self.pending_positioned.append(self.allocator, .{ .box_id = box_id, .static_position = static_position });
+    }
+
+    pub fn shiftRelativeFragments(self: *State, box_id: box.BoxId, fragment_start: usize, containing_width: f32, containing_height: f32) void {
+        const style = self.tree.boxes.items[box_id].style;
+        const left = style.insets.left.resolve(containing_width);
+        const right = style.insets.right.resolve(containing_width);
+        const top = style.insets.top.resolve(containing_height);
+        const bottom = style.insets.bottom.resolve(containing_height);
+        const shift_x: f32 = if (style.direction == .rtl and right != null)
+            -right.?
+        else if (left) |value|
+            value
+        else if (right) |value|
+            -value
+        else
+            0;
+        const shift_y: f32 = if (top) |value| value else if (bottom) |value| -value else 0;
+        floats.shiftFragments(self.fragments.items[fragment_start..], shift_x, shift_y);
+        for (self.fragments.items[fragment_start..]) |*fragment| {
+            fragment.positioned_group = box_id;
+            fragment.z_index = style.z_index;
+        }
     }
 
     pub fn advanceToNextPage(self: *const State, cursor_y: *f32) void {
@@ -234,6 +272,10 @@ const State = struct {
         var child = self.tree.boxes.items[box_id].first_child;
         while (child) |child_id| {
             const child_box = self.tree.boxes.items[child_id];
+            if (child_box.style.position == .absolute or child_box.style.position == .fixed) {
+                child = child_box.next_sibling;
+                continue;
+            }
             if (block.isBlockLevel(child_box.kind) or (self.web_sizing and child_box.style.float_direction != .none)) return true;
             child = child_box.next_sibling;
         }
@@ -1726,6 +1768,191 @@ test "Web floats occupy side bands and clear moves below them" {
     try std.testing.expect(left.?.x < flow.?.x);
     try std.testing.expect(flow.?.x < right.?.x);
     try std.testing.expect(clear.?.y >= left.?.y + 80);
+}
+
+test "Web relative positioning shifts paint without changing normal flow" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='position:relative;left:20px;top:10px;height:20px;background:#ff0000'>shifted</div>" ++
+        "<div style='height:20px;background:#0000ff'>flow</div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var shifted: ?geometry.Rect = null;
+    var flow: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) shifted = fragment.rect;
+        if (color.blue == 1 and color.red == 0) flow = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 20), shifted.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), shifted.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), flow.?.y, 0.01);
+}
+
+test "Web absolute positioning resolves padding containing blocks and inset sizing" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='position:relative;width:200px;height:100px;padding:10px;background:#f1f5f9'>" ++
+        "<div style='height:20px;background:#ff0000'>normal</div>" ++
+        "<div style='position:absolute;right:20px;top:10px;width:50px;height:30px;background:#0000ff'>corner</div>" ++
+        "<div style='position:absolute;inset:5px 20px 15px 10px;background:#ff00ff'></div>" ++
+        "<div style='position:absolute;left:0;right:0;top:0;width:20px;height:10px;margin-left:auto;margin-right:auto;background:#00ffff'></div>" ++
+        "</div><div style='height:10px;background:#00ff00'>after</div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 240, .page_height = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var normal: ?geometry.Rect = null;
+    var corner: ?geometry.Rect = null;
+    var stretched: ?geometry.Rect = null;
+    var after: ?geometry.Rect = null;
+    var centered: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.green == 0 and color.blue == 0) normal = fragment.rect;
+        if (color.blue == 1 and color.red == 0 and color.green == 0) corner = fragment.rect;
+        if (color.red == 1 and color.blue == 1) stretched = fragment.rect;
+        if (color.green == 1 and color.red == 0 and color.blue == 0) after = fragment.rect;
+        if (color.green == 1 and color.blue == 1 and color.red == 0) centered = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 10), normal.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), normal.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 150), corner.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), corner.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), stretched.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), stretched.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 190), stretched.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), stretched.?.height, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), after.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), centered.?.x, 0.01);
+}
+
+test "Web fixed positioning repeats without consuming normal flow" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    const pagination = @import("pagination.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:80px;background:#00ff00'></div>" ++
+        "<div style='position:fixed;left:10px;top:5px;width:50px;height:10px;background:#ff0000'>header</div>" ++
+        "<div style='height:80px;background:#0000ff'></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 60, .web_sizing = true });
+    defer result.deinit(allocator);
+    var pages = try pagination.paginate(allocator, &result, .{ .width_points = 75, .height_points = 45 });
+    defer pages.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), pages.page_count);
+    var fixed_count: usize = 0;
+    for (pages.fragments.items) |paged| {
+        if (!paged.fragment.fixed or paged.fragment.background == null) continue;
+        fixed_count += 1;
+        try std.testing.expectApproxEqAbs(@as(f32, 10), paged.fragment.rect.x, 0.01);
+        try std.testing.expectApproxEqAbs(@as(f32, 5), paged.fragment.rect.y, 0.01);
+    }
+    try std.testing.expectEqual(@as(usize, 3), fixed_count);
+}
+
+test "Web stacking metadata orders positioned layers and compounds opacity" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='position:relative;width:100px;height:100px;opacity:.5;background:#f1f5f9'>" ++
+        "<div style='position:absolute;inset:0;z-index:2;background:#ff0000'></div>" ++
+        "<div style='height:20px;opacity:.5;background:#00ff00'></div>" ++
+        "<div style='position:absolute;inset:0;z-index:-1;background:#0000ff'></div>" ++
+        "<div style='position:relative;z-index:0;height:20px;background:#ff00ff'></div>" ++
+        "</div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 200, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var negative_order: ?usize = null;
+    var normal_order: ?usize = null;
+    var zero_order: ?usize = null;
+    var positive_order: ?usize = null;
+    var normal_opacity: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.blue == 1 and color.red == 0) negative_order = fragment.paint_order;
+        if (color.green == 1 and color.red == 0) {
+            normal_order = fragment.paint_order;
+            normal_opacity = fragment.opacity;
+        }
+        if (color.red == 1 and color.blue == 1) zero_order = fragment.paint_order;
+        if (color.red == 1 and color.green == 0 and color.blue == 0) positive_order = fragment.paint_order;
+    }
+    try std.testing.expect(negative_order.? < normal_order.?);
+    try std.testing.expect(normal_order.? < zero_order.?);
+    try std.testing.expect(zero_order.? < positive_order.?);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), normal_opacity.?, 0.001);
+}
+
+test "Web overflow clips deferred absolute descendants" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='position:relative;width:100px;height:50px;overflow:hidden'>" ++
+        "<div style='position:absolute;left:80px;top:0;width:40px;height:20px;background:#ff0000'></div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 200, .web_sizing = true });
+    defer result.deinit(allocator);
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red != 1) continue;
+        try std.testing.expectApproxEqAbs(@as(f32, 80), fragment.rect.x, 0.01);
+        try std.testing.expectApproxEqAbs(@as(f32, 100), fragment.clip_rect.?.width, 0.01);
+        return;
+    }
+    return error.TestExpectedEqual;
 }
 
 test "Web flex row distributes grow factors gap and stretch" {
