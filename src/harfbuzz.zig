@@ -160,7 +160,7 @@ fn headerFromData(ptr: *anyopaque) *Header {
     return @ptrFromInt(@intFromPtr(ptr) - @sizeOf(AllocationUnit));
 }
 
-export fn html2realpdf_hb_malloc(size: usize) ?*anyopaque {
+pub export fn html2realpdf_hb_malloc(size: usize) ?*anyopaque {
     const payload_units = (size + @sizeOf(AllocationUnit) - 1) / @sizeOf(AllocationUnit);
     const units = payload_units + 1;
     const storage = backingAllocator().alloc(AllocationUnit, units) catch return null;
@@ -169,7 +169,7 @@ export fn html2realpdf_hb_malloc(size: usize) ?*anyopaque {
     return @ptrFromInt(@intFromPtr(storage.ptr) + @sizeOf(AllocationUnit));
 }
 
-export fn html2realpdf_hb_calloc(count: usize, size: usize) ?*anyopaque {
+pub export fn html2realpdf_hb_calloc(count: usize, size: usize) ?*anyopaque {
     const total = std.math.mul(usize, count, size) catch return null;
     const result = html2realpdf_hb_malloc(total) orelse return null;
     const bytes: [*]u8 = @ptrCast(result);
@@ -177,14 +177,14 @@ export fn html2realpdf_hb_calloc(count: usize, size: usize) ?*anyopaque {
     return result;
 }
 
-export fn html2realpdf_hb_free(optional_ptr: ?*anyopaque) void {
+pub export fn html2realpdf_hb_free(optional_ptr: ?*anyopaque) void {
     const ptr = optional_ptr orelse return;
     const header = headerFromData(ptr);
     const storage: [*]AllocationUnit = @ptrCast(@alignCast(header));
     backingAllocator().free(storage[0..header.units]);
 }
 
-export fn html2realpdf_hb_realloc(optional_ptr: ?*anyopaque, size: usize) ?*anyopaque {
+pub export fn html2realpdf_hb_realloc(optional_ptr: ?*anyopaque, size: usize) ?*anyopaque {
     const ptr = optional_ptr orelse return html2realpdf_hb_malloc(size);
     if (size == 0) {
         html2realpdf_hb_free(ptr);

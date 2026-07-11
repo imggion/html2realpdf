@@ -1,4 +1,4 @@
-.PHONY: debug release wasm run react baseline test test-harfbuzz test-format test-js test-react test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
+.PHONY: debug release wasm run react baseline test test-harfbuzz test-bidi test-line-break test-format test-js test-react test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
 
 debug:
 	zig build -Doptimize=Debug
@@ -38,9 +38,20 @@ test:
 	zig test src/css/properties.zig
 	zig test src/layout/fragmentation.zig
 	zig build test-harfbuzz
+	zig build test-bidi
+	zig build test-bidi-integration
+	zig build test-line-break
 
 test-harfbuzz:
 	zig build test-harfbuzz
+
+test-bidi:
+	zig build test-bidi
+	zig build test-bidi-integration
+
+test-line-break:
+	zig build test-line-break
+	zig build test-bidi-integration
 
 test-format:
 	zig fmt --check build.zig src/*.zig src/css/*.zig src/layout/*.zig src/paint/*.zig
@@ -91,6 +102,10 @@ help:
 	@echo "  make test     Run tests"
 	@echo "  make test-harfbuzz"
 	@echo "                Run the linked native OpenType shaping gate"
+	@echo "  make test-bidi"
+	@echo "                Run Unicode bidi resolution and production layout gates"
+	@echo "  make test-line-break"
+	@echo "                Run Unicode line-breaking and production layout gates"
 	@echo "  make test-format"
 	@echo "                Check all Zig facade and phase-module formatting"
 	@echo "  make test-react"

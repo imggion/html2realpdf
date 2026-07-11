@@ -6,6 +6,8 @@ const geometry = @import("../geometry.zig");
 const intrinsic = @import("intrinsic.zig");
 const types = @import("types.zig");
 const font = @import("../font.zig");
+const bidi = @import("../bidi.zig");
+const line_break = @import("../line_break.zig");
 
 pub fn Cursor(comptime State: type) type {
     return struct {
@@ -18,6 +20,7 @@ pub fn Cursor(comptime State: type) type {
         x: f32,
         line_height: f32,
         text_align: box.TextAlign,
+        direction: box.Direction,
         line_start_fragment: usize,
         line_id: usize,
         has_content: bool = false,
@@ -26,7 +29,7 @@ pub fn Cursor(comptime State: type) type {
         ellipsis_enabled: bool = false,
         truncated: bool = false,
 
-        pub fn init(state: *State, start_x: f32, start_y: f32, width: f32, text_align: box.TextAlign, text_indent: f32, ellipsis_enabled: bool) Self {
+        pub fn init(state: *State, start_x: f32, start_y: f32, width: f32, text_align: box.TextAlign, direction: box.Direction, text_indent: f32, ellipsis_enabled: bool) Self {
             const line_id = state.next_line_id;
             state.next_line_id += 1;
             return .{
@@ -38,6 +41,7 @@ pub fn Cursor(comptime State: type) type {
                 .x = start_x + text_indent,
                 .line_height = 0,
                 .text_align = text_align,
+                .direction = direction,
                 .line_start_fragment = state.fragments.items.len,
                 .line_id = line_id,
                 .ellipsis_enabled = ellipsis_enabled,
@@ -108,6 +112,10 @@ pub fn Cursor(comptime State: type) type {
             link_url: ?[]const u8,
             allow_wrap: bool,
         ) !void {
+            if (self.state.shaping_mode == .harfbuzz) {
+                try self.layoutUnicodeCollapsedText(box_id, text, style, link_url, allow_wrap);
+                return;
+            }
             var index: usize = 0;
             var saw_space = self.pending_space;
             self.pending_space = false;
@@ -150,6 +158,104 @@ pub fn Cursor(comptime State: type) type {
                 saw_space = false;
             }
             self.pending_space = saw_space;
+        }
+
+        fn layoutUnicodeCollapsedText(
+            self: *Self,
+            box_id: box.BoxId,
+            text: []const u8,
+            style: box.Style,
+            link_url: ?[]const u8,
+            allow_wrap: bool,
+        ) !void {
+            var normalized = try std.ArrayList(u8).initCapacity(self.state.allocator, text.len + 1);
+            errdefer normalized.deinit(self.state.allocator);
+            var saw_space = self.pending_space;
+            self.pending_space = false;
+            var index: usize = 0;
+            while (index < text.len) {
+                if (isHtmlWhitespace(text[index])) {
+                    saw_space = true;
+                    index += 1;
+                    continue;
+                }
+                if (saw_space and (self.has_content or normalized.items.len > 0)) {
+                    try normalized.append(self.state.allocator, ' ');
+                }
+                saw_space = false;
+                const sequence_length = std.unicode.utf8ByteSequenceLength(text[index]) catch 1;
+                const end = @min(index + sequence_length, text.len);
+                try normalized.appendSlice(self.state.allocator, text[index..end]);
+                index = end;
+            }
+            self.pending_space = saw_space;
+            if (normalized.items.len == 0) {
+                normalized.deinit(self.state.allocator);
+                return;
+            }
+            const normalized_text = try normalized.toOwnedSlice(self.state.allocator);
+
+            const opportunities = try line_break.opportunitiesForLayout(self.state.allocator, normalized_text, null);
+            defer if (opportunities.len > 0) self.state.allocator.free(opportunities);
+            var chunk_start: usize = 0;
+            var leading_space = false;
+            while (chunk_start < normalized_text.len) {
+                var chunk_end = chunk_start;
+                var boundary: line_break.Opportunity = .indeterminate;
+                while (chunk_end < normalized_text.len) {
+                    const sequence_length = std.unicode.utf8ByteSequenceLength(normalized_text[chunk_end]) catch 1;
+                    chunk_end = @min(chunk_end + sequence_length, normalized_text.len);
+                    boundary = opportunities[chunk_end - 1];
+                    if (boundary.permitsBreak()) break;
+                }
+
+                var body_start = chunk_start;
+                while (body_start < chunk_end and normalized_text[body_start] == ' ') {
+                    leading_space = true;
+                    body_start += 1;
+                }
+                var body_end = chunk_end;
+                var trailing_space = false;
+                while (body_end > body_start and normalized_text[body_end - 1] == ' ') {
+                    trailing_space = true;
+                    body_end -= 1;
+                }
+
+                if (body_start < body_end) {
+                    const body = normalized_text[body_start..body_end];
+                    const body_width = self.measureStyledText(body, style);
+                    var space_width = if (leading_space and self.has_content) self.spaceWidth(style) else 0;
+                    leading_space = leading_space and self.has_content;
+
+                    if (!allow_wrap and self.ellipsis_enabled and self.x + space_width + body_width > self.start_x + self.width) {
+                        try self.truncateWithEllipsis(box_id, body, leading_space, style, link_url);
+                        self.pending_space = false;
+                        return;
+                    }
+
+                    const break_inside = allow_wrap and (style.word_break == .breakAll or
+                        style.overflow_wrap == .anywhere or
+                        (style.overflow_wrap == .breakWord and body_width > self.width));
+                    if (break_inside and self.x + space_width + body_width > self.start_x + self.width) {
+                        try self.layoutBreakableWord(box_id, body, leading_space, style, link_url);
+                    } else {
+                        if (allow_wrap and self.has_content and self.x + space_width + body_width > self.start_x + self.width) {
+                            self.newLine();
+                            leading_space = false;
+                            space_width = 0;
+                        }
+                        try self.appendTextFragment(box_id, body, space_width + body_width, leading_space, style, link_url);
+                    }
+                    leading_space = false;
+                }
+
+                if (trailing_space) leading_space = true;
+                if (boundary == .mandatory) {
+                    self.newLine();
+                    leading_space = false;
+                }
+                chunk_start = chunk_end;
+            }
         }
 
         fn layoutPreLineText(self: *Self, box_id: box.BoxId, text: []const u8, style: box.Style, link_url: ?[]const u8) !void {
@@ -335,7 +441,7 @@ pub fn Cursor(comptime State: type) type {
                 const width = try self.measureFragmentText(fragment.*, text);
                 fragment.text = text;
                 const resolved = font.resolve(self.state.font_registry, fragment.font_family, fragment.font_weight, fragment.font_style);
-                fragment.shaped = try font.shapeWithMode(self.state.allocator, resolved, text, font.detectDirection(text), self.state.shaping_mode);
+                fragment.shaped = try font.shapeWithMode(self.state.allocator, resolved, text, if (fragment.bidi_level & 1 == 0) .ltr else .rtl, self.state.shaping_mode);
                 fragment.rect.width = width;
                 self.x = fragment.rect.x + width;
             }
@@ -344,7 +450,7 @@ pub fn Cursor(comptime State: type) type {
 
         fn measureFragmentText(self: *Self, fragment: types.Fragment, text: []const u8) !f32 {
             const resolved = font.resolve(self.state.font_registry, fragment.font_family, fragment.font_weight, fragment.font_style);
-            const shaped = try font.shapeWithMode(self.state.allocator, resolved, text, font.detectDirection(text), self.state.shaping_mode);
+            const shaped = try font.shapeWithMode(self.state.allocator, resolved, text, if (fragment.bidi_level & 1 == 0) .ltr else .rtl, self.state.shaping_mode);
             var width = font.shapedWidthCssPx(
                 shaped,
                 text,
@@ -370,6 +476,43 @@ pub fn Cursor(comptime State: type) type {
             link_url: ?[]const u8,
         ) !void {
             if (text.len == 0) return;
+            if (self.state.shaping_mode == .harfbuzz) {
+                if (leading_space) {
+                    try self.appendBidiTextFragment(box_id, " ", style, link_url, true);
+                }
+                try self.appendBidiTextFragment(box_id, text, style, link_url, false);
+                return;
+            }
+            const direction = font.detectDirection(text);
+            try self.appendFontRuns(box_id, text, leading_space, style, link_url, direction, if (direction == .rtl) 1 else 0, false);
+        }
+
+        fn appendBidiTextFragment(
+            self: *Self,
+            box_id: box.BoxId,
+            text: []const u8,
+            style: box.Style,
+            link_url: ?[]const u8,
+            collapsible_space: bool,
+        ) !void {
+            var resolution = try bidi.resolveForLayout(self.state.allocator, text, if (style.direction == .rtl) .rtl else .ltr);
+            defer resolution.deinit(self.state.allocator);
+            for (resolution.logical_runs) |run| {
+                try self.appendFontRuns(box_id, text[run.start..run.end], false, style, link_url, run.direction(), run.level, collapsible_space);
+            }
+        }
+
+        fn appendFontRuns(
+            self: *Self,
+            box_id: box.BoxId,
+            text: []const u8,
+            leading_space: bool,
+            style: box.Style,
+            link_url: ?[]const u8,
+            direction: font.Direction,
+            bidi_level: u8,
+            collapsible_space: bool,
+        ) !void {
             var iterator = font.Utf8Iterator{ .bytes = text };
             var run_start: usize = 0;
             var run_font: ?font.ResolvedFont = null;
@@ -383,7 +526,7 @@ pub fn Cursor(comptime State: type) type {
                     null;
                 if (run_font) |active| {
                     if (resolved == null or resolved.?.id != active.id) {
-                        try self.appendResolvedTextFragment(box_id, text[run_start..codepoint_start], active, leading_space and first_run, style, link_url);
+                        try self.appendResolvedTextFragment(box_id, text[run_start..codepoint_start], active, leading_space and first_run, style, link_url, direction, bidi_level, collapsible_space);
                         first_run = false;
                         run_start = codepoint_start;
                     }
@@ -400,10 +543,13 @@ pub fn Cursor(comptime State: type) type {
             leading_space: bool,
             style: box.Style,
             link_url: ?[]const u8,
+            direction: font.Direction,
+            bidi_level: u8,
+            collapsible_space: bool,
         ) !void {
             const line_height = @max(style.line_height, style.font_size * 1.2);
             self.line_height = @max(self.line_height, line_height);
-            const shaped = try font.shapeWithMode(self.state.allocator, resolved, text, font.detectDirection(text), self.state.shaping_mode);
+            const shaped = try font.shapeWithMode(self.state.allocator, resolved, text, direction, self.state.shaping_mode);
             var width = font.shapedWidthCssPx(
                 shaped,
                 text,
@@ -424,6 +570,8 @@ pub fn Cursor(comptime State: type) type {
                 .text = text,
                 .shaped = shaped,
                 .leading_space = leading_space,
+                .collapsible_space = collapsible_space,
+                .bidi_level = bidi_level,
                 .font_size = style.font_size,
                 .font_family = resolved.family,
                 .letter_spacing = style.letter_spacing,
@@ -524,6 +672,7 @@ pub fn Cursor(comptime State: type) type {
                 .intrinsic_height = source.intrinsic_height,
                 .object_fit = source.style.object_fit,
                 .object_position = source.style.object_position,
+                .bidi_level = if (self.direction == .rtl) 1 else 0,
             });
             self.x += width;
             self.has_content = true;
@@ -566,15 +715,17 @@ pub fn Cursor(comptime State: type) type {
 
         fn alignCurrentLine(self: *Self, is_last_line: bool) void {
             if (!self.has_content) return;
+            self.reorderCurrentLineBidi();
             self.alignVerticalLine();
-            if (self.text_align == .left) return;
+            const text_align = self.resolvedTextAlign();
+            if (text_align == .left) return;
             const used = self.x - self.start_x;
             const remaining = @max(self.width - used, 0);
-            if (self.text_align == .justify) {
+            if (text_align == .justify) {
                 if (is_last_line or remaining == 0) return;
                 var spaces: usize = 0;
                 for (self.state.fragments.items[self.line_start_fragment..]) |fragment| {
-                    if (fragment.line_id == self.line_id and fragment.leading_space) spaces += 1;
+                    if (fragment.line_id == self.line_id and (fragment.leading_space or fragment.collapsible_space)) spaces += 1;
                 }
                 if (spaces == 0) return;
                 const extra = remaining / @as(f32, @floatFromInt(spaces));
@@ -583,12 +734,81 @@ pub fn Cursor(comptime State: type) type {
                     if (fragment.line_id != self.line_id and fragment.inline_container_line_id != self.line_id) continue;
                     if (fragment.leading_space) shift += extra;
                     fragment.rect.x += shift;
+                    if (fragment.collapsible_space) shift += extra;
                 }
                 return;
             }
-            const shift = if (self.text_align == .center) remaining / 2 else remaining;
+            const shift = if (text_align == .center) remaining / 2 else remaining;
             for (self.state.fragments.items[self.line_start_fragment..]) |*fragment| {
                 if (fragment.line_id == self.line_id or fragment.inline_container_line_id == self.line_id) fragment.rect.x += shift;
+            }
+        }
+
+        fn resolvedTextAlign(self: *Self) box.TextAlign {
+            return switch (self.text_align) {
+                .start => if (self.direction == .rtl) .right else .left,
+                .end => if (self.direction == .rtl) .left else .right,
+                else => self.text_align,
+            };
+        }
+
+        /// Apply UAX #9 rule L2 to the flat fragments of a simple inline line.
+        /// Inline-block subtrees remain atomic and are left for the positioned
+        /// inline-container pass rather than reordering their internal paint.
+        fn reorderCurrentLineBidi(self: *Self) void {
+            if (self.state.shaping_mode != .harfbuzz) return;
+            var line = self.state.fragments.items[self.line_start_fragment..];
+            if (line.len < 2) return;
+            for (line) |fragment| {
+                if (fragment.line_id != self.line_id or fragment.inline_container_line_id != null) return;
+            }
+
+            var logical_text = std.ArrayList(u8).initCapacity(self.state.allocator, line.len * 4) catch return;
+            defer logical_text.deinit(self.state.allocator);
+            for (line) |fragment| {
+                logical_text.appendSlice(self.state.allocator, fragment.text orelse "\xEF\xBF\xBC") catch return;
+            }
+            var resolution = bidi.resolveForLayout(
+                self.state.allocator,
+                logical_text.items,
+                if (self.direction == .rtl) .rtl else .ltr,
+            ) catch return;
+            defer resolution.deinit(self.state.allocator);
+            var logical_offset: usize = 0;
+            for (line) |*fragment| {
+                fragment.bidi_level = resolution.levels[logical_offset];
+                const fragment_text: []const u8 = fragment.text orelse "\xEF\xBF\xBC";
+                logical_offset += fragment_text.len;
+            }
+
+            var max_level: u8 = 0;
+            var min_odd: u8 = std.math.maxInt(u8);
+            var left = line[0].rect.x;
+            for (line) |fragment| {
+                max_level = @max(max_level, fragment.bidi_level);
+                if (fragment.bidi_level & 1 == 1) min_odd = @min(min_odd, fragment.bidi_level);
+                left = @min(left, fragment.rect.x);
+            }
+            if (min_odd == std.math.maxInt(u8)) return;
+
+            var level = max_level;
+            while (true) : (level -= 1) {
+                var start: usize = 0;
+                while (start < line.len) {
+                    while (start < line.len and line[start].bidi_level < level) start += 1;
+                    var end = start;
+                    while (end < line.len and line[end].bidi_level >= level) end += 1;
+                    if (end > start + 1) std.mem.reverse(types.Fragment, line[start..end]);
+                    start = end;
+                }
+                if (level == min_odd) break;
+            }
+
+            var visual_x = left;
+            for (line) |*fragment| {
+                fragment.rect.x = visual_x;
+                if (fragment.image_content_rect) |*rect| rect.x = visual_x;
+                visual_x += fragment.rect.width;
             }
         }
 

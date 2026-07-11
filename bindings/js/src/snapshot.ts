@@ -55,6 +55,7 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "border-radius",
   "background-color",
   "color",
+  "direction",
   "font-family",
   "font-size",
   "font-style",

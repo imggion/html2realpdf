@@ -36,6 +36,14 @@
             .url = "https://github.com/harfbuzz/harfbuzz/releases/download/14.2.1/harfbuzz-14.2.1.tar.xz",
             .hash = "N-V-__8AAKG-6AVY4JsSAhtXCED0b5XiG_xTS7hKLa3gG7i1",
         },
+        .sheenbidi = .{
+            .url = "https://github.com/Tehreer/SheenBidi/archive/refs/tags/v3.0.0.tar.gz",
+            .hash = "N-V-__8AAIgBOAH6cmnBI9dBvLckCCTjAdqq4CChOBleYvO_",
+        },
+        .libunibreak = .{
+            .url = "https://github.com/adah1972/libunibreak/archive/refs/tags/libunibreak_7_0.tar.gz",
+            .hash = "N-V-__8AAGrzJABrqVC-jAIdNgdUpt74uCKdc5i9rj-j0_NG",
+        },
         // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
         //.example = .{
         //    // When updating this field to a new URL, be sure to delete the corresponding
@@ -80,6 +88,8 @@
         "src",
         "assets/fonts/OFL.txt",
         "assets/harfbuzz/COPYING",
+        "assets/sheenbidi/LICENSE",
+        "assets/libunibreak/LICENCE",
         "LICENSE",
         "README.md",
     },

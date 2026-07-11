@@ -36,13 +36,14 @@ coverage. A dash means the stage is not applicable or not implemented.
 | font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | four Noto Sans Latin faces plus built-in Arabic/Hebrew fallbacks and registered TTF faces |
 | line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | web/strict use HarfBuzz OpenType shaping, kerning, ligatures, positioned clusters, and per-glyph fallback; document keeps its byte-stable identity shaper |
 | `word-spacing` | Y | Y | Y | Y | Y | Y | Y | U+0020 spacing is measured in layout and emitted with Type 0 font `TJ` adjustments |
+| `direction` / bidi | Y | Y | Y | Y | Y | Y | Y | web/strict use SheenBidi UAX #9 paragraph levels and L2 visual reordering; `ltr` and `rtl` base directions |
 | `text-indent` | Y | Y | Y | Y | Y | Y | Y | lengths and percentages on the first formatted line |
 | `text-transform` | Y | Y | Y | Y | Y | Y | Y | none, uppercase, lowercase, capitalize; locale-aware Unicode case mapping pending |
-| `word-break` / `overflow-wrap` | Y | Y | Y | Y | Y | Y | Y | emergency UTF-8 codepoint wrapping for break-all, break-word, and anywhere; Unicode line segmentation pending |
+| `word-break` / `overflow-wrap` | Y | Y | Y | Y | Y | Y | Y | UAX #14 legal opportunities plus emergency UTF-8 codepoint wrapping for break-all, break-word, and anywhere |
 | `overflow` / `text-overflow` | Y | Y | Y | Y | Y | Y | Y | visible plus rectangular padding-edge clipping for hidden/clip/auto/scroll; selectable single-line ellipsis |
 | `vertical-align` / inline baselines | Y | Y | Y | Y | Y | Y | Y | mixed text font metrics, keyword alignment, and length-percentage offsets; replaced and inline-block baselines pending |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
-| `text-align` | Y | Y | Y | Y | Y | Y | Y | left, center, right, justify |
+| `text-align` | Y | Y | Y | Y | Y | Y | Y | start/end resolved from direction, plus left, center, right, justify |
 | `text-decoration` | Y | Y | Y | Y | Y | Y | Y | combined underline/overline/line-through, color, thickness, solid/double/dotted/dashed/wavy vector styles |
 | `box-sizing` | Y | Y | Y | Y | - | Y | Y | content-box and border-box |
 | `border-collapse` | Y | Y | Y | Y | Y | Y | Y | table collapsed-border approximation |
@@ -72,9 +73,9 @@ Playwright E2E make the matrix verifiable.
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
 - Flexbox, Grid, floats, positioned/sticky layout, stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
-- full Unicode bidi paragraph segmentation, locale-aware case conversion, and
-  Unicode line segmentation; Arabic and Hebrew have built-in shaped fallbacks,
-  while emoji and other scripts require a registered embeddable TTF fallback;
+- CSS `unicode-bidi` isolate/override modes and locale-aware case conversion;
+  Arabic and Hebrew have built-in shaped fallbacks, while emoji and other
+  scripts require a registered embeddable TTF fallback;
   the package test suite registers a deterministic monochrome emoji fixture;
 - CSS Fragmentation fragmentainers, `@page`, named pages, and margin boxes.
 
@@ -90,7 +91,7 @@ the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
 ## Verification gates
 
 - `make test` runs focused Zig parser, cascade, layout, pagination, display-list,
-  and PDF tests plus a native linked-HarfBuzz shaping gate.
+  and PDF tests plus native linked HarfBuzz, SheenBidi, and libunibreak gates.
 - `make test-web-snapshots` checks stable WASM structural output and a real PDF
   result handle in Node.
 - `make test-browser` runs the browser harness and mounted React-ref preview on

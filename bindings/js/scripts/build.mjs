@@ -32,6 +32,14 @@ await copyFile(
   new URL("../dist/vendor/HARFBUZZ-LICENSE.txt", import.meta.url),
 );
 await copyFile(
+  new URL("../../../assets/sheenbidi/LICENSE", import.meta.url),
+  new URL("../dist/vendor/SHEENBIDI-LICENSE.txt", import.meta.url),
+);
+await copyFile(
+  new URL("../../../assets/libunibreak/LICENCE", import.meta.url),
+  new URL("../dist/vendor/LIBUNIBREAK-LICENSE.txt", import.meta.url),
+);
+await copyFile(
   new URL("../node_modules/pdfjs-dist/build/pdf.min.mjs", import.meta.url),
   new URL("../dist/vendor/pdf.min.mjs", import.meta.url),
 );

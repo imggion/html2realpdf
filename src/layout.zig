@@ -299,7 +299,7 @@ const State = struct {
         const style = self.tree.boxes.items[parent_id].style;
         const text_indent = style.text_indent.resolve(width) orelse 0;
         const ellipsis_enabled = style.text_overflow == .ellipsis and style.overflow.clips();
-        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent, ellipsis_enabled);
+        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, style.direction, text_indent, ellipsis_enabled);
         var child = self.tree.boxes.items[parent_id].first_child;
         while (child) |child_id| {
             try cursor.layoutBox(child_id, null, .baseline);
@@ -320,7 +320,7 @@ const State = struct {
         const style = if (first.parent) |parent_id| self.tree.boxes.items[parent_id].style else first.style;
         const text_indent = style.text_indent.resolve(width) orelse 0;
         const ellipsis_enabled = style.text_overflow == .ellipsis and style.overflow.clips();
-        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent, ellipsis_enabled);
+        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, style.direction, text_indent, ellipsis_enabled);
         try cursor.layoutBox(first_box, null, .baseline);
         return cursor.finish();
     }

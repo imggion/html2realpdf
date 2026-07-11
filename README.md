@@ -185,4 +185,8 @@ included in the npm package. The vendored PDF.js display layer used only by the
 optional in-page preview is distributed under Apache License 2.0; its license
 is included in `dist/vendor/PDFJS-LICENSE.txt`. HarfBuzz is distributed under
 its Old MIT license, included in `assets/harfbuzz/COPYING` and
-`dist/vendor/HARFBUZZ-LICENSE.txt`.
+`dist/vendor/HARFBUZZ-LICENSE.txt`. SheenBidi is distributed under Apache
+License 2.0, included in `assets/sheenbidi/LICENSE` and
+`dist/vendor/SHEENBIDI-LICENSE.txt`. libunibreak is distributed under the zlib
+license, included in `assets/libunibreak/LICENCE` and
+`dist/vendor/LIBUNIBREAK-LICENSE.txt`.

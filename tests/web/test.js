@@ -568,7 +568,7 @@ async function verifyDomSnapshotFidelity() {
   const fixture = document.createElement("section");
   fixture.style.backgroundColor = "rgb(15, 23, 42)";
   fixture.innerHTML = `
-    <p style="word-spacing: 3px; text-indent: 12px; text-transform: uppercase; word-break: break-all; overflow-wrap: anywhere; overflow: hidden; text-overflow: ellipsis; vertical-align: super; text-decoration: underline overline wavy rgb(180, 20, 90) 2px">Transparent child</p>
+    <p style="direction: rtl; text-align: start; word-spacing: 3px; text-indent: 12px; text-transform: uppercase; word-break: break-all; overflow-wrap: anywhere; overflow: hidden; text-overflow: ellipsis; vertical-align: super; text-decoration: underline overline wavy rgb(180, 20, 90) 2px">Transparent child</p>
     <ul><li>List item</li></ul>
     <label>Live value <input value="initial"></label>
     <button type="button">Action</button>
@@ -605,6 +605,7 @@ async function verifyDomSnapshotFidelity() {
     if (paragraph?.style.wordSpacing !== "3px") throw new Error("computed word-spacing was not captured");
     if (paragraph?.style.textIndent !== "12px") throw new Error("computed text-indent was not captured");
     if (paragraph?.style.textTransform !== "uppercase") throw new Error("computed text-transform was not captured");
+    if (paragraph?.style.direction !== "rtl" || paragraph.style.textAlign !== "start") throw new Error("computed bidi base direction was not captured");
     if (paragraph?.style.wordBreak !== "break-all") throw new Error("computed word-break was not captured");
     if (paragraph?.style.overflowWrap !== "anywhere") throw new Error("computed overflow-wrap was not captured");
     if (paragraph?.style.overflow !== "hidden") throw new Error("computed overflow was not captured");

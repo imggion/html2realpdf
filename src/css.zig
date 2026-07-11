@@ -45,6 +45,7 @@ const parseFontWeight = values.parseFontWeight;
 const parseFontStyle = values.parseFontStyle;
 const parseEdges = values.parseEdges;
 const parseTextAlign = values.parseTextAlign;
+const parseDirection = values.parseDirection;
 const parseTextTransform = values.parseTextTransform;
 const parseWordBreak = values.parseWordBreak;
 const parseOverflowWrap = values.parseOverflowWrap;
@@ -710,10 +711,17 @@ test "parse value: table display keywords" {
 }
 
 test "parse value: text-align" {
+    try std.testing.expectEqual(box.TextAlign.start, parseTextAlign("start").?);
+    try std.testing.expectEqual(box.TextAlign.end, parseTextAlign("end").?);
     try std.testing.expectEqual(box.TextAlign.left, parseTextAlign("left").?);
     try std.testing.expectEqual(box.TextAlign.center, parseTextAlign("center").?);
     try std.testing.expectEqual(box.TextAlign.right, parseTextAlign("right").?);
     try std.testing.expectEqual(box.TextAlign.justify, parseTextAlign("justify").?);
+}
+
+test "parse value: direction" {
+    try std.testing.expectEqual(box.Direction.ltr, parseDirection("ltr").?);
+    try std.testing.expectEqual(box.Direction.rtl, parseDirection("rtl").?);
 }
 
 test "parse CSS Text inline properties" {
@@ -834,6 +842,17 @@ test "cascade: text-align and line-height" {
     const p_id = ct.document.nodes.items[style_id].next_sibling.?;
     try std.testing.expectEqual(box.TextAlign.center, ct.styles[p_id].text_align);
     try std.testing.expectEqual(@as(f32, 24), ct.styles[p_id].line_height);
+}
+
+test "cascade: direction and logical text alignment inherit" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<style>p { direction: rtl; text-align: start; } span { direction: inherit; text-align: inherit; }</style><p><span>שלום</span></p>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const p_id = ct.document.nodes.items[style_id].next_sibling.?;
+    const span_id = ct.document.nodes.items[p_id].first_child.?;
+    try std.testing.expectEqual(box.Direction.rtl, ct.styles[span_id].direction);
+    try std.testing.expectEqual(box.TextAlign.start, ct.styles[span_id].text_align);
 }
 
 test "cascade: CSS Text inline properties inherit as computed values" {

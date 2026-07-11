@@ -171,10 +171,19 @@ pub fn parseEdges(value: []const u8) box.EdgeSizes {
 
 pub fn parseTextAlign(value: []const u8) ?box.TextAlign {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "start")) return .start;
+    if (eqlProp(v, "end")) return .end;
     if (eqlProp(v, "left")) return .left;
     if (eqlProp(v, "center")) return .center;
     if (eqlProp(v, "right")) return .right;
     if (eqlProp(v, "justify")) return .justify;
+    return null;
+}
+
+pub fn parseDirection(value: []const u8) ?box.Direction {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "ltr")) return .ltr;
+    if (eqlProp(v, "rtl")) return .rtl;
     return null;
 }
 

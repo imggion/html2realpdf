@@ -111,6 +111,10 @@ be promoted to errors with `strict: true`.
   included as `dist/NotoSans-OFL.txt`.
 - HarfBuzz is licensed under the Old MIT license; the license is included as
   `dist/vendor/HARFBUZZ-LICENSE.txt`.
+- SheenBidi is licensed under Apache License 2.0; the license is included as
+  `dist/vendor/SHEENBIDI-LICENSE.txt`.
+- libunibreak is licensed under the zlib license; the license is included as
+  `dist/vendor/LIBUNIBREAK-LICENSE.txt`.
 - The dynamically loaded PDF.js display layer used by `preview()` is licensed
   under Apache License 2.0; its license is included in
   `dist/vendor/PDFJS-LICENSE.txt`.

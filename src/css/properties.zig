@@ -41,6 +41,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "break-before", .stage = layout },
     .{ .name = "break-inside", .stage = layout },
     .{ .name = "color", .stage = full, .notes = "currentColor and native PDF alpha via ExtGState" },
+    .{ .name = "direction", .stage = computed_only, .notes = "web and strict resolve full UAX 9 visual runs" },
     .{ .name = "display", .stage = layout, .notes = "block inline inline-block and table roles" },
     .{ .name = "float", .stage = computed_only, .notes = "non-none rejected by renderer" },
     .{ .name = "font-family", .stage = full },
@@ -76,6 +77,7 @@ pub const document_profile = [_]PropertySupport{
 };
 
 pub const web_foundations = [_]FeatureSupport{
+    .{ .name = "bidirectional-text", .stage = full, .notes = "SheenBidi UAX 9 paragraph levels and L2 line reordering" },
     .{ .name = "browser-media-snapshot", .stage = computed_only, .notes = "deterministic viewport and screen/print selection" },
     .{ .name = "css-identifier-escapes", .stage = computed_only, .notes = "simple and hexadecimal escapes" },
     .{ .name = "css-wide-keywords", .stage = computed_only, .notes = "initial inherit unset revert" },
@@ -85,6 +87,7 @@ pub const web_foundations = [_]FeatureSupport{
     .{ .name = "pseudo-elements", .stage = full, .notes = "browser ::before/::after strings attr and nested counters" },
     .{ .name = "shadow-dom", .stage = full, .notes = "opt-in open shadow root and slot flattening" },
     .{ .name = "shorthand-expansion", .stage = computed_only, .notes = "supported shorthands become physical longhands before computed values" },
+    .{ .name = "unicode-line-breaking", .stage = full, .notes = "libunibreak UAX 14 opportunities plus CSS emergency wrapping" },
 };
 
 test "document profile entries are sorted and uniquely named" {

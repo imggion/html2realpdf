@@ -165,6 +165,8 @@ pub const FontStyle = enum {
 
 /// Horizontal text alignment within a block container.
 pub const TextAlign = enum {
+    start,
+    end,
     left,
     center,
     right,
@@ -172,10 +174,26 @@ pub const TextAlign = enum {
 
     pub fn toString(self: @This()) []const u8 {
         return switch (self) {
+            .start => "start",
+            .end => "end",
             .left => "left",
             .center => "center",
             .right => "right",
             .justify => "justify",
+        };
+    }
+};
+
+/// Base inline direction inherited by descendants and used by the Unicode
+/// Bidirectional Algorithm for each formatted paragraph.
+pub const Direction = enum {
+    ltr,
+    rtl,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .ltr => "ltr",
+            .rtl => "rtl",
         };
     }
 };
@@ -476,6 +494,7 @@ pub const Style = struct {
     position: Position = .static,
     float_direction: Float = .none,
     white_space: WhiteSpace = .normal,
+    direction: Direction = .ltr,
 
     font_size: f32 = 16,
     font_family: []const u8 = "serif",
@@ -495,7 +514,7 @@ pub const Style = struct {
     letter_spacing: f32 = 0,
     word_spacing: f32 = 0,
     text_indent: Length = .{ .px = 0 },
-    text_align: TextAlign = .left,
+    text_align: TextAlign = .start,
     text_transform: TextTransform = .none,
     word_break: WordBreak = .normal,
     overflow_wrap: OverflowWrap = .normal,
@@ -1235,7 +1254,7 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
         .px => |value| if (value != 0) try writer.print(" text-indent={d:.2}", .{value}),
         else => try writeLengthDebug("text-indent", style.text_indent, writer),
     }
-    if (style.text_align != .left) try writer.print(" text-align={s}", .{style.text_align.toString()});
+    if (style.text_align != .start) try writer.print(" text-align={s}", .{style.text_align.toString()});
     if (style.text_transform != .none) try writer.print(" text-transform={s}", .{style.text_transform.toString()});
     if (style.word_break != .normal) try writer.print(" word-break={s}", .{style.word_break.toString()});
     if (style.overflow_wrap != .normal) try writer.print(" overflow-wrap={s}", .{style.overflow_wrap.toString()});

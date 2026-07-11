@@ -32,7 +32,11 @@ test("browser harness runtime uses a content-addressed package build", async () 
 
 test("package carries third-party runtime licenses", async () => {
   const harfbuzzLicense = await readFile(new URL("../dist/vendor/HARFBUZZ-LICENSE.txt", import.meta.url), "utf8");
+  const sheenbidiLicense = await readFile(new URL("../dist/vendor/SHEENBIDI-LICENSE.txt", import.meta.url), "utf8");
+  const libunibreakLicense = await readFile(new URL("../dist/vendor/LIBUNIBREAK-LICENSE.txt", import.meta.url), "utf8");
   assert.match(harfbuzzLicense, /HarfBuzz is licensed/);
+  assert.match(sheenbidiLicense, /Apache License/);
+  assert.match(libunibreakLicense, /Permission is granted/);
 });
 
 test("page options normalize A4, Letter, orientation, units, and margins", () => {
@@ -245,7 +249,7 @@ test("registered fallback keeps emoji as selectable embedded text", async () => 
     const pointer = exports.pdf_result_data_ptr(result);
     const length = exports.pdf_result_data_len(result);
     const pdf = new TextDecoder("latin1").decode(new Uint8Array(exports.memory.buffer, pointer, length));
-  assert.match(pdf, /HREALP\+Emoji-Fixture/);
+    assert.match(pdf, /HREALP\+Emoji-Fixture/);
     assert.match(pdf, /<\w{4}> <D83DDE80>/);
   } finally {
     if (result !== 0) exports.pdf_result_free(result);
