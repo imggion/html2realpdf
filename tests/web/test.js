@@ -669,6 +669,37 @@ async function verifyRequestedMediaAndViewport() {
   if (printProbe?.style.width !== "321px") throw new Error(`1000px viewport did not activate min-width query: ${printProbe?.style.width}`);
   if (screenProbe?.style.width !== "100px") throw new Error(`800px viewport unexpectedly activated min-width query: ${screenProbe?.style.width}`);
   if (printProbe?.style.transition) throw new Error("transition leaked into the immutable computed snapshot");
+
+  const style = document.createElement("style");
+  style.textContent = `
+    .media-ancestor .dom-media-probe { color: rgb(20, 30, 40); width: 100px; }
+    @media print { .media-ancestor .dom-media-probe { color: rgb(180, 20, 40); } }
+    @media (min-width: 900px) { .media-ancestor .dom-media-probe { width: 345px; } }
+  `;
+  const ancestor = document.createElement("section");
+  ancestor.className = "media-ancestor";
+  ancestor.innerHTML = '<div class="dom-media-probe"><input value="initial"></div>';
+  const liveInput = ancestor.querySelector("input");
+  liveInput.value = "live environment value";
+  document.head.append(style);
+  document.body.append(ancestor);
+  try {
+    const domSnapshot = await snapshotSource(ancestor.querySelector(".dom-media-probe"), {
+      resourcePolicy: "error",
+      mediaType: "print",
+      viewport: { width: 1000, height: 700 },
+    });
+    const domTemplate = document.createElement("template");
+    domTemplate.innerHTML = domSnapshot.html;
+    const domProbe = domTemplate.content.firstElementChild;
+    if (domProbe?.style.color !== "rgb(180, 20, 40)" || domProbe?.style.width !== "345px") {
+      throw new Error(`Element/ref environment was not deterministic: ${domProbe?.getAttribute("style")}`);
+    }
+    if (!domProbe?.textContent?.includes("live environment value")) throw new Error("Element/ref live control state was lost in isolated media snapshot");
+  } finally {
+    ancestor.remove();
+    style.remove();
+  }
 }
 
 async function verifyShadowDomOptIn() {
@@ -678,14 +709,17 @@ async function verifyShadowDomOptIn() {
   host.innerHTML = '<span slot="content">slotted value</span>';
   const shadow = host.attachShadow({ mode: "open" });
   shadow.innerHTML = `
-    <style>.shadow-card { color: rgb(12, 74, 110); font-weight: 700; }</style>
+    <style>
+      .shadow-card { color: rgb(12, 74, 110); font-weight: 700; }
+      @media (min-width: 900px) { .shadow-card { width: 222px; } }
+    </style>
     <div class="shadow-card">shadow content: <slot name="content"></slot></div>
   `;
   document.body.append(host);
 
   try {
     const omitted = await snapshotSource(host, { resourcePolicy: "error", includeShadowDom: false });
-    const included = await snapshotSource(host, { resourcePolicy: "error", includeShadowDom: true });
+    const included = await snapshotSource(host, { resourcePolicy: "error", includeShadowDom: true, viewport: { width: 1000, height: 700 } });
     if (omitted.html.includes("shadow content")) throw new Error("Shadow DOM was included without opt-in");
     const template = document.createElement("template");
     template.innerHTML = included.html;
@@ -694,9 +728,42 @@ async function verifyShadowDomOptIn() {
     if (root?.getAttribute("data-html2realpdf-shadow-host") !== "open") throw new Error("Shadow host marker is missing");
     if (!card?.textContent?.includes("shadow content: slotted value")) throw new Error("composed Shadow DOM content was not flattened");
     if (card.style.color !== "rgb(12, 74, 110)") throw new Error("Shadow DOM computed style was not materialized");
+    if (card.style.width !== "222px") throw new Error(`Shadow DOM did not use the requested isolated viewport: ${card.getAttribute("style")}`);
   } finally {
     host.remove();
   }
+}
+
+async function verifyControlledStylesheetResources() {
+  const { buildId, distUrl } = await getPackageBuild();
+  const { snapshotSource } = await import(new URL(`${buildId}/snapshot.js`, distUrl).href);
+  const requests = [];
+  const snapshot = await snapshotSource(`
+    <link rel="stylesheet" href="/assets/report.css">
+    <div class="resolved-sheet">resolved stylesheet</div>
+  `, {
+    baseUrl: "https://fixtures.example.test/reports/",
+    resourcePolicy: "error",
+    resourceResolver(request) {
+      requests.push({ kind: request.kind, url: request.url.href });
+      return ".resolved-sheet { color: rgb(8, 145, 178); width: 234px; }";
+    },
+  });
+  const template = document.createElement("template");
+  template.innerHTML = snapshot.html;
+  const target = template.content.querySelector(".resolved-sheet");
+  if (requests.length !== 1 || requests[0].kind !== "stylesheet") throw new Error("stylesheet did not pass through resourceResolver");
+  if (requests[0].url !== "https://fixtures.example.test/assets/report.css") throw new Error(`stylesheet base URL was wrong: ${requests[0].url}`);
+  if (target?.style.color !== "rgb(8, 145, 178)" || target?.style.width !== "234px") {
+    throw new Error("resolved stylesheet did not participate in computed style");
+  }
+
+  const omitted = await snapshotSource('<link rel="stylesheet" href="/missing.css"><p>safe</p>', {
+    baseUrl: "https://fixtures.example.test/",
+    resourcePolicy: "omit",
+  });
+  if (!omitted.diagnostics.some((diagnostic) => diagnostic.code === "RESOURCE_OMITTED")) throw new Error("omitted stylesheet diagnostic is missing");
+  if (omitted.html.includes("missing.css")) throw new Error("omitted stylesheet survived the inert snapshot");
 }
 
 async function verifyInertHtmlStringComputedSnapshot() {
@@ -1179,6 +1246,15 @@ async function runWasmTests() {
   } catch (err) {
     failed++;
     testResults.textContent += `✗ ERROR: shadow_dom_opt_in — ${err.message}\n`;
+  }
+
+  try {
+    await verifyControlledStylesheetResources();
+    passed++;
+    testResults.textContent += "✓ PASS: controlled_stylesheet_resources\n";
+  } catch (err) {
+    failed++;
+    testResults.textContent += `✗ ERROR: controlled_stylesheet_resources — ${err.message}\n`;
   }
 
   try {

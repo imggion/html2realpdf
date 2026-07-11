@@ -42,7 +42,7 @@ export interface Diagnostic {
 }
 
 export interface ResourceRequest {
-  kind: "image";
+  kind: "image" | "stylesheet" | "font";
   url: URL;
 }
 

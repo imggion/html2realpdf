@@ -107,9 +107,147 @@ export async function snapshotSource(source: HtmlSource, options: SnapshotOption
   const element = isRefLike(source) ? source.current : source;
   if (!element) throw new InvalidSourceError("The supplied ref is null; render after the element has mounted");
   if (!(element instanceof Element)) throw new InvalidSourceError("Expected an HTML string, Element, or ref-like object");
+  if (options.viewport !== undefined || options.mediaType === "print") return snapshotElementInEnvironment(element, options);
 
   const { clone, diagnostics } = await snapshotElement(element, options);
   return { html: clone.outerHTML, diagnostics };
+}
+
+async function snapshotElementInEnvironment(element: Element, options: SnapshotOptions): Promise<SnapshotResult> {
+  const viewport = options.viewport ?? { width: window.innerWidth || 1280, height: window.innerHeight || 720 };
+  const iframe = createSnapshotFrame(viewport);
+  const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:";
+  iframe.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head><body></body></html>`;
+  document.body.append(iframe);
+
+  try {
+    await waitForSnapshotFrame(iframe);
+    const targetDocument = iframe.contentDocument;
+    if (!targetDocument) throw new InvalidSourceError("The isolated element snapshot document is unavailable");
+    copySafeAttributes(element.ownerDocument.documentElement, targetDocument.documentElement);
+    if (element.ownerDocument.body) copySafeAttributes(element.ownerDocument.body, targetDocument.body);
+    const base = targetDocument.createElement("base");
+    base.href = options.baseUrl?.toString() ?? element.ownerDocument.baseURI;
+    targetDocument.head.append(base);
+    const stylesheet = targetDocument.createElement("style");
+    stylesheet.textContent = serializeAccessibleStylesheets(element.ownerDocument);
+    targetDocument.head.append(stylesheet);
+
+    const target = cloneEnvironmentNode(element, targetDocument) as Element;
+    let mounted: Element = target;
+    for (let ancestor = element.parentElement; ancestor && ancestor.localName !== "body" && ancestor.localName !== "html"; ancestor = ancestor.parentElement) {
+      const wrapper = targetDocument.importNode(ancestor.cloneNode(false), false) as Element;
+      removeEventHandlers(wrapper);
+      wrapper.append(mounted);
+      mounted = wrapper;
+    }
+    targetDocument.body.append(mounted);
+    freezeDynamicStyles(targetDocument);
+    await waitForStyleResolution(targetDocument.defaultView);
+    forceRequestedMedia(targetDocument, options.mediaType ?? "screen", viewport);
+    forceShadowMediaRules(target, options.mediaType ?? "screen", viewport);
+    const snapshot = await snapshotElement(target, options);
+    return { html: snapshot.clone.outerHTML, diagnostics: snapshot.diagnostics };
+  } finally {
+    iframe.remove();
+  }
+}
+
+function createSnapshotFrame(viewport: ViewportOptions): HTMLIFrameElement {
+  const iframe = document.createElement("iframe");
+  const viewportWidth = Math.max(viewport.width, 1);
+  const viewportHeight = Math.max(viewport.height, 1);
+  iframe.width = String(viewportWidth);
+  iframe.height = String(viewportHeight);
+  iframe.style.cssText = `position:fixed;left:-100000px;top:0;width:${viewportWidth}px;height:${viewportHeight}px;min-width:${viewportWidth}px;max-width:${viewportWidth}px;min-height:${viewportHeight}px;max-height:${viewportHeight}px;border:0;visibility:hidden`;
+  return iframe;
+}
+
+function waitForSnapshotFrame(iframe: HTMLIFrameElement): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    iframe.addEventListener("load", () => resolve(), { once: true });
+    iframe.addEventListener("error", () => reject(new InvalidSourceError("Could not create the inert HTML snapshot document")), { once: true });
+  });
+}
+
+function waitForStyleResolution(view: Window | null): Promise<void> {
+  if (!view) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    view.requestAnimationFrame(finish);
+    window.setTimeout(finish, 50);
+  });
+}
+
+function freezeDynamicStyles(document: Document): void {
+  const style = document.createElement("style");
+  style.dataset.html2realpdfFreeze = "";
+  style.textContent = "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}";
+  document.documentElement.append(style);
+}
+
+function copySafeAttributes(source: Element, target: Element): void {
+  for (const attribute of [...target.attributes]) target.removeAttribute(attribute.name);
+  for (const attribute of source.attributes) {
+    if (!attribute.name.toLowerCase().startsWith("on")) target.setAttribute(attribute.name, attribute.value);
+  }
+}
+
+function serializeAccessibleStylesheets(source: Document): string {
+  const output: string[] = [];
+  const sheets = [...source.styleSheets, ...(source.adoptedStyleSheets ?? [])];
+  for (const sheet of sheets) {
+    try {
+      output.push([...sheet.cssRules].map((rule) => rule.cssText).join("\n"));
+    } catch {
+      // Cross-origin stylesheets cannot expose CSSOM. Callers that need a
+      // deterministic alternate environment should provide those resources
+      // through an HTML-string snapshot and resourceResolver.
+    }
+  }
+  return output.join("\n");
+}
+
+function cloneEnvironmentNode(source: Node, targetDocument: Document): Node {
+  if (source.nodeType === Node.TEXT_NODE) return targetDocument.createTextNode(source.textContent ?? "");
+  if (source.nodeType !== Node.ELEMENT_NODE) return targetDocument.createDocumentFragment();
+  const original = source as Element;
+  const clone = targetDocument.importNode(original.cloneNode(false), false) as Element;
+  removeEventHandlers(clone);
+
+  for (const child of original.childNodes) clone.append(cloneEnvironmentNode(child, targetDocument));
+  if (original.shadowRoot && "attachShadow" in clone) {
+    const shadow = (clone as HTMLElement).attachShadow({ mode: "open" });
+    for (const child of original.shadowRoot.childNodes) shadow.append(cloneEnvironmentNode(child, targetDocument));
+  }
+  synchronizeEnvironmentState(original, clone);
+  return clone;
+}
+
+function synchronizeEnvironmentState(original: Element, clone: Element): void {
+  if (original.localName === "input") {
+    (clone as HTMLInputElement).value = (original as HTMLInputElement).value;
+    (clone as HTMLInputElement).checked = (original as HTMLInputElement).checked;
+  } else if (original.localName === "textarea") {
+    (clone as HTMLTextAreaElement).value = (original as HTMLTextAreaElement).value;
+  } else if (original.localName === "select") {
+    (clone as HTMLSelectElement).selectedIndex = (original as HTMLSelectElement).selectedIndex;
+  } else if (original.localName === "details") {
+    (clone as HTMLDetailsElement).open = (original as HTMLDetailsElement).open;
+  } else if (original.localName === "canvas") {
+    const sourceCanvas = original as HTMLCanvasElement;
+    const targetCanvas = clone as HTMLCanvasElement;
+    targetCanvas.width = sourceCanvas.width;
+    targetCanvas.height = sourceCanvas.height;
+    targetCanvas.getContext("2d")?.drawImage(sourceCanvas, 0, 0);
+  } else if (original.localName === "img" && (original as HTMLImageElement).currentSrc) {
+    (clone as HTMLImageElement).src = (original as HTMLImageElement).currentSrc;
+  }
 }
 
 async function snapshotElement(element: Element, options: SnapshotOptions): Promise<{ clone: Element; diagnostics: Diagnostic[] }> {
@@ -130,6 +268,7 @@ async function snapshotElement(element: Element, options: SnapshotOptions): Prom
 async function snapshotHtmlString(source: string, options: SnapshotOptions): Promise<SnapshotResult> {
   const template = document.createElement("template");
   template.innerHTML = source;
+  const diagnostics: Diagnostic[] = [];
   for (const input of template.content.querySelectorAll("input")) {
     const text = input.type === "checkbox" || input.type === "radio"
       ? input.checked ? "☑" : "☐"
@@ -141,32 +280,57 @@ async function snapshotHtmlString(source: string, options: SnapshotOptions): Pro
     replaceFormControl(select, [...select.selectedOptions].map((option) => option.text).join(", "));
   }
   for (const active of template.content.querySelectorAll(ACTIVE_ELEMENTS)) active.remove();
+  for (const refresh of template.content.querySelectorAll('meta[http-equiv="refresh" i]')) refresh.remove();
   for (const element of template.content.querySelectorAll("*")) removeEventHandlers(element);
   if (options.enableLinks === false) for (const anchor of template.content.querySelectorAll("a[href]")) anchor.removeAttribute("href");
+  await materializeExternalStylesheets(template.content, options, diagnostics);
 
-  const iframe = document.createElement("iframe");
   const viewport = options.viewport ?? { width: 1280, height: 720 };
-  const viewportWidth = Math.max(viewport.width, 1);
-  const viewportHeight = Math.max(viewport.height, 1);
-  iframe.width = String(viewportWidth);
-  iframe.height = String(viewportHeight);
-  iframe.style.cssText = `position:fixed;left:-100000px;top:0;width:${viewportWidth}px;height:${viewportHeight}px;min-width:${viewportWidth}px;max-width:${viewportWidth}px;min-height:${viewportHeight}px;max-height:${viewportHeight}px;border:0;visibility:hidden`;
+  const iframe = createSnapshotFrame(viewport);
   const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:";
   iframe.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head><body>${template.innerHTML}</body></html>`;
   document.body.append(iframe);
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      iframe.addEventListener("load", () => resolve(), { once: true });
-      iframe.addEventListener("error", () => reject(new InvalidSourceError("Could not create the inert HTML snapshot document")), { once: true });
-    });
+    await waitForSnapshotFrame(iframe);
     const body = iframe.contentDocument?.body;
     if (!body) throw new InvalidSourceError("The inert HTML snapshot document has no body");
-    forceRequestedMedia(body.ownerDocument, options.mediaType ?? "screen");
-    const { clone, diagnostics } = await snapshotElement(body, options);
-    return { html: clone.innerHTML, diagnostics };
+    freezeDynamicStyles(body.ownerDocument);
+    await waitForStyleResolution(body.ownerDocument.defaultView);
+    forceRequestedMedia(body.ownerDocument, options.mediaType ?? "screen", viewport);
+    const snapshot = await snapshotElement(body, options);
+    return { html: snapshot.clone.innerHTML, diagnostics: [...diagnostics, ...snapshot.diagnostics] };
   } finally {
     iframe.remove();
+  }
+}
+
+async function materializeExternalStylesheets(
+  root: ParentNode,
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+): Promise<void> {
+  for (const link of root.querySelectorAll('link[rel~="stylesheet" i][href]')) {
+    const source = link.getAttribute("href") ?? "";
+    try {
+      const url = new URL(source, options.baseUrl ?? document.baseURI);
+      const resolved = await options.resourceResolver?.({ kind: "stylesheet", url });
+      if (resolved === null || resolved === undefined) throw new Error("No stylesheet resource was returned by resourceResolver");
+      const css = resolved instanceof Blob ? await resolved.text() : resolved;
+      const style = link.ownerDocument.createElement("style");
+      style.dataset.html2realpdfResolvedFrom = url.href;
+      style.textContent = css;
+      link.replaceWith(style);
+    } catch (error) {
+      if (options.resourcePolicy === "error") throw new ResourceLoadError(source, { cause: error });
+      link.remove();
+      diagnostics.push({
+        code: "RESOURCE_OMITTED",
+        severity: "warning",
+        message: `Stylesheet resource was omitted: ${source}`,
+        phase: "snapshot",
+      });
+    }
   }
 }
 
@@ -212,11 +376,11 @@ function appendSnapshotNode(
   parent.append(cloneSnapshotElement(element, options, diagnostics, false));
 }
 
-function forceRequestedMedia(document: Document, mediaType: MediaType): void {
+function forceRequestedMedia(document: Document, mediaType: MediaType, viewport: ViewportOptions): void {
   const view = document.defaultView ?? window;
   for (const stylesheet of document.styleSheets) {
     try {
-      forceMediaRules(stylesheet.cssRules, mediaType, view);
+      forceMediaRules(stylesheet.cssRules, mediaType, viewport, view);
     } catch {
       // CSP prevents remote stylesheets in inert snapshots. If a browser still
       // exposes a cross-origin sheet, computed styles remain available for the
@@ -225,25 +389,41 @@ function forceRequestedMedia(document: Document, mediaType: MediaType): void {
   }
 }
 
-function forceMediaRules(rules: CSSRuleList, mediaType: MediaType, view: Window): void {
+function forceShadowMediaRules(root: Element, mediaType: MediaType, viewport: ViewportOptions): void {
+  const visit = (element: Element): void => {
+    const shadow = element.shadowRoot;
+    if (shadow) {
+      const view = shadow.ownerDocument.defaultView ?? window;
+      for (const style of shadow.querySelectorAll("style")) {
+        if (style.sheet) forceMediaRules(style.sheet.cssRules, mediaType, viewport, view);
+      }
+      for (const sheet of shadow.adoptedStyleSheets ?? []) forceMediaRules(sheet.cssRules, mediaType, viewport, view);
+      for (const child of shadow.children) visit(child);
+    }
+    for (const child of element.children) visit(child);
+  };
+  visit(root);
+}
+
+function forceMediaRules(rules: CSSRuleList, mediaType: MediaType, viewport: ViewportOptions, view: Window): void {
   // CSSRuleList is live. Firefox can skip a following @media rule when the
   // current MediaList is mutated during iteration, so walk a stable snapshot.
   for (const rule of [...rules]) {
     if ("media" in rule && "conditionText" in rule) {
       const mediaRule = rule as CSSMediaRule;
-      const matches = matchesRequestedMedia(String(mediaRule.conditionText), mediaType, view);
+      const matches = matchesRequestedMedia(String(mediaRule.conditionText), mediaType, viewport, view);
       mediaRule.media.mediaText = matches ? "all" : "not all";
-      if (matches) forceMediaRules(mediaRule.cssRules, mediaType, view);
+      if (matches) forceMediaRules(mediaRule.cssRules, mediaType, viewport, view);
       continue;
     }
     if ("cssRules" in rule && (rule as CSSGroupingRule).cssRules) {
-      forceMediaRules((rule as CSSGroupingRule).cssRules, mediaType, view);
+      forceMediaRules((rule as CSSGroupingRule).cssRules, mediaType, viewport, view);
     }
   }
 }
 
-function matchesRequestedMedia(queryList: string, mediaType: MediaType, view: Window): boolean {
-  return splitMediaQueries(queryList).some((query) => matchesSingleMediaQuery(query, mediaType, view));
+function matchesRequestedMedia(queryList: string, mediaType: MediaType, viewport: ViewportOptions, view: Window): boolean {
+  return splitMediaQueries(queryList).some((query) => matchesSingleMediaQuery(query, mediaType, viewport, view));
 }
 
 function splitMediaQueries(input: string): string[] {
@@ -262,7 +442,7 @@ function splitMediaQueries(input: string): string[] {
   return queries;
 }
 
-function matchesSingleMediaQuery(input: string, mediaType: MediaType, view: Window): boolean {
+function matchesSingleMediaQuery(input: string, mediaType: MediaType, viewport: ViewportOptions, view: Window): boolean {
   let query = input.trim().toLowerCase();
   if (!query) return false;
   let negate = false;
@@ -274,13 +454,36 @@ function matchesSingleMediaQuery(input: string, mediaType: MediaType, view: Wind
   }
 
   const typeMatch = query.match(/^(all|screen|print)\b/);
-  if (!typeMatch) return view.matchMedia(input).matches;
+  if (!typeMatch) return matchesViewportMediaFeatures(input, viewport) ?? view.matchMedia(input).matches;
   const requestedTypeMatches = typeMatch[1] === "all" || typeMatch[1] === mediaType;
   let remainder = query.slice(typeMatch[0].length).trim();
   if (remainder.startsWith("and ")) remainder = remainder.slice(4).trim();
-  const featureMatches = !remainder || view.matchMedia(remainder).matches;
+  const featureMatches = !remainder || (matchesViewportMediaFeatures(remainder, viewport) ?? view.matchMedia(remainder).matches);
   const matches = requestedTypeMatches && featureMatches;
   return negate ? !matches : matches;
+}
+
+function matchesViewportMediaFeatures(input: string, viewport: ViewportOptions): boolean | null {
+  const conditions = input.toLowerCase().split(/\s+and\s+/).map((condition) => condition.trim()).filter(Boolean);
+  if (conditions.length === 0) return true;
+  for (const condition of conditions) {
+    const dimension = condition.match(/^\((min|max)-(width|height)\s*:\s*([+-]?(?:\d+\.?\d*|\.\d+))(px|em|rem)\)$/);
+    if (dimension) {
+      const factor = dimension[4] === "px" ? 1 : 16;
+      const expected = Number.parseFloat(dimension[3] ?? "0") * factor;
+      const actual = dimension[2] === "width" ? viewport.width : viewport.height;
+      if (dimension[1] === "min" ? actual < expected : actual > expected) return false;
+      continue;
+    }
+    const orientation = condition.match(/^\(orientation\s*:\s*(portrait|landscape)\)$/);
+    if (orientation) {
+      const actual = viewport.width > viewport.height ? "landscape" : "portrait";
+      if (actual !== orientation[1]) return false;
+      continue;
+    }
+    return null;
+  }
+  return true;
 }
 
 function isRefLike(source: Exclude<HtmlSource, string>): source is { readonly current: Element | null } {
@@ -464,6 +667,25 @@ function hasAuthoredProperty(element: Element, property: string): boolean {
   const inlineStyle = (element as HTMLElement).style;
   if (inlineStyle?.getPropertyValue(property)) return true;
 
+  const root = element.getRootNode();
+  if (root.nodeType === Node.DOCUMENT_FRAGMENT_NODE && "host" in root) {
+    const shadowRoot = root as ShadowRoot;
+    for (const style of shadowRoot.querySelectorAll("style")) {
+      try {
+        if (style.sheet && rulesAuthorProperty(style.sheet.cssRules, element, property)) return true;
+      } catch {
+        // A malformed shadow stylesheet does not invalidate the snapshot.
+      }
+    }
+    for (const sheet of shadowRoot.adoptedStyleSheets ?? []) {
+      try {
+        if (rulesAuthorProperty(sheet.cssRules, element, property)) return true;
+      } catch {
+        // Keep inspecting other authored sources.
+      }
+    }
+  }
+
   for (const sheet of element.ownerDocument.styleSheets) {
     try {
       if (rulesAuthorProperty(sheet.cssRules, element, property)) return true;
@@ -605,7 +827,7 @@ async function materializeImages(
     if (!source || source.startsWith("data:image/jpeg") || source.startsWith("data:image/jpg") || source.startsWith("data:image/png")) continue;
 
     try {
-      const url = new URL(source, options.baseUrl ?? document.baseURI);
+      const url = new URL(source, options.baseUrl ?? image.ownerDocument.baseURI);
       const resolved = await options.resourceResolver?.({ kind: "image", url });
       if (typeof resolved === "string" && /^data:image\/(?:jpeg|jpg|png);/i.test(resolved)) {
         (image as HTMLImageElement).src = resolved;

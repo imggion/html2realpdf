@@ -35,7 +35,7 @@ export class WasmRenderError extends Html2RealPdfError {
 
 export class ResourceLoadError extends Html2RealPdfError {
   constructor(resource: string, options?: ErrorOptions) {
-    super(`Could not load image resource: ${resource}`, "RESOURCE_LOAD_FAILED", options);
+    super(`Could not load resource: ${resource}`, "RESOURCE_LOAD_FAILED", options);
   }
 }
 

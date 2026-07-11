@@ -49,8 +49,9 @@ coverage. A dash means the stage is not applicable or not implemented.
 | CSS-wide keywords | Y | Y | Y | - | - | - | Y | `initial`, `inherit`, `unset`, `revert` |
 | custom properties / `var()` | Y | Y | Y | - | - | - | Y | inherited scopes, nested fallback, cycle detection |
 | browser pseudo-elements | Y | Y | Y | Y | Y | Y | Y | `::before`/`::after` strings and `attr()` become synthetic nodes; counters pending |
-| browser media/viewport snapshot | Y | Y | Y | - | - | - | Y | deterministic viewport; explicit `screen` or `print` selection |
+| browser media/viewport snapshot | Y | Y | Y | - | - | - | Y | deterministic viewport for strings, Elements, and refs; explicit `screen` or `print`; transitions/animations frozen |
 | open Shadow DOM snapshot | Y | Y | Y | Y | Y | Y | Y | opt-in composed-tree flattening with slots |
+| external stylesheet snapshot | Y | Y | Y | - | - | - | Y | HTML-string network access is mediated by `resourceResolver` and resource policy |
 
 The machine-readable property inventory lives in
 `src/css/properties.zig`. Structural snapshots, Zig tests, Node ABI tests, and
