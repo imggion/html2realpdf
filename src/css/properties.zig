@@ -56,7 +56,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "line-height", .stage = full },
     .{ .name = "list-style-position", .stage = full, .notes = "inside and inline-start outside marker placement" },
     .{ .name = "list-style-type", .stage = full, .notes = "common bullets decimal alphabetic and Roman counters" },
-    .{ .name = "margin", .stage = layout, .notes = "adjacent block collapse supported" },
+    .{ .name = "margin", .stage = layout, .notes = "web and strict sibling parent-child empty-block and negative collapse groups" },
     .{ .name = "max-height", .stage = layout },
     .{ .name = "max-width", .stage = layout },
     .{ .name = "min-height", .stage = layout },

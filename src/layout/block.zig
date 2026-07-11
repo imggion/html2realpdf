@@ -14,6 +14,8 @@ pub const Options = struct {
     fill_available_width: bool = false,
     shrink_to_fit: bool = false,
     containing_block_height: ?f32 = null,
+    suppress_margin_top: bool = false,
+    suppress_margin_bottom: bool = false,
 };
 
 pub fn layout(
@@ -38,6 +40,9 @@ pub fn layoutWithOptions(
     const border = source.border;
     const padding = source.padding;
     const containing_height: ?f32 = if (state.web_sizing) options.containing_block_height else containing.height;
+    const margin_info = if (state.web_sizing) state.marginInfo(box_id) else MarginInfo.fromEdges(margin.top, margin.bottom);
+    const used_margin_top = if (state.web_sizing and options.suppress_margin_top) 0 else margin_info.start.value();
+    const used_margin_bottom = if (state.web_sizing and options.suppress_margin_bottom) 0 else margin_info.end.value();
 
     if (style.page_break_before == .always) state.advanceToNextPage(cursor_y);
 
@@ -88,7 +93,7 @@ pub fn layoutWithOptions(
         content_width + horizontal_non_content
     else
         @min(content_width + horizontal_non_content, available_outer_width);
-    var outer_y = cursor_y.* + margin.top;
+    var outer_y = cursor_y.* + used_margin_top;
 
     const fragment_id = state.fragments.items.len;
     try state.fragments.append(state.allocator, .{
@@ -198,11 +203,13 @@ pub fn layoutWithOptions(
             });
             defer float_context.deinit();
             var previous_bottom_margin: f32 = 0;
+            var pending_margin = MarginStrut{};
+            var parent_start_open = state.web_sizing and canCollapseStartWithChildren(state.tree, box_id);
+            var last_in_flow_was_block = false;
             var child = source.first_child;
             while (child) |child_id| {
                 const child_box = state.tree.boxes.items[child_id];
                 if (state.web_sizing and child_box.style.float_direction != .none) {
-                    previous_bottom_margin = 0;
                     const required_width = try floatOuterWidth(state, child_id, content_width);
                     const float_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
                     const band = float_context.bandAt(float_y);
@@ -229,35 +236,78 @@ pub fn layoutWithOptions(
                     });
                 } else if (isBlockLevel(child_box.kind) or (state.web_sizing and child_box.style.clear_direction != .none)) {
                     if (state.web_sizing) {
+                        const child_margin = state.marginInfo(child_id);
+                        if (child_margin.through and child_box.style.clear_direction == .none) {
+                            pending_margin.combine(child_margin.start);
+                            var empty_cursor = child_cursor_y;
+                            _ = try state.layoutBlockWithOptions(
+                                child_id,
+                                .{ .x = content_x, .y = content_y, .width = content_width },
+                                &empty_cursor,
+                                .{
+                                    .containing_block_height = specified_content_height,
+                                    .suppress_margin_top = true,
+                                    .suppress_margin_bottom = true,
+                                },
+                            );
+                            child = child_box.next_sibling;
+                            continue;
+                        }
+
+                        if (child_box.style.clear_direction != .none) {
+                            child_cursor_y += pending_margin.value() + child_margin.start.value();
+                        } else if (!parent_start_open) {
+                            var collapsed = pending_margin;
+                            collapsed.combine(child_margin.start);
+                            child_cursor_y += collapsed.value();
+                        }
+                        pending_margin = .{};
                         const required_width = try minimumOuterWidth(state, child_id);
                         child_cursor_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
-                    }
-                    if (state.web_sizing and child_box.style.clear_direction != .none) {
-                        previous_bottom_margin = 0;
+                        const band = float_context.bandAt(child_cursor_y);
+                        _ = try state.layoutBlockWithOptions(
+                            child_id,
+                            .{ .x = band.x, .y = content_y, .width = @max(band.width, 1) },
+                            &child_cursor_y,
+                            .{
+                                .containing_block_height = specified_content_height,
+                                .suppress_margin_top = true,
+                                .suppress_margin_bottom = true,
+                            },
+                        );
+                        pending_margin = child_margin.end;
+                        parent_start_open = false;
+                        last_in_flow_was_block = true;
                     } else {
                         const collapsed = collapseMargins(previous_bottom_margin, child_box.margin.top);
                         child_cursor_y -= previous_bottom_margin + child_box.margin.top - collapsed;
+                        _ = try state.layoutBlockWithOptions(
+                            child_id,
+                            .{ .x = content_x, .y = content_y, .width = content_width },
+                            &child_cursor_y,
+                            .{ .containing_block_height = containing.height },
+                        );
+                        previous_bottom_margin = child_box.margin.bottom;
                     }
-                    const band = if (state.web_sizing) float_context.bandAt(child_cursor_y) else floats.Band{
-                        .x = content_x,
-                        .width = content_width,
-                        .next_bottom = null,
-                    };
-                    _ = try state.layoutBlockWithOptions(
-                        child_id,
-                        .{ .x = band.x, .y = content_y, .width = @max(band.width, 1) },
-                        &child_cursor_y,
-                        .{ .containing_block_height = if (state.web_sizing) specified_content_height else containing.height },
-                    );
-                    previous_bottom_margin = child_box.margin.bottom;
                 } else {
+                    if (state.web_sizing) {
+                        child_cursor_y += pending_margin.value();
+                        pending_margin = .{};
+                        parent_start_open = false;
+                        last_in_flow_was_block = false;
+                    }
                     const run_height = try state.layoutInlineRun(child_id, content_x, child_cursor_y, content_width, style.text_align);
                     child_cursor_y += run_height;
                     previous_bottom_margin = 0;
                 }
                 child = child_box.next_sibling;
             }
-            if (state.web_sizing) child_cursor_y = @max(child_cursor_y, float_context.maximumBottom());
+            if (state.web_sizing) {
+                if (!(last_in_flow_was_block and canCollapseEndWithChildren(state.tree, box_id))) {
+                    child_cursor_y += pending_margin.value();
+                }
+                child_cursor_y = @max(child_cursor_y, float_context.maximumBottom());
+            }
         } else {
             const inline_height = try state.layoutInlineChildrenWithOffset(box_id, content_x, content_y, content_width, style.text_align, inline_marker_offset);
             child_cursor_y += inline_height;
@@ -306,7 +356,7 @@ pub fn layoutWithOptions(
         };
     }
 
-    cursor_y.* = outer_y + outer_height + margin.bottom;
+    cursor_y.* = outer_y + outer_height + used_margin_bottom;
     if (style.page_break_after == .always) state.advanceToNextPage(cursor_y);
     return state.fragments.items[fragment_id].rect;
 }
@@ -337,4 +387,153 @@ fn collapseMargins(previous: f32, next: f32) f32 {
     if (previous >= 0 and next >= 0) return @max(previous, next);
     if (previous <= 0 and next <= 0) return @min(previous, next);
     return previous + next;
+}
+
+pub const MarginStrut = struct {
+    positive: f32 = 0,
+    negative: f32 = 0,
+
+    fn fromValue(value_: f32) MarginStrut {
+        var result = MarginStrut{};
+        result.add(value_);
+        return result;
+    }
+
+    fn add(self: *MarginStrut, margin: f32) void {
+        if (margin >= 0) {
+            self.positive = @max(self.positive, margin);
+        } else {
+            self.negative = @min(self.negative, margin);
+        }
+    }
+
+    fn combine(self: *MarginStrut, other: MarginStrut) void {
+        self.positive = @max(self.positive, other.positive);
+        self.negative = @min(self.negative, other.negative);
+    }
+
+    fn value(self: MarginStrut) f32 {
+        return self.positive + self.negative;
+    }
+};
+
+pub const MarginInfo = struct {
+    start: MarginStrut,
+    end: MarginStrut,
+    through: bool = false,
+
+    fn fromEdges(top: f32, bottom: f32) MarginInfo {
+        return .{ .start = .fromValue(top), .end = .fromValue(bottom) };
+    }
+};
+
+/// Collects every adjoining margin before geometry is assigned. Keeping the
+/// positive maximum and negative minimum separately makes the operation
+/// associative, which is required for empty blocks that collapse through.
+pub fn marginInfo(tree: *const box.BoxTree, box_id: box.BoxId, cache: []?MarginInfo) MarginInfo {
+    if (cache[box_id]) |cached| return cached;
+    const source = tree.boxes.items[box_id];
+    var result = MarginInfo.fromEdges(source.margin.top, source.margin.bottom);
+
+    if (marginsCollapseThrough(tree, box_id, cache)) {
+        var group = result.start;
+        group.combine(result.end);
+        var child = source.first_child;
+        while (child) |child_id| {
+            const child_box = tree.boxes.items[child_id];
+            if (!isOutOfFlowMarginBox(child_box)) {
+                const child_info = marginInfo(tree, child_id, cache);
+                group.combine(child_info.start);
+                group.combine(child_info.end);
+            }
+            child = child_box.next_sibling;
+        }
+        const collapsed = MarginInfo{ .start = group, .end = group, .through = true };
+        cache[box_id] = collapsed;
+        return collapsed;
+    }
+
+    if (canCollapseStartWithChildren(tree, box_id)) {
+        var child = source.first_child;
+        while (child) |child_id| {
+            const child_box = tree.boxes.items[child_id];
+            child = child_box.next_sibling;
+            if (isOutOfFlowMarginBox(child_box)) continue;
+            if (!isMarginCollapsingBlock(child_box.kind) or child_box.style.clear_direction != .none) break;
+            const child_info = marginInfo(tree, child_id, cache);
+            result.start.combine(child_info.start);
+            if (!child_info.through) break;
+            result.start.combine(child_info.end);
+        }
+    }
+
+    if (canCollapseEndWithChildren(tree, box_id)) {
+        var child = source.last_child;
+        while (child) |child_id| {
+            const child_box = tree.boxes.items[child_id];
+            child = child_box.prev_sibling;
+            if (isOutOfFlowMarginBox(child_box)) continue;
+            if (!isMarginCollapsingBlock(child_box.kind) or child_box.style.clear_direction != .none) break;
+            const child_info = marginInfo(tree, child_id, cache);
+            result.end.combine(child_info.end);
+            if (!child_info.through) break;
+            result.end.combine(child_info.start);
+        }
+    }
+
+    cache[box_id] = result;
+    return result;
+}
+
+fn canCollapseStartWithChildren(tree: *const box.BoxTree, box_id: box.BoxId) bool {
+    if (box_id == tree.root) return false;
+    const source = tree.boxes.items[box_id];
+    return acceptsCollapsingChildren(source) and source.border.top == 0 and source.padding.top == 0;
+}
+
+fn canCollapseEndWithChildren(tree: *const box.BoxTree, box_id: box.BoxId) bool {
+    if (box_id == tree.root) return false;
+    const source = tree.boxes.items[box_id];
+    return acceptsCollapsingChildren(source) and
+        source.border.bottom == 0 and source.padding.bottom == 0 and
+        isAutoOrZero(source.style.height) and isAutoOrZero(source.style.min_height);
+}
+
+fn marginsCollapseThrough(tree: *const box.BoxTree, box_id: box.BoxId, cache: []?MarginInfo) bool {
+    const source = tree.boxes.items[box_id];
+    if (!canCollapseStartWithChildren(tree, box_id) or !canCollapseEndWithChildren(tree, box_id)) return false;
+    if (source.style.clear_direction != .none) return false;
+    if (source.kind == .listItem and source.style.list_style_type != .none) return false;
+
+    var child = source.first_child;
+    while (child) |child_id| {
+        const child_box = tree.boxes.items[child_id];
+        child = child_box.next_sibling;
+        if (isOutOfFlowMarginBox(child_box)) continue;
+        if (!isMarginCollapsingBlock(child_box.kind) or !marginInfo(tree, child_id, cache).through) return false;
+    }
+    return true;
+}
+
+fn acceptsCollapsingChildren(source: box.Box) bool {
+    const block_container = source.kind == .block or source.kind == .listItem or source.kind == .anonymousBlock;
+    return block_container and source.style.float_direction == .none and
+        source.style.position != .absolute and source.style.position != .fixed and
+        source.style.overflow == .visible;
+}
+
+fn isOutOfFlowMarginBox(source: box.Box) bool {
+    return source.style.float_direction != .none or source.style.position == .absolute or source.style.position == .fixed;
+}
+
+fn isMarginCollapsingBlock(kind: box.BoxType) bool {
+    return kind == .block or kind == .listItem or kind == .anonymousBlock or kind == .table;
+}
+
+fn isAutoOrZero(length: box.Length) bool {
+    return switch (length) {
+        .auto => true,
+        .px => |value_| @abs(value_) <= 0.0001,
+        else => false,
+    };
 }

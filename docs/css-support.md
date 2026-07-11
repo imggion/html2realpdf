@@ -29,7 +29,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`/`min()`/`max()`/`clamp()`, `min-content`/`max-content`/`fit-content()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
 | `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic fallback for replaced elements; web/strict transfer the preferred ratio into auto block size for normal boxes |
 | `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
-| margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; adjacent block margin collapse |
+| margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; web/strict collapse sibling, parent/child, empty-block, and mixed positive/negative margin groups across eligible block formatting contexts |
 | logical sizing/margin/padding/border | Y | Y | Y | Y | Y | Y | Y | `*-block`/`*-inline` longhands and axis shorthands map with final `direction`, share cascade priority with physical peers, and preserve logical `inherit`; horizontal-tb writing mode |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |

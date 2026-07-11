@@ -46,6 +46,9 @@ pub fn layout(
     document: *const dom.Document,
     options: Options,
 ) !LayoutDocument {
+    const margin_cache = try allocator.alloc(?block.MarginInfo, tree.boxes.items.len);
+    defer allocator.free(margin_cache);
+    @memset(margin_cache, null);
     var state = State{
         .allocator = allocator,
         .tree = tree,
@@ -56,6 +59,7 @@ pub fn layout(
         .shaping_mode = options.shaping_mode,
         .atomic_inline_baselines = options.atomic_inline_baselines,
         .web_sizing = options.web_sizing,
+        .margin_cache = margin_cache,
     };
     errdefer state.fragments.deinit(allocator);
 
@@ -85,6 +89,7 @@ const State = struct {
     shaping_mode: font.ShapingMode,
     atomic_inline_baselines: bool,
     web_sizing: bool,
+    margin_cache: []?block.MarginInfo,
     next_line_id: usize = 0,
 
     const BlockLayoutOptions = struct {
@@ -237,6 +242,10 @@ const State = struct {
 
     pub fn measureIntrinsicInline(self: *State, box_id: box.BoxId) std.mem.Allocator.Error!intrinsic.InlineSizes {
         return intrinsic.measureBoxInline(self.allocator, self.tree, box_id, self.font_registry, self.shaping_mode);
+    }
+
+    pub fn marginInfo(self: *State, box_id: box.BoxId) block.MarginInfo {
+        return block.marginInfo(self.tree, box_id, self.margin_cache);
     }
 
     pub fn layoutTable(
@@ -1504,6 +1513,111 @@ test "adjacent block margins collapse instead of adding" {
     try std.testing.expectEqual(@as(usize, 2), paragraph_count);
     const gap = paragraphs[1].y - paragraphs[0].bottom();
     try std.testing.expectApproxEqAbs(@as(f32, 16), gap, 0.01);
+}
+
+test "Web parent and child margins collapse at both block edges" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='margin:10px 0 12px;background:#00ff00'>" ++
+        "<div style='height:20px;margin:30px 0 40px;background:#ff0000'></div></div>" ++
+        "<div style='height:10px;background:#0000ff'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var parent: ?geometry.Rect = null;
+    var child: ?geometry.Rect = null;
+    var next: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.green == 1 and color.red == 0) parent = fragment.rect;
+        if (color.red == 1 and color.green == 0) child = fragment.rect;
+        if (color.blue == 1 and color.red == 0) next = fragment.rect;
+    }
+
+    try std.testing.expectApproxEqAbs(@as(f32, 30), parent.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(parent.?.y, child.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), next.?.y - child.?.bottom(), 0.01);
+}
+
+test "Web empty blocks collapse positive and negative margin groups" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:10px;margin-bottom:30px;background:#ff0000'></div>" ++
+        "<div style='margin-top:20px;margin-bottom:-15px'></div>" ++
+        "<div style='height:10px;margin-top:10px;background:#0000ff'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var last: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) last = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 15), last.?.y - first.?.bottom(), 0.01);
+}
+
+test "Web padding and overflow establish margin-collapse boundaries" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='margin-top:10px;padding-top:5px'><div style='height:10px;margin-top:30px;background:#ff0000'></div></div>" ++
+        "<div style='overflow:hidden;margin-top:10px'><div style='height:10px;margin-top:30px;background:#0000ff'></div></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var padded_parent: ?geometry.Rect = null;
+    var padded_child: ?geometry.Rect = null;
+    var clipped_parent: ?geometry.Rect = null;
+    var clipped_child: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const source_box = tree.boxes.items[fragment.source_box];
+        if (fragment.background) |color| {
+            if (color.red == 1 and color.blue == 0) padded_child = fragment.rect;
+            if (color.blue == 1 and color.red == 0) clipped_child = fragment.rect;
+        } else if (source_box.first_child != null and source_box.kind == .block) {
+            if (source_box.style.padding.top == 5) padded_parent = fragment.rect;
+            if (source_box.style.overflow == .hidden) clipped_parent = fragment.rect;
+        }
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 35), padded_child.?.y - padded_parent.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), clipped_child.?.y - clipped_parent.?.y, 0.01);
 }
 
 test "Web list markers honor CSS styles and HTML counter hints" {
