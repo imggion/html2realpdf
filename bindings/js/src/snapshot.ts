@@ -23,6 +23,18 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "display",
   "float",
   "clear",
+  "flex-direction",
+  "flex-wrap",
+  "flex-grow",
+  "flex-shrink",
+  "flex-basis",
+  "order",
+  "row-gap",
+  "column-gap",
+  "justify-content",
+  "align-items",
+  "align-self",
+  "align-content",
   "width",
   "height",
   "min-width",
@@ -106,6 +118,8 @@ const SUPPORTED_DISPLAY = new Set([
   "list-item",
   "inline",
   "inline-block",
+  "flex",
+  "inline-flex",
   "table",
   "table-row-group",
   "table-header-group",
@@ -122,7 +136,7 @@ const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   ...SUPPORTED_COMPUTED_PROPERTIES,
   "margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left",
   "border-width", "border-style", "border-color", "background", "page-break-before", "page-break-after",
-  "page-break-inside", "list-style", "orphans", "widows",
+  "page-break-inside", "list-style", "flex", "flex-flow", "gap", "orphans", "widows",
 ]);
 
 export async function snapshotSource(source: HtmlSource, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -723,7 +737,7 @@ function materializeComputedStyle(
   const position = computed.getPropertyValue("position");
   const floatValue = computed.getPropertyValue("float");
 
-  if (!SUPPORTED_DISPLAY.has(display)) {
+  if (!SUPPORTED_DISPLAY.has(display) || ((display === "flex" || display === "inline-flex") && !usesWebLayout(options))) {
     throw new UnsupportedCssError(`display:${display} is outside the document/report layout profile`);
   }
   if (position !== "static") {
@@ -1228,7 +1242,7 @@ function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnost
 }
 
 function validateAuthoredLayout(property: string, value: string, options: SnapshotOptions): void {
-  if (property === "display" && !SUPPORTED_DISPLAY.has(value)) {
+  if (property === "display" && (!SUPPORTED_DISPLAY.has(value) || ((value === "flex" || value === "inline-flex") && !usesWebLayout(options)))) {
     throw new UnsupportedCssError(`display:${value} is outside the document/report layout profile`);
   }
   if (property === "position" && value !== "static") {

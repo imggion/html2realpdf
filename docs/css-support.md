@@ -11,9 +11,9 @@ label "CSS3".
 - **document** is the current `0.1.x` profile for invoices, reports, tickets,
   letters, tables, and presentation-like pages. Unsupported layout-critical
   behavior fails instead of being silently painted incorrectly.
-- **web** is the staged `0.2+` profile. Its foundations exist as separate CSS
-  and formatting-context modules, but Flexbox, Grid, positioned layout, and web
-  effects are not enabled yet.
+- **web** is the staged `0.2+` profile. It enables the Unicode typography,
+  browser snapshot, normal-flow, table, float, and Flexbox formatting contexts;
+  Grid, positioned layout, and web effects remain staged separately.
 - **strict** uses the same layout engine and turns unsupported CSS into an
   immediate error at the browser snapshot boundary.
 
@@ -25,11 +25,11 @@ coverage. A dash means the stage is not applicable or not implemented.
 
 | Property or group | P | C | V | L | Paint | Page | T | Current limit |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | --- |
-| `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, list-item, and table roles |
+| `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, list-item, flex, inline-flex, and table roles |
 | width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`/`min()`/`max()`/`clamp()`, `min-content`/`max-content`/`fit-content()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
 | `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic fallback for replaced elements; web/strict transfer the preferred ratio into auto block size for normal boxes |
 | `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
-| margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; web/strict collapse sibling, parent/child, empty-block, and mixed positive/negative margin groups across eligible block formatting contexts |
+| margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; web/strict collapse sibling, parent/child, empty-block, and mixed positive/negative margin groups across eligible block formatting contexts; flex items consume main/cross `auto` margins |
 | logical sizing/margin/padding/border | Y | Y | Y | Y | Y | Y | Y | `*-block`/`*-inline` longhands and axis shorthands map with final `direction`, share cascade priority with physical peers, and preserve logical `inherit`; horizontal-tb writing mode |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |
@@ -57,6 +57,8 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `position` | Y | Y | Y | - | - | - | Y | only static renders; others fail clearly |
 | `float` | Y | Y | Y | Y | Y | Y | Y | web/strict left and right exclusion bands with shrink-to-fit sizing; document rejects non-none |
 | `clear` | Y | Y | Y | Y | - | Y | Y | none, left, right, and both within the current block formatting context |
+| Flexbox container | Y | Y | Y | Y | Y | Y | Y | web/strict `flex` and `inline-flex`; row/column/reverse, wrap/wrap-reverse, gaps, justify/align items/content, baseline and RTL main-start |
+| Flexbox items | Y | Y | Y | Y | Y | Y | Y | basis including percentages/content, grow/shrink with iterative min/max freezing, partial grow factors, order, auto margins, replaced elements, nested flex, intrinsic sizing, and atomic line/item page advancement |
 | selectors | Y | Y | - | - | - | - | Y | type, class, ID, universal, compound, descendant, child |
 | `!important`, inheritance, source order | Y | Y | Y | - | - | - | Y | author origin and inline style ordering |
 | supported shorthands | Y | Y | Y | - | - | - | Y | expanded to physical longhands before computed values |
@@ -77,7 +79,7 @@ Playwright E2E make the matrix verifiable.
 - non-color typed values such as angles, transforms, and images; group opacity
   and blend/compositing modes remain pending;
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
-- Flexbox, Grid, positioned/sticky layout, stacking contexts;
+- Grid, positioned/sticky layout, and stacking contexts;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
 - vertical `writing-mode` values; logical box properties currently map within horizontal-tb;
 - CSS `unicode-bidi` isolate/override modes and language-specific case tailoring beyond Unicode `SpecialCasing.txt`;
@@ -102,7 +104,8 @@ the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
 - `make test-web-snapshots` checks stable WASM structural output and a real PDF
   result handle in Node.
 - `make test-browser` runs the browser harness and mounted React-ref preview on
-  Chromium, Firefox, and WebKit.
+  Chromium, Firefox, and WebKit, plus a Chromium differential gate that compares
+  Web Flexbox vector geometry with live DOM rectangles within `0.75` CSS px.
 - `make test-baseline` regenerates the versioned PDF fixtures in memory and
   compares their SHA-256 digests with the committed visual baseline manifest.
 - `make test-release` runs all of the above plus package and React builds.

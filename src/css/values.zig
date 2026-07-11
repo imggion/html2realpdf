@@ -19,6 +19,8 @@ pub fn parseDisplay(value: []const u8) ?box.Display {
     if (eqlProp(v, "list-item")) return .listItem;
     if (eqlProp(v, "inline")) return .inlineBox;
     if (eqlProp(v, "inline-block")) return .inlineBlock;
+    if (eqlProp(v, "flex")) return .flex;
+    if (eqlProp(v, "inline-flex")) return .inlineFlex;
     if (eqlProp(v, "table")) return .table;
     if (eqlProp(v, "table-row")) return .tableRow;
     if (eqlProp(v, "table-cell")) return .tableCell;
@@ -27,6 +29,86 @@ pub fn parseDisplay(value: []const u8) ?box.Display {
     if (eqlProp(v, "table-column")) return .tableColumn;
     if (eqlProp(v, "table-column-group")) return .tableColumnGroup;
     return null;
+}
+
+pub fn parseFlexDirection(value: []const u8) ?box.FlexDirection {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "row")) return .row;
+    if (eqlProp(v, "row-reverse")) return .rowReverse;
+    if (eqlProp(v, "column")) return .column;
+    if (eqlProp(v, "column-reverse")) return .columnReverse;
+    return null;
+}
+
+pub fn parseFlexWrap(value: []const u8) ?box.FlexWrap {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "nowrap")) return .nowrap;
+    if (eqlProp(v, "wrap")) return .wrap;
+    if (eqlProp(v, "wrap-reverse")) return .wrapReverse;
+    return null;
+}
+
+pub fn parseJustifyContent(value: []const u8) ?box.JustifyContent {
+    const v = stripSafeAlignment(value);
+    if (eqlProp(v, "normal") or eqlProp(v, "start") or eqlProp(v, "flex-start")) return .flexStart;
+    if (eqlProp(v, "end") or eqlProp(v, "flex-end")) return .flexEnd;
+    if (eqlProp(v, "center")) return .center;
+    if (eqlProp(v, "space-between")) return .spaceBetween;
+    if (eqlProp(v, "space-around")) return .spaceAround;
+    if (eqlProp(v, "space-evenly")) return .spaceEvenly;
+    return null;
+}
+
+pub fn parseAlignItems(value: []const u8) ?box.AlignItems {
+    const v = stripSafeAlignment(value);
+    if (eqlProp(v, "normal") or eqlProp(v, "stretch")) return .stretch;
+    if (eqlProp(v, "start") or eqlProp(v, "flex-start") or eqlProp(v, "self-start")) return .flexStart;
+    if (eqlProp(v, "end") or eqlProp(v, "flex-end") or eqlProp(v, "self-end")) return .flexEnd;
+    if (eqlProp(v, "center")) return .center;
+    if (eqlProp(v, "baseline") or eqlProp(v, "first baseline") or eqlProp(v, "last baseline")) return .baseline;
+    return null;
+}
+
+pub fn parseAlignSelf(value: []const u8) ?box.AlignSelf {
+    const v = stripSafeAlignment(value);
+    if (eqlProp(v, "auto")) return .auto;
+    if (eqlProp(v, "normal") or eqlProp(v, "stretch")) return .stretch;
+    if (eqlProp(v, "start") or eqlProp(v, "flex-start") or eqlProp(v, "self-start")) return .flexStart;
+    if (eqlProp(v, "end") or eqlProp(v, "flex-end") or eqlProp(v, "self-end")) return .flexEnd;
+    if (eqlProp(v, "center")) return .center;
+    if (eqlProp(v, "baseline") or eqlProp(v, "first baseline") or eqlProp(v, "last baseline")) return .baseline;
+    return null;
+}
+
+pub fn parseAlignContent(value: []const u8) ?box.AlignContent {
+    const v = stripSafeAlignment(value);
+    if (eqlProp(v, "normal") or eqlProp(v, "stretch")) return .stretch;
+    if (eqlProp(v, "start") or eqlProp(v, "flex-start")) return .flexStart;
+    if (eqlProp(v, "end") or eqlProp(v, "flex-end")) return .flexEnd;
+    if (eqlProp(v, "center")) return .center;
+    if (eqlProp(v, "space-between")) return .spaceBetween;
+    if (eqlProp(v, "space-around")) return .spaceAround;
+    if (eqlProp(v, "space-evenly")) return .spaceEvenly;
+    return null;
+}
+
+pub fn parseNonNegativeNumber(value: []const u8) ?f32 {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    const parsed = std.fmt.parseFloat(f32, v) catch return null;
+    if (!std.math.isFinite(parsed) or parsed < 0) return null;
+    return parsed;
+}
+
+pub fn parseOrder(value: []const u8) ?i32 {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    return std.fmt.parseInt(i32, v, 10) catch null;
+}
+
+fn stripSafeAlignment(value: []const u8) []const u8 {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (v.len > 5 and std.ascii.eqlIgnoreCase(v[0..5], "safe ")) return std.mem.trim(u8, v[5..], " \t\n\r\x0C");
+    if (v.len > 7 and std.ascii.eqlIgnoreCase(v[0..7], "unsafe ")) return std.mem.trim(u8, v[7..], " \t\n\r\x0C");
+    return v;
 }
 
 pub fn parseListStyleType(value: []const u8) ?box.ListStyleType {

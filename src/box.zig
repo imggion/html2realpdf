@@ -78,6 +78,8 @@ pub const Display = enum {
     listItem,
     inlineBox,
     inlineBlock,
+    flex,
+    inlineFlex,
     table,
     tableRow,
     tableCell,
@@ -93,6 +95,8 @@ pub const Display = enum {
             .listItem => "list-item",
             .inlineBox => "inline",
             .inlineBlock => "inline-block",
+            .flex => "flex",
+            .inlineFlex => "inline-flex",
             .table => "table",
             .tableRow => "table-row",
             .tableCell => "table-cell",
@@ -215,6 +219,31 @@ pub const ListStylePosition = enum {
         };
     }
 };
+
+pub const FlexDirection = enum {
+    row,
+    rowReverse,
+    column,
+    columnReverse,
+
+    pub fn isRow(self: @This()) bool {
+        return self == .row or self == .rowReverse;
+    }
+
+    pub fn isReverse(self: @This()) bool {
+        return self == .rowReverse or self == .columnReverse;
+    }
+};
+
+pub const FlexWrap = enum { nowrap, wrap, wrapReverse };
+
+pub const JustifyContent = enum { flexStart, flexEnd, center, spaceBetween, spaceAround, spaceEvenly };
+
+pub const AlignItems = enum { stretch, flexStart, flexEnd, center, baseline };
+
+pub const AlignSelf = enum { auto, stretch, flexStart, flexEnd, center, baseline };
+
+pub const AlignContent = enum { stretch, flexStart, flexEnd, center, spaceBetween, spaceAround, spaceEvenly };
 
 /// Text whitespace mode needed before line breaking can make final decisions.
 pub const WhiteSpace = enum {
@@ -616,6 +645,16 @@ pub const Length = union(enum) {
     }
 };
 
+/// Tracks the CSS `auto` state separately from resolved numeric margins.
+/// Normal flow keeps using `EdgeSizes`; flex layout consumes these flags when
+/// distributing free space on the main and cross axes.
+pub const AutoEdges = struct {
+    top: bool = false,
+    right: bool = false,
+    bottom: bool = false,
+    left: bool = false,
+};
+
 /// Style data resolved enough for Box Tree construction.
 ///
 /// This is not the CSS parser format. The builder only needs properties that
@@ -667,6 +706,18 @@ pub const Style = struct {
     box_decoration_break: BoxDecorationBreak = .slice,
     list_style_type: ListStyleType = .disc,
     list_style_position: ListStylePosition = .outside,
+    flex_direction: FlexDirection = .row,
+    flex_wrap: FlexWrap = .nowrap,
+    flex_grow: f32 = 0,
+    flex_shrink: f32 = 1,
+    flex_basis: Length = .auto,
+    order: i32 = 0,
+    row_gap: Length = .{ .px = 0 },
+    column_gap: Length = .{ .px = 0 },
+    justify_content: JustifyContent = .flexStart,
+    align_items: AlignItems = .stretch,
+    align_self: AlignSelf = .auto,
+    align_content: AlignContent = .stretch,
     border_collapse: BorderCollapse = .separate,
     caption_side: CaptionSide = .top,
     border_radius: f32 = 0,
@@ -678,6 +729,7 @@ pub const Style = struct {
     widows: u32 = 2,
 
     margin: EdgeSizes = .{},
+    margin_auto: AutoEdges = .{},
     border: EdgeSizes = .{},
     padding: EdgeSizes = .{},
 
@@ -918,6 +970,7 @@ const BuildState = struct {
         style.min_height = .auto;
         style.max_height = .auto;
         style.margin = .{};
+        style.margin_auto = .{};
         style.border = .{};
         style.padding = .{};
         style.border_top_style = .none;
@@ -938,6 +991,18 @@ const BuildState = struct {
         style.object_fit = .fill;
         style.object_position = .{};
         style.box_decoration_break = .slice;
+        style.flex_direction = .row;
+        style.flex_wrap = .nowrap;
+        style.flex_grow = 0;
+        style.flex_shrink = 1;
+        style.flex_basis = .auto;
+        style.order = 0;
+        style.row_gap = .{ .px = 0 };
+        style.column_gap = .{ .px = 0 };
+        style.justify_content = .flexStart;
+        style.align_items = .stretch;
+        style.align_self = .auto;
+        style.align_content = .stretch;
 
         return style;
     }
@@ -1212,6 +1277,7 @@ fn anonymousStyle(parent: Style) Style {
     style.min_height = .auto;
     style.max_height = .auto;
     style.margin = .{};
+    style.margin_auto = .{};
     style.border = .{};
     style.padding = .{};
     style.border_top_style = .none;
@@ -1223,6 +1289,18 @@ fn anonymousStyle(parent: Style) Style {
     style.page_break_after = .auto;
     style.page_break_inside = .auto;
     style.box_decoration_break = .slice;
+    style.flex_direction = .row;
+    style.flex_wrap = .nowrap;
+    style.flex_grow = 0;
+    style.flex_shrink = 1;
+    style.flex_basis = .auto;
+    style.order = 0;
+    style.row_gap = .{ .px = 0 };
+    style.column_gap = .{ .px = 0 };
+    style.justify_content = .flexStart;
+    style.align_items = .stretch;
+    style.align_self = .auto;
+    style.align_content = .stretch;
     return style;
 }
 
@@ -1282,6 +1360,8 @@ fn boxTypeForElement(element: dom.Element, style: Style) BoxType {
         .listItem => .listItem,
         .inlineBox => .inlineBox,
         .inlineBlock => .inlineBlock,
+        .flex => .block,
+        .inlineFlex => .inlineBlock,
         .table => .table,
         .tableRow => .tableRow,
         .tableCell => .tableCell,

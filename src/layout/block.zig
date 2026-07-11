@@ -14,6 +14,8 @@ pub const Options = struct {
     fill_available_width: bool = false,
     shrink_to_fit: bool = false,
     containing_block_height: ?f32 = null,
+    forced_content_width: ?f32 = null,
+    forced_content_height: ?f32 = null,
     suppress_margin_top: bool = false,
     suppress_margin_bottom: bool = false,
 };
@@ -55,7 +57,7 @@ pub fn layoutWithOptions(
         try state.measureIntrinsicInline(box_id)
     else
         intrinsic.InlineSizes{};
-    const specified_content_height = intrinsic.resolveContentDimensionOptional(style.height, containing_height, vertical_non_content, style.box_sizing);
+    const specified_content_height = options.forced_content_height orelse intrinsic.resolveContentDimensionOptional(style.height, containing_height, vertical_non_content, style.box_sizing);
     const replaced_size = if (source.kind == .replaced) intrinsic.resolveReplacedSize(
         style,
         source.intrinsic_width,
@@ -65,7 +67,9 @@ pub fn layoutWithOptions(
         horizontal_non_content,
         vertical_non_content,
     ) else null;
-    var requested_content_width = if (options.fill_available_width)
+    var requested_content_width = if (options.forced_content_width) |forced|
+        forced
+    else if (options.fill_available_width)
         @max(available_outer_width - horizontal_non_content, 1)
     else if (replaced_size) |size|
         size.width
@@ -73,7 +77,7 @@ pub fn layoutWithOptions(
         @min(inline_sizes.max_content, @max(inline_sizes.min_content, available_outer_width - horizontal_non_content))
     else
         intrinsic.resolveContentInlineDimension(style.width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes) orelse @max(available_outer_width - horizontal_non_content, 1);
-    if (!options.fill_available_width) {
+    if (!options.fill_available_width and options.forced_content_width == null) {
         const minimum = intrinsic.resolveContentInlineDimension(style.min_width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes);
         const maximum = intrinsic.resolveContentInlineDimension(style.max_width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes);
         if (state.web_sizing) {
@@ -188,6 +192,12 @@ pub fn layoutWithOptions(
 
     if (source.kind == .replaced) {
         child_cursor_y += replaced_size.?.height;
+    } else if (state.web_sizing and (style.display == .flex or style.display == .inlineFlex)) {
+        child_cursor_y += try state.layoutFlex(
+            box_id,
+            .{ .x = content_x, .y = content_y, .width = content_width, .height = specified_content_height orelse 0 },
+            specified_content_height,
+        );
     } else if (source.kind == .table) {
         child_cursor_y += try state.layoutTable(box_id, content_x, content_y, content_width);
     } else if (source.first_child) |_| {
@@ -327,7 +337,11 @@ pub fn layoutWithOptions(
     if (intrinsic.resolveContentDimensionOptional(style.min_height, containing_height, vertical_non_content, style.box_sizing)) |minimum| content_height = @max(content_height, minimum);
     if (intrinsic.resolveContentDimensionOptional(style.max_height, containing_height, vertical_non_content, style.box_sizing)) |maximum| content_height = @min(content_height, maximum);
     if (source.kind == .replaced) {
-        content_height = @max(content_height, replaced_size.?.height);
+        if (options.forced_content_height == null and options.forced_content_width != null and replaced_size.?.ratio != null) {
+            content_height = options.forced_content_width.? / replaced_size.?.ratio.?;
+        } else {
+            content_height = @max(content_height, replaced_size.?.height);
+        }
     }
 
     var outer_height = border.top + padding.top + content_height + padding.bottom + border.bottom;
@@ -518,6 +532,7 @@ fn marginsCollapseThrough(tree: *const box.BoxTree, box_id: box.BoxId, cache: []
 fn acceptsCollapsingChildren(source: box.Box) bool {
     const block_container = source.kind == .block or source.kind == .listItem or source.kind == .anonymousBlock;
     return block_container and source.style.float_direction == .none and
+        source.style.display != .flex and source.style.display != .inlineFlex and
         source.style.position != .absolute and source.style.position != .fixed and
         source.style.overflow == .visible;
 }

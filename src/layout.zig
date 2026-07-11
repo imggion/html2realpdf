@@ -258,6 +258,15 @@ const State = struct {
         return table.layout(self, table_id, x, y, width);
     }
 
+    pub fn layoutFlex(
+        self: *State,
+        container_id: box.BoxId,
+        content: geometry.Rect,
+        specified_content_height: ?f32,
+    ) !f32 {
+        return flex.layout(self, container_id, content, specified_content_height);
+    }
+
     pub fn linkForBox(self: *const State, box_id: box.BoxId) ?[]const u8 {
         const node_id = self.tree.boxes.items[box_id].node orelse return null;
         const node = self.document.nodes.items[node_id];
@@ -1717,6 +1726,465 @@ test "Web floats occupy side bands and clear moves below them" {
     try std.testing.expect(left.?.x < flow.?.x);
     try std.testing.expect(flow.?.x < right.?.x);
     try std.testing.expect(clear.?.y >= left.?.y + 80);
+}
+
+test "Web flex row distributes grow factors gap and stretch" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;width:300px;height:100px;gap:10px'>" ++
+        "<div style='flex:1;background:#ff0000'>A</div>" ++
+        "<div style='flex:2;background:#0000ff'>B</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 96.667), first.?.width, 0.05);
+    try std.testing.expectApproxEqAbs(@as(f32, 193.333), second.?.width, 0.05);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), second.?.x - (first.?.x + first.?.width), 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), first.?.height, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), second.?.height, 0.01);
+}
+
+test "Web flex wrap order and align content create stable lines" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;flex-wrap:wrap;width:220px;gap:10px'>" ++
+        "<div style='order:2;flex:0 0 100px;height:20px;background:#ff0000'>third</div>" ++
+        "<div style='order:0;flex:0 0 100px;height:20px;background:#00ff00'>first</div>" ++
+        "<div style='order:1;flex:0 0 100px;height:20px;background:#0000ff'>second</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 220, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    var third: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.green == 1 and color.red == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+        if (color.red == 1 and color.green == 0) third = fragment.rect;
+    }
+    try std.testing.expect(first.?.x < second.?.x);
+    try std.testing.expectApproxEqAbs(first.?.y, second.?.y, 0.01);
+    try std.testing.expect(third.?.y > first.?.bottom());
+    try std.testing.expectApproxEqAbs(@as(f32, 10), third.?.y - first.?.bottom(), 0.01);
+}
+
+test "Web column reverse and justify content place items on the vertical axis" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;flex-direction:column-reverse;justify-content:space-between;width:100px;height:300px'>" ++
+        "<div style='flex:0 0 50px;background:#ff0000'>first</div>" ++
+        "<div style='flex:0 0 50px;background:#0000ff'>second</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 250), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), second.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), first.?.height, 0.01);
+}
+
+test "Web flex shrink redistributes after min constraints and aligns individual items" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;width:200px;height:100px;align-items:flex-end'>" ++
+        "<div style='flex:0 1 150px;min-width:120px;height:20px;align-self:center;background:#ff0000'>A</div>" ++
+        "<div style='flex:0 1 150px;min-width:0;height:30px;background:#0000ff'>B</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200, .web_sizing = true });
+    defer result.deinit(allocator);
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 120), first.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 80), second.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 70), second.?.y, 0.01);
+}
+
+test "Web flex supports percentage basis nested containers and replaced ratios" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;width:300px'>" ++
+        "<div style='display:flex;flex:0 0 50%;height:60px;background:#00ff00'>" ++
+        "<div style='flex:1;background:#ff0000'>nested</div></div>" ++
+        "<img width='200' height='100' style='flex:0 0 100px'></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+    var nested: ?geometry.Rect = null;
+    var image: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.kind == .replaced) image = fragment.rect;
+        if (fragment.background) |color| {
+            if (color.green == 1 and color.red == 0) nested = fragment.rect;
+        }
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 150), nested.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), image.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), image.?.height, 0.01);
+}
+
+test "Web flex baseline alignment and inline-flex intrinsic width" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;align-items:baseline;width:200px'>" ++
+        "<div style='font-size:30px'>Large</div><div style='font-size:12px'>small</div></div>" ++
+        "<p><span style='display:inline-flex;gap:5px;background:#00ff00'>" ++
+        "<span style='flex:0 0 40px'>one</span><span style='flex:0 0 40px'>two</span></span></p>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200, .web_sizing = true });
+    defer result.deinit(allocator);
+    var large_baseline: ?f32 = null;
+    var small_baseline: ?f32 = null;
+    var inline_flex: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.text) |text| {
+            if (std.mem.eql(u8, text, "Large")) large_baseline = fragment.rect.y + fragment.font_size * 0.8;
+            if (std.mem.eql(u8, text, "small")) small_baseline = fragment.rect.y + fragment.font_size * 0.8;
+        }
+        if (fragment.background) |color| {
+            if (color.green == 1 and color.red == 0) inline_flex = fragment.rect;
+        }
+    }
+    try std.testing.expectApproxEqAbs(large_baseline.?, small_baseline.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 85), inline_flex.?.width, 0.1);
+}
+
+test "Web nowrap ignores align content and cross stretch honors max size" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;width:100px;height:100px;align-content:flex-end;align-items:flex-start'>" ++
+        "<div style='width:30px;height:20px;background:#ff0000'>start</div></div>" ++
+        "<div style='display:flex;width:100px;height:100px;align-items:stretch'>" ++
+        "<div style='width:30px;max-height:60px;background:#0000ff'>capped</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var start: ?geometry.Rect = null;
+    var capped: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) start = fragment.rect;
+        if (color.blue == 1 and color.red == 0) capped = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), start.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), capped.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), capped.?.height, 0.01);
+}
+
+test "Web flex wrap reverse and align content distribute lines on the cross axis" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;flex-wrap:wrap-reverse;align-content:space-between;width:210px;height:120px'>" ++
+        "<div style='flex:0 0 100px;height:20px;background:#ff0000'>one</div>" ++
+        "<div style='flex:0 0 100px;height:20px;background:#00ff00'>two</div>" ++
+        "<div style='flex:0 0 100px;height:20px;background:#0000ff'>three</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 210, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    var third: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.green == 0) first = fragment.rect;
+        if (color.green == 1 and color.red == 0) second = fragment.rect;
+        if (color.blue == 1 and color.red == 0) third = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(first.?.y, second.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), third.?.y, 0.01);
+}
+
+test "Web flex row directions honor RTL main start" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;direction:rtl;width:200px'>" ++
+        "<div style='flex:0 0 50px;background:#ff0000'>rtl row</div>" ++
+        "<div style='flex:0 0 50px;background:#00ff00'>next</div></div>" ++
+        "<div style='display:flex;direction:rtl;flex-direction:row-reverse;width:200px'>" ++
+        "<div style='flex:0 0 50px;background:#0000ff'>rtl reverse</div>" ++
+        "<div style='flex:0 0 50px;background:#ff00ff'>next</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var row_first: ?geometry.Rect = null;
+    var row_second: ?geometry.Rect = null;
+    var reverse_first: ?geometry.Rect = null;
+    var reverse_second: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.green == 0 and color.blue == 0) row_first = fragment.rect;
+        if (color.green == 1 and color.red == 0) row_second = fragment.rect;
+        if (color.blue == 1 and color.red == 0) reverse_first = fragment.rect;
+        if (color.red == 1 and color.blue == 1) reverse_second = fragment.rect;
+    }
+    try std.testing.expect(row_first.?.x > row_second.?.x);
+    try std.testing.expect(reverse_first.?.x < reverse_second.?.x);
+}
+
+test "Web flex preserves partial grow free space and freezes max constraints" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;width:400px'>" ++
+        "<div style='flex:0.25 0 100px;background:#ff0000'>quarter</div>" ++
+        "<div style='flex:0.25 0 100px;background:#00ff00'>quarter</div></div>" ++
+        "<div style='display:flex;width:500px'>" ++
+        "<div style='flex:1 0 100px;max-width:120px;background:#0000ff'>capped</div>" ++
+        "<div style='flex:1 0 100px;background:#ff00ff'>rest</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 500, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    var capped: ?geometry.Rect = null;
+    var rest: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.green == 0 and color.blue == 0) first = fragment.rect;
+        if (color.green == 1 and color.red == 0) second = fragment.rect;
+        if (color.blue == 1 and color.red == 0) capped = fragment.rect;
+        if (color.red == 1 and color.blue == 1) rest = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 150), first.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 150), second.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), @as(f32, 400) - second.?.x - second.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), capped.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 380), rest.?.width, 0.01);
+}
+
+test "Web flex auto margins absorb main and cross-axis free space" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:flex;width:300px;height:100px'>" ++
+        "<div style='width:50px;height:20px;background:#ff0000'>brand</div>" ++
+        "<div style='width:50px;height:20px;margin-left:auto;margin-top:auto;margin-bottom:auto;background:#0000ff'>actions</div>" ++
+        "</div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var brand: ?geometry.Rect = null;
+    var actions: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) brand = fragment.rect;
+        if (color.blue == 1 and color.red == 0) actions = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), brand.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 250), actions.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), actions.?.y, 0.01);
+}
+
+test "Web flex wrapping advances intact lines to the next fragmentainer" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:45px'></div>" ++
+        "<div style='display:flex;flex-wrap:wrap;width:100px;row-gap:5px'>" ++
+        "<div style='flex:0 0 100px;height:30px;background:#ff0000'>first</div>" ++
+        "<div style='flex:0 0 100px;height:30px;background:#0000ff'>second</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 60,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 60), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), second.?.y, 0.01);
+}
+
+test "Web column flex advances atomic items across fragmentainers" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:45px'></div>" ++
+        "<div style='display:flex;flex-direction:column;width:100px;row-gap:5px'>" ++
+        "<div style='flex:0 0 30px;background:#ff0000'>first</div>" ++
+        "<div style='flex:0 0 30px;background:#0000ff'>second</div></div>" ++
+        "<div style='height:10px;background:#00ff00'>after</div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 60,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    var after: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+        if (color.green == 1 and color.red == 0) after = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 60), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), second.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 150), after.?.y, 0.01);
 }
 
 test "orphans move a paragraph that would leave one line at page bottom" {

@@ -41,7 +41,19 @@ const html = `
       </ol>
       <ul style="margin: 0; list-style-type: square"><li>Outside square marker remains native text</li></ul>
     </section>
-    <section style="box-decoration-break: clone; width: 400px; height: 520px; margin-top: 18px; padding: 12px; border: 5px solid #7c3aed; border-radius: 10px; background: #f5f3ff">
+    <section style="page-break-before: always; width: 600px; margin-top: 18px; padding: 12px; background: #eff6ff">
+      <div style="display: flex; height: 54px; align-items: center; padding: 0 12px; background: #1e3a8a; color: white">
+        <strong>Flex dashboard</strong>
+        <span style="margin-left: auto; padding: 6px 10px; background: #2563eb">Live vector KPI</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px">
+        <div style="flex: 1 1 170px; min-width: 150px; height: 72px; padding: 10px; background: #dbeafe"><strong>Revenue</strong><br>EUR 128k</div>
+        <div style="flex: 1 1 170px; min-width: 150px; height: 72px; padding: 10px; background: #dcfce7"><strong>Conversion</strong><br>8.4%</div>
+        <div style="flex: 1 1 170px; min-width: 150px; height: 72px; padding: 10px; background: #fef3c7"><strong>Active users</strong><br>4,812</div>
+        <div style="flex: 1 1 170px; min-width: 150px; height: 72px; padding: 10px; background: #fae8ff"><strong>Retention</strong><br>91%</div>
+      </div>
+    </section>
+    <section style="box-decoration-break: clone; width: 400px; height: 820px; margin-top: 18px; padding: 12px; border: 5px solid #7c3aed; border-radius: 10px; background: #f5f3ff">
       <h2 style="margin-top: 0; color: #6d28d9">Cloned page decoration</h2>
       <p>This tall native box crosses a page boundary. Its purple border and rounded corners must be painted on both fragments.</p>
     </section>

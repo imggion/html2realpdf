@@ -51,9 +51,90 @@ pub fn expand(
     if (values.eqlProp(name, "border-block")) return try expandLogicalBorder(allocator, "block", true, value, important);
     if (values.eqlProp(name, "border-inline")) return try expandLogicalBorder(allocator, "inline", true, value, important);
     if (values.eqlProp(name, "background")) return try single(allocator, "background-color", value, important);
+    if (values.eqlProp(name, "flex")) return try expandFlex(allocator, value, important);
+    if (values.eqlProp(name, "flex-flow")) return try expandFlexFlow(allocator, value, important);
+    if (values.eqlProp(name, "gap")) return try expandGap(allocator, value, important);
     if (values.eqlProp(name, "list-style")) return try expandListStyle(allocator, value, important);
     if (values.eqlProp(name, "text-decoration")) return try expandTextDecoration(allocator, value, important);
     return null;
+}
+
+fn expandFlex(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
+    const components = splitComponents(value);
+    var grow: []const u8 = "1";
+    var shrink: []const u8 = "1";
+    var basis: []const u8 = "0%";
+
+    if (components.len == 1 and isCssWideKeyword(components.items[0])) {
+        grow = components.items[0];
+        shrink = components.items[0];
+        basis = components.items[0];
+    } else if (components.len == 1 and values.eqlProp(components.items[0], "none")) {
+        grow = "0";
+        shrink = "0";
+        basis = "auto";
+    } else if (components.len == 1 and values.eqlProp(components.items[0], "auto")) {
+        grow = "1";
+        shrink = "1";
+        basis = "auto";
+    } else {
+        var number_count: usize = 0;
+        var saw_basis = false;
+        for (components.slice()) |component| {
+            if (values.parseNonNegativeNumber(component) != null and !saw_basis and number_count < 2) {
+                if (number_count == 0) grow = component else shrink = component;
+                number_count += 1;
+            } else if (!saw_basis and (values.parseDimension(component, 16) != null or values.eqlProp(component, "auto") or values.eqlProp(component, "content"))) {
+                basis = component;
+                saw_basis = true;
+            } else {
+                return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+            }
+        }
+        if (number_count == 0 and !saw_basis) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+        if (number_count == 0) grow = "1";
+    }
+
+    const declarations = try allocator.alloc(Declaration, 3);
+    declarations[0] = .{ .name = "flex-grow", .value = grow, .important = important };
+    declarations[1] = .{ .name = "flex-shrink", .value = shrink, .important = important };
+    declarations[2] = .{ .name = "flex-basis", .value = basis, .important = important };
+    return .{ .declarations = declarations, .owns_names = false };
+}
+
+fn expandFlexFlow(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
+    const components = splitComponents(value);
+    var direction: []const u8 = "row";
+    var wrap: []const u8 = "nowrap";
+    if (components.len == 1 and isCssWideKeyword(components.items[0])) {
+        direction = components.items[0];
+        wrap = components.items[0];
+    } else {
+        for (components.slice()) |component| {
+            if (values.parseFlexDirection(component) != null) {
+                direction = component;
+            } else if (values.parseFlexWrap(component) != null) {
+                wrap = component;
+            } else {
+                return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+            }
+        }
+    }
+    const declarations = try allocator.alloc(Declaration, 2);
+    declarations[0] = .{ .name = "flex-direction", .value = direction, .important = important };
+    declarations[1] = .{ .name = "flex-wrap", .value = wrap, .important = important };
+    return .{ .declarations = declarations, .owns_names = false };
+}
+
+fn expandGap(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
+    const components = splitComponents(value);
+    if (components.len == 0 or components.len > 2) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+    const row = components.items[0];
+    const column = if (components.len == 1) row else components.items[1];
+    const declarations = try allocator.alloc(Declaration, 2);
+    declarations[0] = .{ .name = "row-gap", .value = row, .important = important };
+    declarations[1] = .{ .name = "column-gap", .value = column, .important = important };
+    return .{ .declarations = declarations, .owns_names = false };
 }
 
 fn expandListStyle(
@@ -421,4 +502,23 @@ test "expand list-style into inherited marker longhands" {
     try std.testing.expectEqualStrings("list-style-position", expansion.declarations[1].name);
     try std.testing.expectEqualStrings("inside", expansion.declarations[1].value);
     try std.testing.expect(expansion.declarations[0].important);
+}
+
+test "expand flex flow sizing and gap shorthands" {
+    const allocator = std.testing.allocator;
+    const flex = (try expand(allocator, "flex", "2 3 120px", false)).?;
+    defer flex.deinit(allocator);
+    try std.testing.expectEqualStrings("2", flex.declarations[0].value);
+    try std.testing.expectEqualStrings("3", flex.declarations[1].value);
+    try std.testing.expectEqualStrings("120px", flex.declarations[2].value);
+
+    const flow = (try expand(allocator, "flex-flow", "column-reverse wrap", false)).?;
+    defer flow.deinit(allocator);
+    try std.testing.expectEqualStrings("column-reverse", flow.declarations[0].value);
+    try std.testing.expectEqualStrings("wrap", flow.declarations[1].value);
+
+    const gap = (try expand(allocator, "gap", "8px 12px", false)).?;
+    defer gap.deinit(allocator);
+    try std.testing.expectEqualStrings("8px", gap.declarations[0].value);
+    try std.testing.expectEqualStrings("12px", gap.declarations[1].value);
 }

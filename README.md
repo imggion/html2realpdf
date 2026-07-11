@@ -16,6 +16,9 @@ The browser package is published as `@imggion/html2realpdf`.
   collapse, padding, borders, and `border-box` sizing;
 - tables with `colspan`, `rowspan`, collapsed borders, and repeated `<thead>`
   rows;
+- Web/strict Flexbox with row/column/reverse flow, wrapping, grow/shrink,
+  min/max constraints, gaps, alignment, auto margins, nested containers,
+  replaced elements, and page-aware line/item placement;
 - A4, Letter, landscape, custom page sizes, forced breaks, `break-inside`,
   orphans, and widows;
 - selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
@@ -29,10 +32,10 @@ The browser package is published as `@imggion/html2realpdf`.
 - an ESM/TypeScript browser package with Worker execution, DOM/React-ref
   snapshotting, preview/download helpers, and an html2pdf.js-compatible facade.
 
-The supported layout profile is aimed at invoices, reports, tickets, letters,
-and similar documents. Flexbox, Grid, floats, positioned layout, transforms,
-shadows, and arbitrary browser painting are outside the current alpha scope and
-are rejected or reported instead of being silently rasterized.
+The document profile remains aimed at invoices, reports, tickets, letters, and
+similar documents. The Web profile additionally enables floats and Flexbox;
+Grid, positioned layout, transforms, shadows, and arbitrary browser painting
+are still rejected or reported instead of being silently rasterized.
 
 See [docs/css-support.md](docs/css-support.md) for the versioned property and
 pipeline-stage support matrix.

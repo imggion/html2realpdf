@@ -133,6 +133,9 @@ pub fn measureBoxInline(
         return .{ .min_content = width, .max_content = width };
     }
     if (source.text) |text| return measureTextIntrinsic(allocator, text, source.style, source.language, registry, shaping_mode);
+    if (source.style.display == .flex or source.style.display == .inlineFlex) {
+        return measureFlexInline(allocator, tree, box_id, registry, shaping_mode);
+    }
 
     var result = InlineSizes{};
     var line_min: f32 = 0;
@@ -165,6 +168,71 @@ pub fn measureBoxInline(
     }
     result.max_content = @max(result.max_content, result.min_content);
     return result;
+}
+
+fn measureFlexInline(
+    allocator: std.mem.Allocator,
+    tree: *const box.BoxTree,
+    box_id: box.BoxId,
+    registry: ?*const font.Registry,
+    shaping_mode: font.ShapingMode,
+) std.mem.Allocator.Error!InlineSizes {
+    const source = tree.boxes.items[box_id];
+    const row_axis = source.style.flex_direction.isRow();
+    const gap = @max((if (row_axis) source.style.column_gap else source.style.row_gap).resolve(0) orelse 0, 0);
+    var result = InlineSizes{};
+    var count: usize = 0;
+    var child = source.first_child;
+    while (child) |child_id| {
+        const child_box = tree.boxes.items[child_id];
+        child = child_box.next_sibling;
+        if (child_box.style.position == .absolute or child_box.style.position == .fixed) continue;
+        const measured = try measureBoxInline(allocator, tree, child_id, registry, shaping_mode);
+        const contribution = if (row_axis)
+            resolveFlexMainContribution(child_box, measured)
+        else
+            resolveChildContribution(child_box, measured);
+        if (row_axis) {
+            if (source.style.flex_wrap == .nowrap) {
+                result.min_content += contribution.min_content;
+            } else {
+                result.min_content = @max(result.min_content, contribution.min_content);
+            }
+            result.max_content += contribution.max_content;
+        } else {
+            result.min_content = @max(result.min_content, contribution.min_content);
+            result.max_content = @max(result.max_content, contribution.max_content);
+        }
+        count += 1;
+    }
+    if (row_axis and count > 1) {
+        result.max_content += gap * @as(f32, @floatFromInt(count - 1));
+        if (source.style.flex_wrap == .nowrap) result.min_content += gap * @as(f32, @floatFromInt(count - 1));
+    }
+    result.max_content = @max(result.max_content, result.min_content);
+    return result;
+}
+
+fn resolveFlexMainContribution(source: box.Box, measured: InlineSizes) InlineSizes {
+    const horizontal_non_content = source.border.left + source.border.right + source.padding.left + source.padding.right;
+    const horizontal_edges = source.margin.left + source.margin.right + horizontal_non_content;
+    const basis = if (source.style.flex_basis == .auto) source.style.width else source.style.flex_basis;
+    var content = measured;
+    if (resolveContentInlineDimension(basis, measured.max_content, horizontal_non_content, source.style.box_sizing, measured)) |size| {
+        content = .{ .min_content = size, .max_content = size };
+    }
+    if (resolveContentInlineDimension(source.style.max_width, measured.max_content, horizontal_non_content, source.style.box_sizing, measured)) |maximum| {
+        content.min_content = @min(content.min_content, maximum);
+        content.max_content = @min(content.max_content, maximum);
+    }
+    if (resolveContentInlineDimension(source.style.min_width, measured.max_content, horizontal_non_content, source.style.box_sizing, measured)) |minimum| {
+        content.min_content = @max(content.min_content, minimum);
+        content.max_content = @max(content.max_content, minimum);
+    }
+    return .{
+        .min_content = @max(content.min_content + horizontal_edges, 0),
+        .max_content = @max(content.max_content + horizontal_edges, 0),
+    };
 }
 
 fn hasBlockChildren(tree: *const box.BoxTree, box_id: box.BoxId) bool {

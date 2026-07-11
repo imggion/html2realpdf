@@ -1008,6 +1008,29 @@ test "cascade: list marker styles inherit and display list-item is preserved" {
     try std.testing.expectEqual(box.ListStyleType.square, ct.styles[extra_id].list_style_type);
 }
 
+test "cascade: flex shorthands produce typed non-inherited item and container values" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='display:flex;flex-flow:row-reverse wrap;gap:8px 12px;justify-content:space-between;align-items:center'>" ++
+        "<span style='flex:2 3 40px;order:-1;align-self:flex-end;margin-left:auto'>item</span></div>");
+    defer ct.deinit(allocator);
+    const container_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const item_id = ct.document.nodes.items[container_id].first_child.?;
+    try std.testing.expectEqual(box.Display.flex, ct.styles[container_id].display);
+    try std.testing.expectEqual(box.FlexDirection.rowReverse, ct.styles[container_id].flex_direction);
+    try std.testing.expectEqual(box.FlexWrap.wrap, ct.styles[container_id].flex_wrap);
+    try std.testing.expectApproxEqAbs(@as(f32, 8), ct.styles[container_id].row_gap.resolve(200).?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 12), ct.styles[container_id].column_gap.resolve(200).?, 0.01);
+    try std.testing.expectEqual(box.JustifyContent.spaceBetween, ct.styles[container_id].justify_content);
+    try std.testing.expectEqual(box.AlignItems.center, ct.styles[container_id].align_items);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), ct.styles[item_id].flex_grow, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 3), ct.styles[item_id].flex_shrink, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), ct.styles[item_id].flex_basis.resolve(200).?, 0.01);
+    try std.testing.expectEqual(@as(i32, -1), ct.styles[item_id].order);
+    try std.testing.expectEqual(box.AlignSelf.flexEnd, ct.styles[item_id].align_self);
+    try std.testing.expect(ct.styles[item_id].margin_auto.left);
+    try std.testing.expectEqual(@as(f32, 0), ct.styles[item_id].margin.left);
+}
+
 test "cascade: text-decoration shorthand keeps line style color and thickness" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");
