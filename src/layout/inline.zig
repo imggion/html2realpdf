@@ -23,8 +23,10 @@ pub fn Cursor(comptime State: type) type {
         has_content: bool = false,
         pending_space: bool = false,
         capitalize_next: bool = true,
+        ellipsis_enabled: bool = false,
+        truncated: bool = false,
 
-        pub fn init(state: *State, start_x: f32, start_y: f32, width: f32, text_align: box.TextAlign, text_indent: f32) Self {
+        pub fn init(state: *State, start_x: f32, start_y: f32, width: f32, text_align: box.TextAlign, text_indent: f32, ellipsis_enabled: bool) Self {
             const line_id = state.next_line_id;
             state.next_line_id += 1;
             return .{
@@ -38,10 +40,12 @@ pub fn Cursor(comptime State: type) type {
                 .text_align = text_align,
                 .line_start_fragment = state.fragments.items.len,
                 .line_id = line_id,
+                .ellipsis_enabled = ellipsis_enabled,
             };
         }
 
         pub fn layoutBox(self: *Self, box_id: box.BoxId, inherited_link: ?[]const u8, inherited_vertical_align: box.VerticalAlign) !void {
+            if (self.truncated) return;
             const source = self.state.tree.boxes.items[box_id];
             const effective_vertical_align = if (isBaselineAlignment(source.style.vertical_align)) inherited_vertical_align else source.style.vertical_align;
             var effective_source = source;
@@ -120,6 +124,12 @@ pub fn Cursor(comptime State: type) type {
                 const word_width = self.measureStyledText(word, style);
                 var leading_space = saw_space and self.has_content;
                 var space_width = if (leading_space) self.spaceWidth(style) else 0;
+
+                if (!allow_wrap and self.ellipsis_enabled and self.x + space_width + word_width > self.start_x + self.width) {
+                    try self.truncateWithEllipsis(box_id, word, leading_space, style, link_url);
+                    self.pending_space = false;
+                    return;
+                }
 
                 const break_inside = allow_wrap and (style.word_break == .breakAll or
                     style.overflow_wrap == .anywhere or
@@ -251,6 +261,95 @@ pub fn Cursor(comptime State: type) type {
                 index = end;
             }
             if (chunk_start < word.len) try self.appendTextFragment(box_id, word[chunk_start..], leading_width + chunk_width, leading_space, style, link_url);
+        }
+
+        fn truncateWithEllipsis(
+            self: *Self,
+            box_id: box.BoxId,
+            word: []const u8,
+            requested_leading_space: bool,
+            style: box.Style,
+            link_url: ?[]const u8,
+        ) !void {
+            const ellipsis = "…";
+            const ellipsis_width = self.measureStyledText(ellipsis, style);
+            const line_end = self.start_x + self.width;
+            self.trimLineToFit(line_end - ellipsis_width);
+
+            var leading_space = requested_leading_space and self.has_content;
+            var consumed = if (leading_space) self.spaceWidth(style) else 0;
+            var prefix_end: usize = 0;
+            var index: usize = 0;
+            while (index < word.len) {
+                const sequence_length = std.unicode.utf8ByteSequenceLength(word[index]) catch 1;
+                const end = @min(index + sequence_length, word.len);
+                const character_width = self.measureStyledText(word[index..end], style);
+                if (self.x + consumed + character_width + ellipsis_width > line_end) break;
+                consumed += character_width;
+                prefix_end = end;
+                index = end;
+            }
+            if (prefix_end > 0) {
+                try self.appendTextFragment(box_id, word[0..prefix_end], consumed, leading_space, style, link_url);
+            } else {
+                leading_space = false;
+            }
+
+            self.trimLineToFit(line_end - ellipsis_width);
+            try self.appendTextFragment(box_id, ellipsis, ellipsis_width, false, style, link_url);
+            self.truncated = true;
+        }
+
+        fn trimLineToFit(self: *Self, target_x: f32) void {
+            while (self.x > target_x and self.state.fragments.items.len > self.line_start_fragment) {
+                const last_index = self.state.fragments.items.len - 1;
+                var fragment = &self.state.fragments.items[last_index];
+                if (fragment.inline_container_line_id == self.line_id) {
+                    var remove_start = last_index;
+                    var left = fragment.rect.x;
+                    while (remove_start > self.line_start_fragment) {
+                        const previous = self.state.fragments.items[remove_start - 1];
+                        if (previous.inline_container_line_id != self.line_id) break;
+                        remove_start -= 1;
+                        left = @min(left, previous.rect.x);
+                    }
+                    self.state.fragments.items.len = remove_start;
+                    self.x = left;
+                    continue;
+                }
+                if (fragment.line_id != self.line_id or fragment.text == null) {
+                    self.x = fragment.rect.x;
+                    self.state.fragments.items.len = last_index;
+                    continue;
+                }
+
+                var text = fragment.text.?;
+                while (text.len > 0 and fragment.rect.x + self.measureFragmentText(fragment.*, text) > target_x) {
+                    text = text[0..previousCodepointStart(text)];
+                }
+                if (text.len == 0) {
+                    self.x = fragment.rect.x;
+                    self.state.fragments.items.len = last_index;
+                    continue;
+                }
+                const width = self.measureFragmentText(fragment.*, text);
+                fragment.text = text;
+                fragment.rect.width = width;
+                self.x = fragment.rect.x + width;
+            }
+            self.has_content = self.state.fragments.items.len > self.line_start_fragment;
+        }
+
+        fn measureFragmentText(self: *Self, fragment: types.Fragment, text: []const u8) f32 {
+            const resolved = font.resolve(self.state.font_registry, fragment.font_family, fragment.font_weight, fragment.font_style);
+            var width = (resolved.metrics().widthCssPx(text, fragment.font_size) catch 0) +
+                fragment.letter_spacing * @as(f32, @floatFromInt(countCodepoints(text))) +
+                fragment.word_spacing * @as(f32, @floatFromInt(countWordSeparators(text)));
+            if (fragment.leading_space) {
+                width += intrinsic.measureText(self.state.font_registry, " ", fragment.font_family, fragment.font_size, fragment.font_weight, fragment.font_style, fragment.letter_spacing) +
+                    fragment.word_spacing;
+            }
+            return width;
         }
 
         fn appendTextFragment(
@@ -557,4 +656,11 @@ fn countWordSeparators(text: []const u8) usize {
         count += 1;
     };
     return count;
+}
+
+fn previousCodepointStart(text: []const u8) usize {
+    if (text.len == 0) return 0;
+    var index = text.len - 1;
+    while (index > 0 and text[index] & 0xC0 == 0x80) index -= 1;
+    return index;
 }

@@ -318,6 +318,7 @@ fn pageContent(
         const page_command = list.commands.items[command_index];
         defer command_index += 1;
         if (page_command.page_index != page_index) continue;
+        if (page_command.clip_rect) |clip| try writeClipRect(writer, list, clip);
 
         switch (page_command.command) {
             .fill_rect => |fill| {
@@ -407,6 +408,7 @@ fn pageContent(
                         next_run.letter_spacing != run.letter_spacing or
                         next_run.word_spacing != run.word_spacing or
                         font_usage.indexForRun(next_run) != used_font_index or
+                        !clipRectsEqual(next_command.clip_rect, page_command.clip_rect) or
                         !colorsEqual(next_run.color, run.color) or
                         @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) > 0.1) break;
 
@@ -432,10 +434,33 @@ fn pageContent(
                 });
             },
         }
+        if (page_command.clip_rect != null) try writer.writeAll("Q\n");
     }
     try writer.writeAll("Q");
 
     return content.toOwnedSlice();
+}
+
+fn writeClipRect(writer: *std.Io.Writer, list: *const display_list.DisplayList, clip: geometry.Rect) !void {
+    const scale = geometry.css_px_to_pdf_points;
+    const margins = list.page_spec.margins_points;
+    const x = margins.left + clip.x * scale;
+    const y = list.page_spec.height_points - margins.top - (clip.y + clip.height) * scale;
+    try writer.print("q {d:.3} {d:.3} {d:.3} {d:.3} re W n\n", .{
+        x,
+        y,
+        @max(clip.width * scale, 0),
+        @max(clip.height * scale, 0),
+    });
+}
+
+fn clipRectsEqual(left: ?geometry.Rect, right: ?geometry.Rect) bool {
+    if (left == null or right == null) return left == null and right == null;
+    const tolerance: f32 = 0.0001;
+    return @abs(left.?.x - right.?.x) <= tolerance and
+        @abs(left.?.y - right.?.y) <= tolerance and
+        @abs(left.?.width - right.?.width) <= tolerance and
+        @abs(left.?.height - right.?.height) <= tolerance;
 }
 
 fn writeRoundedRectPath(
@@ -938,4 +963,34 @@ test "write word spacing with Type 0 font TJ adjustments" {
     const content = output.written();
     try std.testing.expect(std.mem.count(u8, content, "<") >= 2);
     try std.testing.expect(std.mem.indexOf(u8, content, ">] TJ ET") != null);
+}
+
+test "wrap clipped paint commands in PDF graphics state" {
+    const pagination = @import("pagination.zig");
+    const allocator = std.testing.allocator;
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .clip_rect = .{ .x = 10, .y = 10, .width = 40, .height = 20 },
+        .command = .{ .fill_rect = .{
+            .rect = .{ .width = 100, .height = 100 },
+            .color = geometry.Color.black,
+        } },
+    });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var font_usage = try FontUsage.init(allocator, null);
+    defer font_usage.deinit(allocator);
+    try font_usage.collect(&list);
+    var alpha_usage = try AlphaUsage.init(allocator);
+    defer alpha_usage.deinit(allocator);
+    try alpha_usage.collect(allocator, &list);
+    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage);
+    defer allocator.free(content);
+    try std.testing.expect(std.mem.indexOf(u8, content, " re W n\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "Q\nQ") != null);
 }

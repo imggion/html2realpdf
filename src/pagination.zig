@@ -96,6 +96,7 @@ pub fn paginate(
 
             var page_fragment = fragment;
             page_fragment.rect.y = page_y;
+            page_fragment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
             try fragments.append(allocator, .{ .page_index = page_index, .fragment = page_fragment });
             page_count = @max(page_count, page_index + 1);
         }
@@ -162,6 +163,7 @@ fn appendSplitBox(
         var segment = fragment;
         segment.rect.y = page_y;
         segment.rect.height = segment_height;
+        segment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
         if (segment_height < fragment.rect.height) segment.border_radius = 0;
         try output.append(allocator, .{ .page_index = page_index, .fragment = segment });
 
@@ -170,6 +172,18 @@ fn appendSplitBox(
         absolute_y += segment_height;
         if (segment_height <= 0) break;
     }
+}
+
+fn clipForPage(absolute_clip: ?geometry.Rect, page_index: usize, content_height: f32) ?geometry.Rect {
+    const source = absolute_clip orelse return null;
+    var local = source;
+    local.y -= @as(f32, @floatFromInt(page_index)) * content_height;
+    const top = @max(local.y, 0);
+    const bottom = @min(local.bottom(), content_height);
+    if (bottom <= top or local.width <= 0) return geometry.Rect{ .x = local.x, .y = top };
+    local.y = top;
+    local.height = bottom - top;
+    return local;
 }
 
 test "paginate text and split tall box fragments" {
@@ -252,4 +266,24 @@ test "trailing colored box continuation keeps its page" {
     defer paged.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 2), paged.page_count);
+}
+
+test "translate clipping rectangles into the destination page" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(layout.Fragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{
+        .kind = .text,
+        .source_box = 0,
+        .rect = .{ .y = 95, .width = 20, .height = 10 },
+        .clip_rect = .{ .y = 90, .width = 100, .height = 20 },
+        .text = "next",
+    });
+    const continuous = layout.LayoutDocument{ .fragments = fragments, .content_width = 100, .content_height = 110 };
+    const spec = PageSpec{ .width_points = 75, .height_points = 75 };
+    var paged = try paginate(allocator, &continuous, spec);
+    defer paged.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), paged.fragments.items[0].page_index);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), paged.fragments.items[0].fragment.clip_rect.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), paged.fragments.items[0].fragment.clip_rect.?.height, 0.01);
 }

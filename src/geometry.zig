@@ -28,6 +28,15 @@ pub const Rect = struct {
     pub fn bottom(self: Rect) f32 {
         return self.y + self.height;
     }
+
+    pub fn intersection(self: Rect, other: Rect) ?Rect {
+        const left = @max(self.x, other.x);
+        const top = @max(self.y, other.y);
+        const right = @min(self.x + self.width, other.x + other.width);
+        const bottom_edge = @min(self.y + self.height, other.y + other.height);
+        if (right <= left or bottom_edge <= top) return null;
+        return .{ .x = left, .y = top, .width = right - left, .height = bottom_edge - top };
+    }
 };
 
 pub const Color = struct {
@@ -201,4 +210,13 @@ test "parse named and hexadecimal colors" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.5333), parseColor("#33669988").?.alpha, 0.0001);
     try std.testing.expectEqual(Color.transparent, parseColor("transparent").?);
     try std.testing.expectApproxEqAbs(@as(f32, 0.4), parseColor("rebeccapurple").?.red, 0.0001);
+}
+
+test "intersect clipping rectangles" {
+    const overlap = (Rect{ .x = 10, .y = 10, .width = 30, .height = 20 }).intersection(.{ .x = 20, .y = 5, .width = 30, .height = 20 }).?;
+    try std.testing.expectEqual(@as(f32, 20), overlap.x);
+    try std.testing.expectEqual(@as(f32, 10), overlap.y);
+    try std.testing.expectEqual(@as(f32, 20), overlap.width);
+    try std.testing.expectEqual(@as(f32, 15), overlap.height);
+    try std.testing.expect((Rect{ .width = 5, .height = 5 }).intersection(.{ .x = 6, .width = 2, .height = 2 }) == null);
 }

@@ -28,6 +28,7 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
 
     for (document.fragments.items) |paged| {
         const fragment = paged.fragment;
+        const command_start = commands.items.len;
         try paint.backgrounds.append(allocator, &commands, paged.page_index, fragment);
         try paint.borders.append(allocator, &commands, paged.page_index, fragment);
 
@@ -63,10 +64,14 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
         }
 
         if (fragment.link_url) |url| {
-            try commands.append(allocator, .{
+            const annotation_rect: ?geometry.Rect = if (fragment.clip_rect) |clip| fragment.rect.intersection(clip) else fragment.rect;
+            if (annotation_rect) |rect| try commands.append(allocator, .{
                 .page_index = paged.page_index,
-                .command = .{ .link = .{ .rect = fragment.rect, .url = url } },
+                .command = .{ .link = .{ .rect = rect, .url = url } },
             });
+        }
+        for (commands.items[command_start..]) |*command| {
+            command.clip_rect = fragment.clip_rect;
         }
     }
 
@@ -141,4 +146,36 @@ test "build rounded fill and uniform rounded border commands" {
     try std.testing.expectEqual(@as(usize, 2), list.commands.items.len);
     try std.testing.expect(list.commands.items[0].command == .fill_rounded_rect);
     try std.testing.expect(list.commands.items[1].command == .stroke_rounded_rect);
+}
+
+test "propagate fragment clipping to every paint command" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(pagination.PagedFragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{
+        .page_index = 0,
+        .fragment = .{
+            .kind = .text,
+            .source_box = 0,
+            .rect = .{ .x = 5, .y = 5, .width = 80, .height = 18 },
+            .clip_rect = .{ .x = 10, .y = 5, .width = 30, .height = 18 },
+            .text = "clipped",
+            .text_decoration = .underline,
+            .link_url = "https://example.com/clipped",
+        },
+    });
+    const paged = pagination.PagedDocument{
+        .fragments = fragments,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var list = try build(allocator, &paged);
+    defer list.deinit(allocator);
+    try std.testing.expect(list.commands.items.len >= 3);
+    for (list.commands.items) |command| try std.testing.expect(command.clip_rect != null);
+    for (list.commands.items) |command| if (command.command == .link) {
+        try std.testing.expectApproxEqAbs(@as(f32, 30), command.command.link.rect.width, 0.01);
+        return;
+    };
+    return error.TestExpectedEqual;
 }

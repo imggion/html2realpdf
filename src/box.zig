@@ -226,6 +226,40 @@ pub const OverflowWrap = enum {
     }
 };
 
+pub const Overflow = enum {
+    visible,
+    hidden,
+    clip,
+    auto,
+    scroll,
+
+    pub fn clips(self: @This()) bool {
+        return self != .visible;
+    }
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .visible => "visible",
+            .hidden => "hidden",
+            .clip => "clip",
+            .auto => "auto",
+            .scroll => "scroll",
+        };
+    }
+};
+
+pub const TextOverflow = enum {
+    clip,
+    ellipsis,
+
+    pub fn toString(self: @This()) []const u8 {
+        return switch (self) {
+            .clip => "clip",
+            .ellipsis => "ellipsis",
+        };
+    }
+};
+
 pub const VerticalAlign = union(enum) {
     baseline,
     sub,
@@ -432,6 +466,8 @@ pub const Style = struct {
     text_transform: TextTransform = .none,
     word_break: WordBreak = .normal,
     overflow_wrap: OverflowWrap = .normal,
+    overflow: Overflow = .visible,
+    text_overflow: TextOverflow = .clip,
     vertical_align: VerticalAlign = .baseline,
     text_decoration: TextDecoration = .none,
     text_decoration_style: TextDecorationStyle = .solid,
@@ -693,6 +729,8 @@ const BuildState = struct {
         style.page_break_after = .auto;
         style.page_break_inside = .auto;
         style.vertical_align = .baseline;
+        style.overflow = .visible;
+        style.text_overflow = .clip;
 
         return style;
     }
@@ -1160,6 +1198,8 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     if (style.text_transform != .none) try writer.print(" text-transform={s}", .{style.text_transform.toString()});
     if (style.word_break != .normal) try writer.print(" word-break={s}", .{style.word_break.toString()});
     if (style.overflow_wrap != .normal) try writer.print(" overflow-wrap={s}", .{style.overflow_wrap.toString()});
+    if (style.overflow != .visible) try writer.print(" overflow={s}", .{style.overflow.toString()});
+    if (style.text_overflow != .clip) try writer.print(" text-overflow={s}", .{style.text_overflow.toString()});
     switch (style.vertical_align) {
         .baseline => {},
         .sub => try writer.writeAll(" vertical-align=sub"),

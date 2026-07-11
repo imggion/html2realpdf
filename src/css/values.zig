@@ -203,6 +203,23 @@ pub fn parseOverflowWrap(value: []const u8) ?box.OverflowWrap {
     return null;
 }
 
+pub fn parseOverflow(value: []const u8) ?box.Overflow {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "visible")) return .visible;
+    if (eqlProp(v, "hidden")) return .hidden;
+    if (eqlProp(v, "clip")) return .clip;
+    if (eqlProp(v, "auto")) return .auto;
+    if (eqlProp(v, "scroll")) return .scroll;
+    return null;
+}
+
+pub fn parseTextOverflow(value: []const u8) ?box.TextOverflow {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "clip")) return .clip;
+    if (eqlProp(v, "ellipsis")) return .ellipsis;
+    return null;
+}
+
 pub fn parseVerticalAlignKeyword(value: []const u8) ?box.VerticalAlign {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (eqlProp(v, "baseline")) return .baseline;

@@ -21,6 +21,7 @@ Read these local docs before changing code:
 - `docs/css-support.md` is the public, versioned CSS support contract; `src/css/properties.zig` is its machine-readable property inventory.
 - `tests/baselines/0.1.0-alpha.0/` freezes deterministic PDFs, first-page Poppler PNGs, metrics, and digests from the document profile.
 - Rounded box painting uses a uniform `border-radius` propagated through layout and display-list commands into native PDF Bézier paths; keep per-corner and clipping behavior out until tested explicitly.
+- Overflow clipping is rectangular at the padding edge. Preserve `clip_rect` through pagination and every display-list command, and isolate each PDF clip with `q`/`Q`; rounded clipping remains pending.
 - Inline CSS Text support includes percentage `text-indent`, ASCII case transforms, emergency codepoint wrapping, mixed-font baseline alignment, `vertical-align`, and `word-spacing`; preserve word spacing through fragment/display-list state and PDF Type 0 `TJ` adjustments so geometry and selectable text remain aligned.
 - Text decorations retain combined line flags, color, thickness, and style through layout; double and wavy decorations remain vector stroke commands rather than raster effects.
 - The browser fixture set includes portrait reports and an A4 landscape presentation deck; keep both available from `tests/web/index.html` and in automated browser verification.
@@ -62,6 +63,7 @@ Read these local docs before changing code:
 - Keep `src/css.zig` and `src/layout.zig` as stable facades. Parser/value/cascade work belongs under `src/css/`; block/inline/table/intrinsic algorithms belong under `src/layout/`.
 - Keep paint command types and phase logic under `src/paint/`; `src/display_list.zig` coordinates stable document-order painting.
 - Resolve table-cell percentage widths into column tracks before cell layout; once a track is assigned, the cell must fill it instead of resolving its percentage again inside that track.
+- Keep `text-overflow: ellipsis` as a real U+2026 text fragment so it remains selectable and participates in registered-font fallback; do not paint it as a path or image.
 - Preserve the result-handle/context ownership contract in `src/wasm.zig` and ABI version checks in `bindings/js/src/wasm.ts`.
 - Keep PDF preview rendering in `bindings/js/src/preview.ts`; it must remain an in-page canvas component and must not fall back to iframe/object browser PDF plugins.
 - Keep `bindings/js/.browser-build/manifest.json` content-addressed through `prepare-browser-build.mjs`; the test harness must not import mutable unversioned `dist/*.js` modules.

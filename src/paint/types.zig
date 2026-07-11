@@ -70,6 +70,7 @@ pub const Command = union(enum) {
 pub const PageCommand = struct {
     page_index: usize,
     command: Command,
+    clip_rect: ?geometry.Rect = null,
 };
 
 pub const DisplayList = struct {

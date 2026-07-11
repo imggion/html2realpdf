@@ -78,7 +78,9 @@ const State = struct {
         containing: geometry.Rect,
         cursor_y: *f32,
     ) std.mem.Allocator.Error!geometry.Rect {
-        return block.layout(self, box_id, containing, cursor_y);
+        const fragment_start = self.fragments.items.len;
+        const rect = try block.layout(self, box_id, containing, cursor_y);
+        return self.finishBlockLayout(box_id, containing, cursor_y, fragment_start, rect);
     }
 
     pub fn layoutBlockWithOptions(
@@ -88,7 +90,48 @@ const State = struct {
         cursor_y: *f32,
         options: block.Options,
     ) std.mem.Allocator.Error!geometry.Rect {
-        return block.layoutWithOptions(self, box_id, containing, cursor_y, options);
+        const fragment_start = self.fragments.items.len;
+        const rect = try block.layoutWithOptions(self, box_id, containing, cursor_y, options);
+        return self.finishBlockLayout(box_id, containing, cursor_y, fragment_start, rect);
+    }
+
+    fn finishBlockLayout(
+        self: *State,
+        box_id: box.BoxId,
+        containing: geometry.Rect,
+        cursor_y: *f32,
+        fragment_start: usize,
+        raw_rect: geometry.Rect,
+    ) geometry.Rect {
+        const source = self.tree.boxes.items[box_id];
+        const style = source.style;
+        if (!style.overflow.clips() or fragment_start >= self.fragments.items.len) return raw_rect;
+
+        var rect = raw_rect;
+        const vertical_edges = source.border.top + source.border.bottom + source.padding.top + source.padding.bottom;
+        if (intrinsic.resolveContentDimension(style.height, containing.height, vertical_edges, style.box_sizing)) |requested_content_height| {
+            const requested_outer_height = requested_content_height + vertical_edges;
+            if (requested_outer_height < rect.height) {
+                const reduction = rect.height - requested_outer_height;
+                rect.height = requested_outer_height;
+                self.fragments.items[fragment_start].rect.height = requested_outer_height;
+                cursor_y.* -= reduction;
+            }
+        }
+
+        const clip = geometry.Rect{
+            .x = rect.x + source.border.left,
+            .y = rect.y + source.border.top,
+            .width = @max(rect.width - source.border.left - source.border.right, 0),
+            .height = @max(rect.height - source.border.top - source.border.bottom, 0),
+        };
+        for (self.fragments.items[fragment_start + 1 ..]) |*fragment| {
+            fragment.clip_rect = if (fragment.clip_rect) |existing|
+                existing.intersection(clip) orelse geometry.Rect{ .x = clip.x, .y = clip.y }
+            else
+                clip;
+        }
+        return rect;
     }
 
     pub fn advanceToNextPage(self: *const State, cursor_y: *f32) void {
@@ -253,7 +296,8 @@ const State = struct {
     ) !f32 {
         const style = self.tree.boxes.items[parent_id].style;
         const text_indent = style.text_indent.resolve(width) orelse 0;
-        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent);
+        const ellipsis_enabled = style.text_overflow == .ellipsis and style.overflow.clips();
+        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent, ellipsis_enabled);
         var child = self.tree.boxes.items[parent_id].first_child;
         while (child) |child_id| {
             try cursor.layoutBox(child_id, null, .baseline);
@@ -273,7 +317,8 @@ const State = struct {
         const first = self.tree.boxes.items[first_box];
         const style = if (first.parent) |parent_id| self.tree.boxes.items[parent_id].style else first.style;
         const text_indent = style.text_indent.resolve(width) orelse 0;
-        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent);
+        const ellipsis_enabled = style.text_overflow == .ellipsis and style.overflow.clips();
+        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, text_indent, ellipsis_enabled);
         try cursor.layoutBox(first_box, null, .baseline);
         return cursor.finish();
     }
@@ -504,6 +549,71 @@ test "carry text decoration paint through inline fragments" {
         return;
     }
     return error.TestExpectedEqual;
+}
+
+test "clip fixed-height overflow and keep following flow at declared height" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:30px;padding:5px;border:2px solid black;overflow:hidden'><div style='height:100px;background:red'>inside</div></div>" ++
+        "<p style='margin:0'>after</p>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200 });
+    defer result.deinit(allocator);
+
+    var clipped_child: ?Fragment = null;
+    var after: ?Fragment = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.background) |background| {
+            if (background.red == 1 and background.green == 0) clipped_child = fragment;
+        }
+        if (fragment.text) |text| {
+            if (std.mem.eql(u8, text, "after")) after = fragment;
+        }
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 44), after.?.rect.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), clipped_child.?.clip_rect.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), clipped_child.?.clip_rect.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), clipped_child.?.clip_rect.?.height, 0.01);
+}
+
+test "truncate nowrap overflow with a selectable ellipsis" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source = "<p style='margin:0;width:90px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>alpha beta gamma delta</p>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200 });
+    defer result.deinit(allocator);
+
+    var saw_ellipsis = false;
+    var saw_hidden_tail = false;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        if (std.mem.eql(u8, text, "…")) saw_ellipsis = true;
+        if (std.mem.indexOf(u8, text, "delta") != null) saw_hidden_tail = true;
+        try std.testing.expect(fragment.rect.x + fragment.rect.width <= 90.01);
+        try std.testing.expect(fragment.clip_rect != null);
+    }
+    try std.testing.expect(saw_ellipsis);
+    try std.testing.expect(!saw_hidden_tail);
 }
 
 test "layout inline-block children as an atomic inline group" {

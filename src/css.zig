@@ -48,6 +48,8 @@ const parseTextAlign = values.parseTextAlign;
 const parseTextTransform = values.parseTextTransform;
 const parseWordBreak = values.parseWordBreak;
 const parseOverflowWrap = values.parseOverflowWrap;
+const parseOverflow = values.parseOverflow;
+const parseTextOverflow = values.parseTextOverflow;
 const parseVerticalAlignKeyword = values.parseVerticalAlignKeyword;
 const parseBoxSizing = values.parseBoxSizing;
 const parseBorderCollapse = values.parseBorderCollapse;
@@ -720,6 +722,9 @@ test "parse CSS Text inline properties" {
     try std.testing.expectEqual(box.OverflowWrap.anywhere, parseOverflowWrap("anywhere").?);
     try std.testing.expect(parseVerticalAlignKeyword("super").? == .super);
     try std.testing.expect(parseVerticalAlignKeyword("text-bottom").? == .textBottom);
+    try std.testing.expectEqual(box.Overflow.hidden, parseOverflow("hidden").?);
+    try std.testing.expectEqual(box.Overflow.clip, parseOverflow("clip").?);
+    try std.testing.expectEqual(box.TextOverflow.ellipsis, parseTextOverflow("ellipsis").?);
 }
 
 test "parse value: box-sizing" {
@@ -867,6 +872,18 @@ test "cascade: text-decoration shorthand keeps line style color and thickness" {
         .length => |length| try std.testing.expectApproxEqAbs(@as(f32, 2), length.resolve(style.font_size).?, 0.01),
         else => return error.TestExpectedEqual,
     }
+}
+
+test "cascade: overflow and text-overflow remain container properties" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='overflow:hidden;text-overflow:ellipsis'><span>clipped</span></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const span_id = ct.document.nodes.items[div_id].first_child.?;
+    try std.testing.expectEqual(box.Overflow.hidden, ct.styles[div_id].overflow);
+    try std.testing.expectEqual(box.TextOverflow.ellipsis, ct.styles[div_id].text_overflow);
+    try std.testing.expectEqual(box.Overflow.visible, ct.styles[span_id].overflow);
+    try std.testing.expectEqual(box.TextOverflow.clip, ct.styles[span_id].text_overflow);
 }
 
 test "cascade: page-break and orphans/widows" {

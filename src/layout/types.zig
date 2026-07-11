@@ -28,6 +28,7 @@ pub const Fragment = struct {
     kind: FragmentKind,
     source_box: box.BoxId,
     rect: geometry.Rect,
+    clip_rect: ?geometry.Rect = null,
     line_id: ?usize = null,
     inline_container_line_id: ?usize = null,
     text: ?[]const u8 = null,

@@ -64,6 +64,8 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "text-transform",
   "word-break",
   "overflow-wrap",
+  "overflow",
+  "text-overflow",
   "vertical-align",
   "text-decoration-line",
   "text-decoration-style",
