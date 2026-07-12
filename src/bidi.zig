@@ -154,15 +154,15 @@ fn nextCodepoint(text: []const u8, start: usize) usize {
     return @min(start + length, text.len);
 }
 
-export fn html2realpdf_sb_malloc(size: usize) ?*anyopaque {
+pub export fn html2realpdf_sb_malloc(size: usize) ?*anyopaque {
     return harfbuzz.html2realpdf_hb_malloc(size);
 }
 
-export fn html2realpdf_sb_realloc(optional_ptr: ?*anyopaque, size: usize) ?*anyopaque {
+pub export fn html2realpdf_sb_realloc(optional_ptr: ?*anyopaque, size: usize) ?*anyopaque {
     return harfbuzz.html2realpdf_hb_realloc(optional_ptr, size);
 }
 
-export fn html2realpdf_sb_free(optional_ptr: ?*anyopaque) void {
+pub export fn html2realpdf_sb_free(optional_ptr: ?*anyopaque) void {
     harfbuzz.html2realpdf_hb_free(optional_ptr);
 }
 

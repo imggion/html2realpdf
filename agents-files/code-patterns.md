@@ -65,9 +65,14 @@
   a clipped display/PDF image transform, not a pre-rasterized canvas rewrite.
 - Preserve supported SVG as a base64 SVG resource and validate it again in
   `src/svg.zig`; emit a unit-square PDF Form XObject so normal replaced-element
-  sizing and clipping still apply. Unsupported SVG is rejected by default; an
-  explicit `rasterize-subtree` policy may rasterize only that SVG and must
-  carry a structured fallback diagnostic.
+  sizing and clipping still apply. Keep selectable SVG text in Type 0 font runs,
+  gradient fills in bounded native vector bands, and clip paths inside isolated
+  `q`/`Q` scopes. Unsupported SVG is rejected by default; an explicit
+  `rasterize-subtree` policy may rasterize only that SVG and must carry a
+  structured fallback diagnostic.
+- Keep the canvas-to-SVG bridge in browser snapshotting. Invoke it in stable DOM
+  order with the original live canvas, validate its result through the same SVG
+  boundary, and rasterize only after explicit `canvasFallback: "rasterize"`.
 - Keep page-break compatibility as injected CSS rules, not DOM-position hacks.
 - Resolve table column and cell width hints plus min/max-content contributions
   before cell layout. Percentage widths are relative to the table, and cells

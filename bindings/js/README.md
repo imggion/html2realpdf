@@ -31,9 +31,11 @@ the browser's built-in PDF viewer.
 
 `renderPdf` accepts an HTML string, an `Element`, or a ref-shaped object such
 as a React `RefObject<Element>`. DOM/ref input is cloned, computed styles and
-live form values are materialized, canvas content becomes a transparent PNG,
-and supported SVG shapes and paths remain native vector Form XObjects. An
-unsupported SVG rasterizes only that SVG, emits `CSS_SUBTREE_RASTERIZED`, and
+live form values are materialized, canvas content becomes a transparent PNG by
+default, and supported SVG shapes, paths, text/tspan, gradient fills, and clip
+paths remain native vector Form XObjects. `canvasToSvg` can replace live canvases
+with the same validated SVG subset. An unsupported SVG rasterizes only that SVG,
+emits `CSS_SUBTREE_RASTERIZED`, and
 can instead fail with `fallback: "error"`; active elements and event attributes
 are removed.
 
@@ -62,6 +64,23 @@ const renderer = await createRenderer({
 const pdf = await renderer.render('<p style="font-family: Inter">Hello</p>');
 renderer.dispose();
 ```
+
+For a canvas-backed chart, return the chart library's SVG export from the
+per-render bridge. The callback receives the original live canvas, its stable
+snapshot path, and both CSS and bitmap dimensions:
+
+```ts
+const pdf = await renderer.render(dashboardElement, {
+  canvasToSvg: async ({ canvas, cssWidth, cssHeight }) =>
+    chartFor(canvas).toSvg({ width: cssWidth, height: cssHeight }),
+  canvasFallback: "error",
+  fallback: "error",
+});
+```
+
+The adapter may return an SVG string, `Blob`, `SVGSVGElement`, or a promise of
+one. With `canvasFallback: "rasterize"`, a missing or invalid adapter result
+rasterizes only that canvas and emits `CANVAS_SUBTREE_RASTERIZED`.
 
 Other render options include `strict`, `baseUrl`, `resourceResolver`,
 `resourcePolicy`, `enableLinks`, selector-based `pageBreak` rules,
@@ -107,9 +126,11 @@ lines/items, and Grid rows. Forced descendant breaks override ancestor avoid.
 The Web profile also supports Flexbox, Grid, floats, positioned layout,
 native 2D transforms, layered URL/gradient backgrounds, shadows, and isolated
 opacity groups, plus vector-preserved SVG `path`, `rect`, circle/ellipse, line,
-polyline, polygon, group transform, solid fill/stroke, and dash paint. Filters,
-blend modes, 3D transforms, SVG text/paint servers/masks, and arbitrary browser
-painting remain outside the current native profile. Layout-critical unsupported
+polyline, polygon, group transform, solid fill/stroke, dash paint, selectable
+`text`/`tspan`, bounded linear/radial gradient fills, and local `clipPath`.
+Filters, masks, blend modes, 3D transforms, gradient strokes/text, inherited
+gradient references, and arbitrary browser painting remain outside the current
+native profile. Layout-critical unsupported
 CSS is rejected; cosmetic omissions and scoped raster fallbacks are available
 through `pdf.diagnostics` and can be promoted to errors with `strict: true` or
 `fallback: "error"`.
@@ -118,15 +139,7 @@ through `pdf.diagnostics` and can be promoted to errors with `strict: true` or
 
 - ESM package; Node.js `20.16+` is required for build tooling.
 - Rendering requires a browser with WebAssembly, Worker, Blob, and DOM APIs.
-- Project code is MIT licensed.
-- Bundled Noto Sans font software is licensed under SIL OFL 1.1; the license is
-  included as `dist/NotoSans-OFL.txt`.
-- HarfBuzz is licensed under the Old MIT license; the license is included as
-  `dist/vendor/HARFBUZZ-LICENSE.txt`.
-- SheenBidi is licensed under Apache License 2.0; the license is included as
-  `dist/vendor/SHEENBIDI-LICENSE.txt`.
-- libunibreak is licensed under the zlib license; the license is included as
-  `dist/vendor/LIBUNIBREAK-LICENSE.txt`.
-- The dynamically loaded PDF.js display layer used by `preview()` is licensed
-  under Apache License 2.0; its license is included in
-  `dist/vendor/PDFJS-LICENSE.txt`.
+- Project code is MIT licensed. The complete project and third-party license
+  inventory is consolidated in `dist/LICENSE.md`, including Noto fonts,
+  HarfBuzz, SheenBidi, PDF.js, libunibreak, Unicode data, and adapted Web
+  Platform Tests.

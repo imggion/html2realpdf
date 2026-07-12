@@ -84,6 +84,7 @@ pub fn shape(
     defer hb_blob_destroy(blob);
     const face = hb_face_create(blob, 0) orelse return error.OutOfMemory;
     defer hb_face_destroy(face);
+
     const hb_font = hb_font_create(face) orelse return error.OutOfMemory;
     defer hb_font_destroy(hb_font);
     hb_ot_font_set_funcs(hb_font);

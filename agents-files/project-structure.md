@@ -24,7 +24,8 @@ framework dependency.
 8. `src/pagination.zig` maps fragments to coordinates in the per-page `PageSpec` sequence shared with layout and consumed by the display list and PDF backend. `src/paged_media.zig` selects default/named/pseudo `@page` margin templates after page names, blank state, and final page count are known, then appends selectable counter text without changing content flow.
 9. `src/display_list.zig` coordinates backend-neutral paint commands implemented under `src/paint/`; `backgrounds.zig` resolves layered image/gradient tiles and `effects.zig` owns shadow paint.
 10. `src/svg.zig` independently validates and lowers the browser-approved SVG
-    shape/path subset, including path arcs and nested affine transforms.
+    subset, including shapes/paths, selectable text/tspan, bounded linear and
+    radial gradient fills, local clip paths, path arcs, and affine transforms.
 11. `src/pdf.zig` writes compressed PDF 1.7 objects and xref data, including affine `cm` operators, axial/radial/mesh shadings, vector alpha-gradient bands, SVG and isolated-transparency Form XObjects, transformed clip paths, and transformed link bounds.
 12. `src/render.zig` owns one complete native render lifetime.
 13. `src/diagnostics.zig` defines structured phase-aware diagnostics shared by
@@ -33,16 +34,18 @@ framework dependency.
 15. `bindings/js/src/` snapshots browser input in an inert, deterministic
     media/viewport environment (with resolver-controlled stylesheets), resolves
     default and selected `@page` geometry into typed rules, and runs WASM in a
-    Worker by default, returning `PdfDocument`.
+    Worker by default, returning `PdfDocument`. Its optional `canvasToSvg`
+    bridge materializes live canvases in DOM order before SVG validation.
 
 The local browser harness loads the package through a generated content-addressed
 runtime under `bindings/js/.browser-build/`; `manifest.json` binds one JS module
 graph to the exact WASM bytes produced by the same build.
 
 `build.zig` creates the native executable and WASM artifact and compiles pinned
-HarfBuzz `HB_TINY`, SheenBidi, and libunibreak objects for both targets. Noto Sans TTF assets are embedded
-from `src/assets/fonts`; the OFL text is under
-`assets/fonts` and copied into the npm distribution.
+HarfBuzz `HB_TINY`, SheenBidi, and libunibreak objects for both targets. Noto
+Sans TTF assets are embedded from `src/assets/fonts`.
+Project and third-party license notices are consolidated in `LICENSE.md`; the
+browser package build copies that file to `dist/LICENSE.md`.
 
 ## Ownership boundaries
 
@@ -70,7 +73,7 @@ from `src/assets/fonts`; the OFL text is under
 - `tests/web/index.html` is the interactive browser harness for snapshots,
   complex invoice/report generation, embedded canvas preview, download,
   DOM/ref rendering, deterministic media/viewport selection, open Shadow DOM,
-  pseudo-elements, SVG charts, canvas alpha, rounded tables, and A4 landscape
+  pseudo-elements, SVG charts, canvas-to-SVG charts, canvas alpha, rounded tables, and A4 landscape
   presentation-style PDFs.
 - `tests/react/` is an isolated Vite/React application that exercises a mounted
   component ref, controlled state, computed styles, tables, SVG, and canvas.

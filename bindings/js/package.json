@@ -13,8 +13,7 @@
   },
   "files": [
     "dist",
-    "README.md",
-    "LICENSE"
+    "README.md"
   ],
   "sideEffects": false,
   "scripts": {

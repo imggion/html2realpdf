@@ -34,8 +34,10 @@
   layout fragments, becomes a rounded display-list command, and only then is
   serialized as a Bézier path by `src/pdf.zig`.
 - JPEG/PNG decoding and reusable zlib helpers belong in `src/image.zig`.
-  The independently validated SVG shape/path subset and arc lowering belong in
-  `src/svg.zig`; PDF Form XObject serialization remains in `src/pdf.zig`.
+  Independently validated SVG shape/path, text/tspan, gradient, clip-path, and
+  arc lowering belong in `src/svg.zig`; PDF Form XObject serialization remains
+  in `src/pdf.zig`. Browser canvas-to-SVG adapter orchestration belongs in
+  `bindings/js/src/snapshot.ts`, never in the Zig image decoder.
 - One-shot native orchestration belongs in `src/render.zig`; exported pointer,
   context, and result ownership belongs in `src/wasm.zig`.
 - Cross-phase diagnostic shape and JSON serialization belong in

@@ -24,24 +24,8 @@ await copyFile(
   new URL("../dist/libhtml2realpdf.wasm", import.meta.url),
 );
 await copyFile(
-  new URL("../../../assets/fonts/OFL.txt", import.meta.url),
-  new URL("../dist/NotoSans-OFL.txt", import.meta.url),
-);
-await copyFile(
-  new URL("../../../assets/harfbuzz/COPYING", import.meta.url),
-  new URL("../dist/vendor/HARFBUZZ-LICENSE.txt", import.meta.url),
-);
-await copyFile(
-  new URL("../../../assets/sheenbidi/LICENSE", import.meta.url),
-  new URL("../dist/vendor/SHEENBIDI-LICENSE.txt", import.meta.url),
-);
-await copyFile(
-  new URL("../../../assets/libunibreak/LICENCE", import.meta.url),
-  new URL("../dist/vendor/LIBUNIBREAK-LICENSE.txt", import.meta.url),
-);
-await copyFile(
-  new URL("../../../assets/unicode/LICENSE.txt", import.meta.url),
-  new URL("../dist/vendor/UNICODE-LICENSE.txt", import.meta.url),
+  new URL("../../../LICENSE.md", import.meta.url),
+  new URL("../dist/LICENSE.md", import.meta.url),
 );
 await copyFile(
   new URL("../node_modules/pdfjs-dist/build/pdf.min.mjs", import.meta.url),
@@ -51,9 +35,4 @@ await copyFile(
   new URL("../node_modules/pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url),
   new URL("../dist/vendor/pdf.worker.min.mjs", import.meta.url),
 );
-await copyFile(
-  new URL("../node_modules/pdfjs-dist/LICENSE", import.meta.url),
-  new URL("../dist/vendor/PDFJS-LICENSE.txt", import.meta.url),
-);
-
 console.log(`Prepared WASM assets for ${packageRoot}`);

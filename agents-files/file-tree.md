@@ -4,11 +4,11 @@
 .
 ├── AGENTS.md
 ├── README.md
-├── LICENSE
+├── LICENSE.md                   project and consolidated third-party licenses
 ├── Makefile
 ├── build.zig
 ├── build.zig.zon
-├── assets/                       bundled font and Unicode-engine licenses
+├── assets/                       third-party source support directories
 ├── bindings/js/
 │   ├── package.json
 │   ├── README.md

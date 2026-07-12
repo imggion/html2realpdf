@@ -34,10 +34,13 @@ Read these local docs before changing code:
 - Browser pseudo-element snapshots resolve nested CSS counters before emitting synthetic text nodes; keep counter scope traversal in `bindings/js/src/snapshot.ts` rather than teaching the PDF core browser-only generated-content state.
 - `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
 - The browser package is framework-agnostic; React refs are supported structurally without a React dependency.
-- Supported inline SVG shapes and paths remain vector through `src/svg.zig` and
-  PDF Form XObjects; unsupported SVG is rejected by default and rasterizes only
-  its subtree with a structured diagnostic after explicit
-  `fallback: "rasterize-subtree"` opt-in.
+- Supported inline SVG shapes/paths, selectable text/tspan, bounded linear and
+  radial gradient fills, and local clip paths remain vector through
+  `src/svg.zig` and PDF Form XObjects. The optional browser `canvasToSvg` bridge
+  sends live canvas chart exports through the same validation boundary.
+  Unsupported SVG is rejected by default and rasterizes only its subtree with a
+  structured diagnostic after explicit `fallback: "rasterize-subtree"` opt-in;
+  canvas adapter fallback likewise requires `canvasFallback: "rasterize"`.
 - Browser rendering resolves default, named, and `:first`/`:left`/`:right`/`:blank`
   `@page` geometry through a typed page-rule cascade unless explicit API page
   options override it. Pagination, display-list commands, and PDF coordinate
@@ -52,6 +55,8 @@ Read these local docs before changing code:
 - Web/strict typography carries HarfBuzz glyph advances, offsets, direction, and UTF-8 clusters through layout and PDF. Built-in Arabic and Hebrew fallback faces are available; the document profile retains identity shaping for byte-stable baselines.
 - Web/strict inline layout resolves whole-line bidi levels with SheenBidi before L2 visual reordering and uses libunibreak opportunities before CSS emergency wrapping; keep measurement and the shaped PDF run on the same text slice.
 - `tests/assets/fonts/Html2RealPdfEmojiFixture.ttf` is the registered-fallback canary; regenerate it only through `scripts/build_emoji_fixture.sh` so its source and output checksums remain reproducible.
+- Keep project and bundled third-party license texts consolidated in
+  `LICENSE.md`; the browser build must copy the same file to `dist/LICENSE.md`.
 
 ## Commands
 

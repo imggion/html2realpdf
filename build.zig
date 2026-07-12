@@ -1,4 +1,5 @@
 const std = @import("std");
+const pkg = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -94,6 +95,27 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
+    const build_info = b.addOptions();
+
+    build_info.addOption(
+        []const u8,
+        "name",
+        @tagName(pkg.name),
+    );
+
+    build_info.addOption(
+        []const u8,
+        "version",
+        pkg.version,
+    );
+
+    build_info.addOption(
+        []const u8,
+        "author",
+        pkg.author,
+    );
+
+    native_lib_mod.addOptions("build_info", build_info);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

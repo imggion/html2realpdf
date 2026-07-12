@@ -41,9 +41,9 @@ The browser package is published as `@imggion/html2realpdf`.
 - selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
 - HarfBuzz OpenType shaping, kerning, ligatures, and positioned RTL runs in the
   `web` and `strict` profiles while `document` remains byte-stable;
-- JPEG pass-through, transparent PNG soft masks, supported SVG shape/path
-  resources as native PDF Form XObjects, vector backgrounds/borders, and live
-  link annotations;
+- JPEG pass-through, transparent PNG soft masks, supported SVG shape/path,
+  selectable text/tspan, gradient fill, and clip-path resources as native PDF
+  Form XObjects, vector backgrounds/borders, and live link annotations;
 - per-corner circular/elliptical `border-radius` fills, borders, and overflow clips emitted as native PDF Bézier paths;
 - compressed PDF 1.7 streams, metadata, deterministic classic xref output;
 - a versioned WASM ABI with independent result handles and structured errors;
@@ -55,7 +55,8 @@ similar documents. The Web profile additionally enables floats, Flexbox,
 positioned layout, CSS Grid, 2D transforms, layered backgrounds, gradients,
 shadows, and isolated opacity. Filters, blend modes, 3D transforms, and
 arbitrary browser painting are still rejected or reported instead of silently
-rasterizing the whole page. Canvas is captured as its own image resource.
+rasterizing the whole page. Canvas remains a scoped PNG by default, or callers
+can provide `canvasToSvg` to replace it with validated native SVG content.
 Unsupported SVG paint is rejected by default and can rasterize only its own
 subtree when callers explicitly opt into `fallback: "rasterize-subtree"`;
 every fallback is exposed through structured diagnostics.
@@ -86,6 +87,22 @@ pdf.download("invoice.pdf");
 preview.dispose();
 pdf.dispose();
 ```
+
+Canvas-based chart libraries can opt into native PDF vectors without changing
+the renderer's default canvas behavior:
+
+```ts
+const pdf = await renderPdf(document.querySelector("#dashboard")!, {
+  canvasToSvg: ({ canvas }) => exportChartAsSvg(canvas),
+  canvasFallback: "error",
+  fallback: "error",
+});
+```
+
+`canvasToSvg` may return an SVG string, `Blob`, `SVGSVGElement`, or a promise of
+one. Returning `null`, malformed SVG, or an unsupported SVG fails with
+`canvasFallback: "error"`; `canvasFallback: "rasterize"` preserves only that
+canvas as PNG and emits `CANVAS_SUBTREE_RASTERIZED`.
 
 The preview is an in-page Shadow DOM component with responsive canvas pages,
 HiDPI rendering, zoom controls, and fit-to-width behavior. It does not open an
@@ -215,16 +232,7 @@ and the explicit React integration fixture lives in `tests/react/`.
 
 ## Licenses
 
-Project code is MIT licensed. Bundled Noto Sans font software is distributed
-under the SIL Open Font License 1.1; see `assets/fonts/OFL.txt` and the copy
-included in the npm package. The vendored PDF.js display layer used only by the
-optional in-page preview is distributed under Apache License 2.0; its license
-is included in `dist/vendor/PDFJS-LICENSE.txt`. HarfBuzz is distributed under
-its Old MIT license, included in `assets/harfbuzz/COPYING` and
-`dist/vendor/HARFBUZZ-LICENSE.txt`. SheenBidi is distributed under Apache
-License 2.0, included in `assets/sheenbidi/LICENSE` and
-`dist/vendor/SHEENBIDI-LICENSE.txt`. libunibreak is distributed under the zlib
-license, included in `assets/libunibreak/LICENCE` and
-`dist/vendor/LIBUNIBREAK-LICENSE.txt`. Generated Unicode case-mapping data is
-derived from Unicode 17.0.0 under Unicode License V3, included in
-`assets/unicode/LICENSE.txt` and `dist/vendor/UNICODE-LICENSE.txt`.
+Project code is MIT licensed. The complete license inventory and full texts for
+Noto fonts, HarfBuzz, SheenBidi, PDF.js, libunibreak, Unicode data, and adapted
+Web Platform Tests are consolidated in [LICENSE.md](LICENSE.md). The browser
+package includes the same file as `dist/LICENSE.md`.

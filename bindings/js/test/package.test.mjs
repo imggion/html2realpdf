@@ -30,15 +30,15 @@ test("browser harness runtime uses a content-addressed package build", async () 
   assert.equal(typeof runtime.PdfPreview.prototype.dispose, "function");
 });
 
-test("package carries third-party runtime licenses", async () => {
-  const harfbuzzLicense = await readFile(new URL("../dist/vendor/HARFBUZZ-LICENSE.txt", import.meta.url), "utf8");
-  const sheenbidiLicense = await readFile(new URL("../dist/vendor/SHEENBIDI-LICENSE.txt", import.meta.url), "utf8");
-  const libunibreakLicense = await readFile(new URL("../dist/vendor/LIBUNIBREAK-LICENSE.txt", import.meta.url), "utf8");
-  const unicodeLicense = await readFile(new URL("../dist/vendor/UNICODE-LICENSE.txt", import.meta.url), "utf8");
-  assert.match(harfbuzzLicense, /HarfBuzz is licensed/);
-  assert.match(sheenbidiLicense, /Apache License/);
-  assert.match(libunibreakLicense, /Permission is granted/);
-  assert.match(unicodeLicense, /UNICODE LICENSE V3/);
+test("package carries consolidated project and third-party licenses", async () => {
+  const license = await readFile(new URL("../dist/LICENSE.md", import.meta.url), "utf8");
+  assert.match(license, /html2realpdf - MIT License/);
+  assert.match(license, /Noto fonts - SIL Open Font License 1\.1/);
+  assert.match(license, /HarfBuzz - Old MIT License/);
+  assert.match(license, /SheenBidi and PDF\.js - Apache License 2\.0/);
+  assert.match(license, /libunibreak - zlib License/);
+  assert.match(license, /Unicode data files - Unicode License v3/);
+  assert.match(license, /Adapted Web Platform Tests - BSD 3-Clause License/);
 });
 
 test("page options normalize A4, Letter, orientation, units, and margins", () => {
