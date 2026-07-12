@@ -1,0 +1,98 @@
+import { expect, test } from "@playwright/test";
+
+test("default @page size orientation and margins reach PDF geometry", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const renderer = await pkg.createRenderer({ execution: "main" });
+    const html = `
+      <style>
+        @page { size: A5 landscape; margin: 10mm !important; }
+        @page { margin: 20mm; margin-left: 15mm !important; }
+      </style>
+      <p style="margin:0;font:16px/20px Noto Sans">CSS paged media</p>`;
+
+    const inspect = async (pdf) => {
+      const bytes = pdf.toUint8Array();
+      const diagnostics = pdf.diagnostics;
+      const source = new TextDecoder("latin1").decode(bytes);
+      const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+      pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+      const loadingTask = pdfjs.getDocument({ data: bytes });
+      const documentHandle = await loadingTask.promise;
+      const firstPage = await documentHandle.getPage(1);
+      const viewport = firstPage.getViewport({ scale: 1 });
+      const text = await firstPage.getTextContent();
+      const item = text.items.find((candidate) => "str" in candidate && candidate.str.includes("CSS paged media"));
+      const summary = {
+        diagnostics,
+        mediaBox: source.match(/\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/)?.slice(1).map(Number) ?? [],
+        viewport: [viewport.width, viewport.height],
+        textX: item && "transform" in item ? item.transform[4] : null,
+      };
+      await documentHandle.destroy();
+      pdf.dispose();
+      return summary;
+    };
+
+    const cssPage = await inspect(await renderer.render(html, {
+      cssProfile: "web",
+      mediaType: "print",
+      unsupportedCss: "error",
+    }));
+    const apiPage = await inspect(await renderer.render(html, {
+      cssProfile: "web",
+      mediaType: "print",
+      unsupportedCss: "error",
+      page: { format: [400, 500], unit: "px", margin: 0 },
+    }));
+    renderer.dispose();
+    return { cssPage, apiPage };
+  });
+
+  expect(result.cssPage.diagnostics).toEqual([]);
+  expect(result.cssPage.mediaBox[0]).toBeCloseTo(595.2756, 2);
+  expect(result.cssPage.mediaBox[1]).toBeCloseTo(419.5276, 2);
+  expect(result.cssPage.viewport[0]).toBeCloseTo(595.2756, 2);
+  expect(result.cssPage.viewport[1]).toBeCloseTo(419.5276, 2);
+  expect(result.cssPage.textX).toBeCloseTo(15 * 72 / 25.4, 2);
+
+  expect(result.apiPage.diagnostics).toEqual([]);
+  expect(result.apiPage.mediaBox[0]).toBeCloseTo(300, 3);
+  expect(result.apiPage.mediaBox[1]).toBeCloseTo(375, 3);
+  expect(result.apiPage.textX).toBeCloseTo(0, 3);
+});
+
+test("unsupported named @page selectors are diagnostic and strict-safe", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const renderer = await pkg.createRenderer({ execution: "main" });
+    const html = `<style>@page report { size: A4; }</style><p>Named page pending</p>`;
+    const pdf = await renderer.render(html, { cssProfile: "web", mediaType: "print", unsupportedCss: "warn" });
+    const diagnostics = pdf.diagnostics;
+    pdf.dispose();
+    let strictError = "";
+    try {
+      await renderer.render(html, { cssProfile: "strict", mediaType: "print" });
+    } catch (error) {
+      strictError = error instanceof Error ? error.message : String(error);
+    }
+    renderer.dispose();
+    return { diagnostics, strictError };
+  });
+
+  expect(result.diagnostics).toEqual([
+    expect.objectContaining({
+      code: "UNSUPPORTED_PAGED_MEDIA",
+      property: "@page selector",
+      phase: "fragmentation",
+      severity: "warning",
+    }),
+  ]);
+  expect(result.strictError).toContain("@page selector:report");
+});

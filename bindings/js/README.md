@@ -98,7 +98,9 @@ The alpha supports report-oriented block/inline/table layout, common CSS box
 model properties, A4/Letter/custom pages, pagination controls, links, JPEG,
 transparent PNG, per-corner elliptical rounded fills/borders and rounded
 overflow clipping, Noto Sans Latin/Arabic/Hebrew, and registered embeddable TTF
-fonts. The Web profile also supports Flexbox, Grid, floats, positioned layout,
+fonts. A default `@page` rule can set CSS absolute page size/orientation and
+margins when the API does not provide `page`; explicit API page options win.
+The Web profile also supports Flexbox, Grid, floats, positioned layout,
 native 2D transforms, layered URL/gradient backgrounds, shadows, and isolated
 opacity groups, plus vector-preserved SVG `path`, `rect`, circle/ellipse, line,
 polyline, polygon, group transform, solid fill/stroke, and dash paint. Filters,

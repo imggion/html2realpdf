@@ -149,9 +149,10 @@ export class Html2RealPdf {
     options.onProgress?.({ phase: "snapshot", completed: 1, total: 1 });
 
     options.onProgress?.({ phase: "wasm", completed: 0, total: 1 });
+    const page = options.page !== undefined ? normalizePage(options.page) : snapshot.page ?? normalizePage();
     const rendered = await this.backend.render(
       applyPageBreakRules(snapshot.html, options.pageBreak),
-      normalizePage(options.page),
+      page,
       options.metadata,
       options.cssProfile ?? "document",
       options.signal,

@@ -59,6 +59,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | table formatting | Y | Y | Y | Y | Y | Y | Y | intrinsic auto-layout tracks, percentage/column hints, rowspan/colspan, captions and column groups, repeated headers, and top/middle/bottom/baseline cell alignment including row spans |
 | break before/after/inside | Y | Y | Y | Y | - | Y | Y | page/always/avoid aliases |
 | `orphans` / `widows` | Y | Y | Y | Y | - | Y | Y | paragraph line constraints |
+| default `@page` size/margins | Y | Y | Y | Y | - | Y | Y | browser CSSOM cascade including `!important`; A3/A4/A5, Letter/Legal/Ledger/Tabloid, portrait/landscape, one/two absolute lengths, and physical margin longhands; explicit API page options override CSS |
 | `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; fixed fragments repeat at page-relative coordinates and sticky resolves as relative in paged media |
 | physical/logical inset | Y | Y | Y | Y | - | Y | Y | top/right/bottom/left plus block/inline logical forms; auto sizing, opposing-inset stretch, auto margins, and nearest positioned padding containing block |
 | `z-index` / stacking order | Y | Y | Y | Y | Y | Y | Y | negative, normal-flow, auto/zero, and positive positioned paint phases with atomic descendant traversal |
@@ -98,7 +99,9 @@ Playwright E2E make the matrix verifiable.
   Arabic and Hebrew have built-in shaped fallbacks, while emoji and other
   scripts require a registered embeddable TTF fallback;
   the package test suite registers a deterministic monochrome emoji fixture;
-- CSS Fragmentation fragmentainers, `@page`, named pages, and margin boxes.
+- complete CSS Fragmentation fragmentainers, named pages, page pseudo-classes,
+  margin boxes, and per-page geometry changes; the default `@page` rule already
+  controls uniform page size/orientation and margins in browser rendering.
 
 These features are not silently represented as whole-page screenshots. Canvas
 and unsupported SVG subtrees remain scoped image resources; supported SVG is a

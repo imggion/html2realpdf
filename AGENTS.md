@@ -32,6 +32,9 @@ Read these local docs before changing code:
 - Supported inline SVG shapes and paths remain vector through `src/svg.zig` and
   PDF Form XObjects; unsupported SVG rasterizes only its subtree with a
   structured diagnostic and honors `fallback: "error"`.
+- Browser rendering resolves the default `@page` rule into uniform PDF page
+  size/orientation and margins unless explicit API page options override it;
+  named pages, pseudo-pages, and margin boxes remain separate staged work.
 - Browser snapshots support deterministic screen/print media, explicit viewports, computed pseudo-elements, and opt-in open Shadow DOM flattening; native/WASM warnings use owned structured diagnostics.
 - HTML-string stylesheets are inert and must resolve through `resourceResolver`; Element/ref alternate-media snapshots preserve ancestor selectors, live controls, canvas pixels, and open shadow roots.
 - CSS rgba/hex-alpha colors remain native vectors and use PDF ExtGState rather than flattening; supported shorthands expand into physical longhands before computed-value application.

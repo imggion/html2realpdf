@@ -1,5 +1,6 @@
 import { InvalidSourceError, ResourceLoadError, UnsupportedCssError, UnsupportedEnvironmentError } from "./errors.js";
 import type { CssProfile, Diagnostic, FallbackPolicy, HtmlSource, MediaType, ResourceResolver, UnsupportedCssPolicy, ViewportOptions } from "./types.js";
+import type { NormalizedPage } from "./page.js";
 
 export interface SnapshotOptions {
   baseUrl?: string | URL;
@@ -18,6 +19,7 @@ export interface SnapshotOptions {
 export interface SnapshotResult {
   html: string;
   diagnostics: Diagnostic[];
+  page?: NormalizedPage;
 }
 
 const SUPPORTED_COMPUTED_PROPERTIES = [
@@ -208,8 +210,8 @@ export async function snapshotSource(source: HtmlSource, options: SnapshotOption
   if (!(element instanceof Element)) throw new InvalidSourceError("Expected an HTML string, Element, or ref-like object");
   if (options.viewport !== undefined || options.mediaType === "print") return snapshotElementInEnvironment(element, options);
 
-  const { clone, diagnostics } = await snapshotElement(element, options);
-  return { html: clone.outerHTML, diagnostics };
+  const { clone, diagnostics, page } = await snapshotElement(element, options);
+  return { html: clone.outerHTML, diagnostics, ...(page ? { page } : {}) };
 }
 
 async function snapshotElementInEnvironment(element: Element, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -246,7 +248,7 @@ async function snapshotElementInEnvironment(element: Element, options: SnapshotO
     forceRequestedMedia(targetDocument, options.mediaType ?? "screen", viewport);
     forceShadowMediaRules(target, options.mediaType ?? "screen", viewport);
     const snapshot = await snapshotElement(target, options);
-    return { html: snapshot.clone.outerHTML, diagnostics: snapshot.diagnostics };
+    return { html: snapshot.clone.outerHTML, diagnostics: snapshot.diagnostics, ...(snapshot.page ? { page: snapshot.page } : {}) };
   } finally {
     iframe.remove();
   }
@@ -280,6 +282,175 @@ function waitForStyleResolution(view: Window | null): Promise<void> {
     };
     view.requestAnimationFrame(finish);
     window.setTimeout(finish, 50);
+  });
+}
+
+type CascadedPageValue = { value: string; important: boolean };
+type PageCascade = Partial<Record<"size" | "margin-top" | "margin-right" | "margin-bottom" | "margin-left", CascadedPageValue>>;
+
+const CSS_PAGE_RULE = 6;
+const CSS_MEDIA_RULE = 4;
+const CSS_SUPPORTS_RULE = 12;
+const DEFAULT_PAGE_SIZE_POINTS = [595.2756, 841.8898] as const;
+const CSS_PAGE_SIZES_POINTS: Record<string, readonly [number, number]> = {
+  a3: [841.8898, 1190.5512],
+  a4: DEFAULT_PAGE_SIZE_POINTS,
+  a5: [419.5276, 595.2756],
+  letter: [612, 792],
+  legal: [612, 1008],
+  ledger: [1224, 792],
+  tabloid: [792, 1224],
+};
+
+function readDefaultPageStyle(document: Document, options: SnapshotOptions, diagnostics: Diagnostic[]): NormalizedPage | undefined {
+  const cascade: PageCascade = {};
+  let found = false;
+  const view = document.defaultView ?? window;
+  const stylesheets = [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])];
+  for (const stylesheet of stylesheets) {
+    try {
+      found = collectDefaultPageRules(stylesheet.cssRules, view, cascade, options, diagnostics) || found;
+    } catch (error) {
+      if (error instanceof UnsupportedCssError) throw error;
+      // Cross-origin stylesheets cannot expose cssRules. Their normal computed
+      // declarations remain usable, but paged-media metadata is unavailable.
+    }
+  }
+  if (!found) return undefined;
+
+  const size = parseCssPageSize(cascade.size?.value ?? "auto");
+  if (!size) {
+    reportUnsupportedPageValue("size", cascade.size?.value ?? "", options, diagnostics);
+    return undefined;
+  }
+  const margins = ["margin-top", "margin-right", "margin-bottom", "margin-left"].map((property) => {
+    const raw = cascade[property as keyof PageCascade]?.value ?? "0";
+    const value = parseCssPageLength(raw, true);
+    if (value === null) reportUnsupportedPageValue(property, raw, options, diagnostics);
+    return value ?? 0;
+  }) as [number, number, number, number];
+  if (margins[0] + margins[2] >= size[1] || margins[1] + margins[3] >= size[0]) {
+    reportUnsupportedPageValue("margin", "page margins leave no content area", options, diagnostics);
+    return undefined;
+  }
+  return {
+    widthPoints: size[0],
+    heightPoints: size[1],
+    marginTopPoints: margins[0],
+    marginRightPoints: margins[1],
+    marginBottomPoints: margins[2],
+    marginLeftPoints: margins[3],
+  };
+}
+
+function collectDefaultPageRules(
+  rules: CSSRuleList,
+  view: Window,
+  cascade: PageCascade,
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+): boolean {
+  let found = false;
+  for (const rule of [...rules]) {
+    if (rule.type === CSS_PAGE_RULE && "style" in rule) {
+      const pageRule = rule as CSSPageRule;
+      const selector = pageRule.selectorText.trim();
+      if (selector) {
+        reportUnsupportedPageValue("@page selector", selector, options, diagnostics);
+        continue;
+      }
+      found = true;
+      const pageStyle = pageRule.style as unknown as CSSStyleDeclaration;
+      cascadePageDeclaration(cascade, pageStyle, "size");
+      cascadePageDeclaration(cascade, pageStyle, "margin-top");
+      cascadePageDeclaration(cascade, pageStyle, "margin-right");
+      cascadePageDeclaration(cascade, pageStyle, "margin-bottom");
+      cascadePageDeclaration(cascade, pageStyle, "margin-left");
+      if ("cssRules" in pageRule && (pageRule as CSSPageRule & { cssRules?: CSSRuleList }).cssRules?.length) {
+        reportUnsupportedPageValue("@page margin boxes", "nested margin at-rules", options, diagnostics);
+      }
+      continue;
+    }
+    if (!("cssRules" in rule) || !(rule as CSSGroupingRule).cssRules) continue;
+    if (rule.type === CSS_MEDIA_RULE && "conditionText" in rule && !view.matchMedia(String(rule.conditionText)).matches) continue;
+    if (rule.type === CSS_SUPPORTS_RULE && "conditionText" in rule && !CSS.supports(String(rule.conditionText))) continue;
+    found = collectDefaultPageRules((rule as CSSGroupingRule).cssRules, view, cascade, options, diagnostics) || found;
+  }
+  return found;
+}
+
+function cascadePageDeclaration(cascade: PageCascade, style: CSSStyleDeclaration, property: keyof PageCascade): void {
+  const value = style.getPropertyValue(property).trim();
+  if (!value) return;
+  const important = style.getPropertyPriority(property) === "important";
+  const previous = cascade[property];
+  if (previous?.important && !important) return;
+  cascade[property] = { value, important };
+}
+
+function parseCssPageSize(raw: string): [number, number] | null {
+  const tokens = raw.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let orientation: "auto" | "portrait" | "landscape" = "auto";
+  const dimensions: string[] = [];
+  for (const token of tokens) {
+    if (token === "portrait" || token === "landscape") {
+      orientation = token;
+      continue;
+    }
+    if (token !== "auto") dimensions.push(token);
+  }
+  let size: [number, number];
+  if (dimensions.length === 0) {
+    size = [...DEFAULT_PAGE_SIZE_POINTS];
+  } else if (dimensions.length === 1 && CSS_PAGE_SIZES_POINTS[dimensions[0]!]) {
+    size = [...CSS_PAGE_SIZES_POINTS[dimensions[0]!]!];
+  } else if (dimensions.length === 1) {
+    const edge = parseCssPageLength(dimensions[0]!, false);
+    if (edge === null || edge <= 0) return null;
+    size = [edge, edge];
+  } else if (dimensions.length === 2) {
+    const width = parseCssPageLength(dimensions[0]!, false);
+    const height = parseCssPageLength(dimensions[1]!, false);
+    if (width === null || height === null || width <= 0 || height <= 0) return null;
+    size = [width, height];
+  } else {
+    return null;
+  }
+  if (orientation === "landscape" && size[0] < size[1]) [size[0], size[1]] = [size[1], size[0]];
+  if (orientation === "portrait" && size[0] > size[1]) [size[0], size[1]] = [size[1], size[0]];
+  return size;
+}
+
+function parseCssPageLength(raw: string, allowNegative: boolean): number | null {
+  const value = raw.trim().toLowerCase();
+  if (value === "auto" || value === "0") return 0;
+  const match = value.match(/^([+-]?(?:\d+\.?\d*|\.\d+))(px|pt|pc|in|cm|mm|q)$/);
+  if (!match) return null;
+  const number = Number.parseFloat(match[1]!);
+  if (!Number.isFinite(number) || (!allowNegative && number <= 0)) return null;
+  const scale = {
+    px: 0.75,
+    pt: 1,
+    pc: 12,
+    in: 72,
+    cm: 72 / 2.54,
+    mm: 72 / 25.4,
+    q: 72 / 101.6,
+  }[match[2]!]!;
+  return number * scale;
+}
+
+function reportUnsupportedPageValue(property: string, value: string, options: SnapshotOptions, diagnostics: Diagnostic[]): void {
+  const policy = options.unsupportedCss ?? (options.strict || options.cssProfile === "strict" ? "error" : "warn");
+  if (policy === "error") throw new UnsupportedCssError(`${property}:${value} is outside the supported paged-media profile`);
+  if (policy === "ignore") return;
+  if (diagnostics.some((diagnostic) => diagnostic.code === "UNSUPPORTED_PAGED_MEDIA" && diagnostic.property === property)) return;
+  diagnostics.push({
+    code: "UNSUPPORTED_PAGED_MEDIA",
+    severity: "warning",
+    message: `Unsupported paged-media value was ignored: ${property}: ${value}`,
+    property,
+    phase: "fragmentation",
   });
 }
 
@@ -349,7 +520,7 @@ function synchronizeEnvironmentState(original: Element, clone: Element): void {
   }
 }
 
-async function snapshotElement(element: Element, options: SnapshotOptions): Promise<{ clone: Element; diagnostics: Diagnostic[] }> {
+async function snapshotElement(element: Element, options: SnapshotOptions): Promise<{ clone: Element; diagnostics: Diagnostic[]; page?: NormalizedPage }> {
   const diagnostics: Diagnostic[] = [];
   const counters = CounterState.forSnapshotRoot(element, options.includeShadowDom === true);
   const clone = cloneSnapshotElement(element, options, diagnostics, true, counters);
@@ -363,7 +534,8 @@ async function snapshotElement(element: Element, options: SnapshotOptions): Prom
   inspectAuthoredCss(clone, options, diagnostics);
   await materializeBackgroundImages(clone, options, diagnostics);
   await materializeImages(clone, options, diagnostics);
-  return { clone, diagnostics };
+  const page = readDefaultPageStyle(element.ownerDocument, options, diagnostics);
+  return { clone, diagnostics, ...(page ? { page } : {}) };
 }
 
 async function snapshotHtmlString(source: string, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -400,7 +572,11 @@ async function snapshotHtmlString(source: string, options: SnapshotOptions): Pro
     await waitForStyleResolution(body.ownerDocument.defaultView);
     forceRequestedMedia(body.ownerDocument, options.mediaType ?? "screen", viewport);
     const snapshot = await snapshotElement(body, options);
-    return { html: snapshot.clone.innerHTML, diagnostics: [...diagnostics, ...snapshot.diagnostics] };
+    return {
+      html: snapshot.clone.innerHTML,
+      diagnostics: [...diagnostics, ...snapshot.diagnostics],
+      ...(snapshot.page ? { page: snapshot.page } : {}),
+    };
   } finally {
     iframe.remove();
   }
@@ -1549,7 +1725,7 @@ function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnost
   const elements = [...root.querySelectorAll("[style],style")];
   if (root instanceof Element && (root.hasAttribute("style") || root.localName === "style")) elements.unshift(root);
   for (const element of elements) {
-    const css = element.localName === "style" ? element.textContent ?? "" : element.getAttribute("style") ?? "";
+    const css = element.localName === "style" ? stripPageRuleBlocks(element.textContent ?? "") : element.getAttribute("style") ?? "";
     for (const match of css.matchAll(/(?:^|[;{])\s*([\w-]+)\s*:\s*([^;}]+)/g)) {
       const property = match[1]?.toLowerCase();
       const value = (match[2]?.trim().toLowerCase() ?? "").replace(/\s*!important\s*$/, "");
@@ -1562,6 +1738,47 @@ function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnost
       reportUnsupportedCss(property, options, diagnostics);
     }
   }
+}
+
+function stripPageRuleBlocks(css: string): string {
+  const lower = css.toLowerCase();
+  let output = "";
+  let cursor = 0;
+  while (cursor < css.length) {
+    const start = lower.indexOf("@page", cursor);
+    if (start < 0) return output + css.slice(cursor);
+    const boundary = lower[start + 5];
+    if (boundary && /[\w-]/.test(boundary)) {
+      output += css.slice(cursor, start + 5);
+      cursor = start + 5;
+      continue;
+    }
+    const open = css.indexOf("{", start + 5);
+    if (open < 0) return output + css.slice(cursor, start);
+    output += css.slice(cursor, start);
+    let depth = 1;
+    let quote = "";
+    let index = open + 1;
+    while (index < css.length && depth > 0) {
+      const character = css[index]!;
+      if (quote) {
+        if (character === "\\") index += 1;
+        else if (character === quote) quote = "";
+      } else if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === "/" && css[index + 1] === "*") {
+        const commentEnd = css.indexOf("*/", index + 2);
+        index = commentEnd < 0 ? css.length : commentEnd + 1;
+      } else if (character === "{") {
+        depth += 1;
+      } else if (character === "}") {
+        depth -= 1;
+      }
+      index += 1;
+    }
+    cursor = index;
+  }
+  return output;
 }
 
 function validateAuthoredLayout(property: string, value: string, options: SnapshotOptions): void {

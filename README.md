@@ -32,8 +32,8 @@ The browser package is published as `@imggion/html2realpdf`.
   shadings, and vector alpha-gradient bands;
 - multiple outer/inset box shadows, artifact-marked text shadows, and nested
   isolated PDF transparency groups for correct element-opacity compositing;
-- A4, Letter, landscape, custom page sizes, forced breaks, `break-inside`,
-  orphans, and widows;
+- A4, Letter, landscape, custom page sizes, default `@page` size/orientation and
+  margins, forced breaks, `break-inside`, orphans, and widows;
 - selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
 - HarfBuzz OpenType shaping, kerning, ligatures, and positioned RTL runs in the
   `web` and `strict` profiles while `document` remains byte-stable;
