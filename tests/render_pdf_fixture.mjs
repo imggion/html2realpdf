@@ -77,6 +77,20 @@ const html = `
         <a href="https://example.com/transformed-card" style="position: absolute; left: 295px; top: 42px; display: block; width: 110px; font-size: 10px; line-height: 13px; transform: skewX(-12deg); transform-origin: left top; color: #4c1d95">Real transformed link</a>
       </div>
     </section>
+    <section style="page-break-before: always; width: 560px; padding: 20px; border-radius: 24px; background: linear-gradient(125deg, #eff6ff 0%, #ede9fe 52%, #fdf2f8 100%); box-shadow: 0 14px 30px rgba(15, 23, 42, .28)">
+      <h2 style="margin-top: 0; color: #312e81; text-shadow: 2px 3px 5px rgba(49, 46, 129, .35)">Native backgrounds and effects</h2>
+      <div style="display: flex; gap: 14px">
+        <div style="width: 150px; height: 96px; padding: 12px; border-radius: 18px; background: radial-gradient(circle at 30% 25%, #ffffff 0%, #bfdbfe 42%, #2563eb 100%); box-shadow: 0 8px 18px rgba(37, 99, 235, .35)"><strong>Radial</strong><br>PDF shading</div>
+        <div style="width: 150px; height: 96px; padding: 12px; border-radius: 18px; background: conic-gradient(from 35deg at 50% 50%, #7c3aed 0deg, #db2777 120deg, #f59e0b 240deg, #7c3aed 360deg); color: white; box-shadow: inset 0 0 12px rgba(255,255,255,.55)"><strong>Conic</strong><br>mesh shading</div>
+        <div style="width: 150px; height: 96px; padding: 12px; border-radius: 18px; background: linear-gradient(90deg, rgba(14,165,233,0) 0%, rgba(14,165,233,.9) 100%); box-shadow: 0 8px 18px rgba(14, 165, 233, .3)"><strong>Alpha</strong><br>native bands</div>
+      </div>
+      <div style="position: relative; width: 420px; height: 92px; margin-top: 28px; opacity: .62; border-radius: 16px; background: #f8fafc; box-shadow: 0 10px 24px rgba(15,23,42,.24)">
+        <div style="position: absolute; left: 34px; top: 18px; width: 180px; height: 52px; border-radius: 12px; background: #ef4444"></div>
+        <div style="position: absolute; left: 128px; top: 18px; width: 180px; height: 52px; border-radius: 12px; background: #2563eb"></div>
+        <strong style="position: absolute; left: 326px; top: 30px; opacity: .7; color: #0f172a">isolated</strong>
+      </div>
+      <p style="margin-bottom: 0">Overlapping descendants are composited once through nested isolated PDF transparency groups.</p>
+    </section>
     <section style="page-break-before: always; display: grid; width: 600px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: 72px 110px; grid-template-areas: &quot;hero hero aside&quot; &quot;revenue users aside&quot;; gap: 14px; padding: 14px; background: #f8fafc">
       <div style="grid-area: hero; padding: 14px; background: #1e3a8a; color: white"><strong>Native CSS Grid dashboard</strong><br>Explicit named areas and flexible tracks</div>
       <div style="grid-area: revenue; padding: 14px; background: #dbeafe"><strong>Revenue</strong><br>EUR 128k</div>

@@ -624,6 +624,7 @@ pub fn Cursor(comptime State: type) type {
                 .text_decoration_style = style.text_decoration_style,
                 .text_decoration_color = if (style.text_decoration_color) |value| geometry.parseColor(value) else null,
                 .text_decoration_thickness = resolveTextDecorationThickness(style),
+                .text_shadow = style.text_shadow,
                 .link_url = link_url,
             });
             self.x += width;
@@ -696,6 +697,11 @@ pub fn Cursor(comptime State: type) type {
                 .inline_margin_bottom = if (modern) source.margin.bottom else 0,
                 .font_size = source.style.font_size,
                 .background = background,
+                .background_image = if (modern) source.style.background_image else "none",
+                .background_position = source.style.background_position,
+                .background_size = source.style.background_size,
+                .background_repeat = source.style.background_repeat,
+                .box_shadow = if (modern) source.style.box_shadow else "none",
                 .border = source.border,
                 .border_paint = types.borderPaint(source.style),
                 .border_radius = if (modern) source.style.border_radius else 0,

@@ -35,6 +35,9 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `border-radius` | Y | Y | Y | Y | Y | Y | Y | four independent length-percentage corners, elliptical slash syntax, overlap normalization, native PDF curves, and rounded overflow clipping |
 | `box-decoration-break` | Y | Y | Y | Y | Y | Y | Y | web/strict support `slice` and `clone` across page fragments; document preserves its legacy repeated-border behavior |
 | color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `currentColor`, and native PDF alpha via ExtGState |
+| multiple `background-image` layers | Y | Y | Y | Y | Y | Y | Y | URL images plus linear, radial, and conic gradients; CSS list matching preserves front-to-back layer order |
+| `background-size` / `background-position` / `background-repeat` | Y | Y | Y | Y | Y | Y | Y | per-layer auto/length/percentage/cover/contain sizing, keyword or length-percentage placement, repeat/no-repeat/repeat-x/repeat-y tiling, and rounded border-box clipping |
+| `box-shadow` / `text-shadow` | Y | Y | Y | Y | Y | Y | Y | multiple outer/inset box shadows use native vector falloff paths; text shadows remain font-backed PDF artifacts and do not replace selectable source text |
 | font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | four Noto Sans Latin faces plus built-in Arabic/Hebrew fallbacks and registered TTF faces |
 | line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | web/strict use HarfBuzz OpenType shaping, kerning, ligatures, positioned clusters, and per-glyph fallback; document keeps its byte-stable identity shaper |
 | `word-spacing` | Y | Y | Y | Y | Y | Y | Y | U+0020 spacing is measured in layout and emitted with Type 0 font `TJ` adjustments |
@@ -57,7 +60,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; fixed fragments repeat at page-relative coordinates and sticky resolves as relative in paged media |
 | physical/logical inset | Y | Y | Y | Y | - | Y | Y | top/right/bottom/left plus block/inline logical forms; auto sizing, opposing-inset stretch, auto margins, and nearest positioned padding containing block |
 | `z-index` / stacking order | Y | Y | Y | Y | Y | Y | Y | negative, normal-flow, auto/zero, and positive positioned paint phases with atomic descendant traversal |
-| `opacity` | Y | Y | Y | Y | Y | Y | Y | cumulative element opacity is emitted as native PDF ExtGState alpha; isolated transparency groups remain pending |
+| `opacity` | Y | Y | Y | Y | Y | Y | Y | each opacity stacking context becomes a nested isolated PDF transparency Form XObject, so overlapping descendants are composited once |
 | `transform` / `transform-origin` | Y | Y | Y | Y | Y | Y | Y | web/strict matrix, translate, scale, rotate, and skew; length-percentage origins, cumulative descendant transforms, transformed clips and link bounds; native PDF `cm`, no 3D transforms |
 | `float` | Y | Y | Y | Y | Y | Y | Y | web/strict left and right exclusion bands with shrink-to-fit sizing; document rejects non-none |
 | `clear` | Y | Y | Y | Y | - | Y | Y | none, left, right, and both within the current block formatting context |
@@ -83,12 +86,11 @@ Playwright E2E make the matrix verifiable.
 
 ## Explicitly unsupported in the current profile
 
-- typed CSS image values and paint-server lists; isolated opacity groups and
-  blend/compositing modes remain pending;
+- blend/compositing modes beyond normal source-over remain pending;
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
 - Grid `subgrid`, masonry, and experimental features; full Appendix E painting
   nuances beyond the supported positioned stacking phases;
-- multiple backgrounds, gradients, shadows, filters, 3D transforms, and blend modes;
+- filters, 3D transforms, background origin/clip/attachment variants, and blend modes;
 - vertical `writing-mode` values; logical box properties currently map within horizontal-tb;
 - CSS `unicode-bidi` isolate/override modes and language-specific case tailoring beyond Unicode `SpecialCasing.txt`;
   Arabic and Hebrew have built-in shaped fallbacks, while emoji and other
@@ -96,9 +98,9 @@ Playwright E2E make the matrix verifiable.
   the package test suite registers a deterministic monochrome emoji fixture;
 - CSS Fragmentation fragmentainers, `@page`, named pages, and margin boxes.
 
-These features are not silently represented as screenshots. Canvas and SVG
-resources are captured as scoped image resources; normal text, links, borders,
-and fills remain native PDF content.
+These features are not silently represented as whole-page screenshots. Canvas
+and unsupported SVG subtrees remain scoped image resources; normal text, links,
+backgrounds, gradients, shadows, borders, and fills remain native PDF content.
 
 Unsupported declarations found by the Zig/native path are returned through the
 WASM result handle as owned structured diagnostics. Browser snapshots attach

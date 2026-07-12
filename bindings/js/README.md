@@ -96,7 +96,8 @@ model properties, A4/Letter/custom pages, pagination controls, links, JPEG,
 transparent PNG, per-corner elliptical rounded fills/borders and rounded
 overflow clipping, Noto Sans Latin/Arabic/Hebrew, and registered embeddable TTF
 fonts. The Web profile also supports Flexbox, Grid, floats, positioned layout,
-and native 2D transforms. Filters, shadows, 3D transforms, and arbitrary browser
+native 2D transforms, layered URL/gradient backgrounds, shadows, and isolated
+opacity groups. Filters, blend modes, 3D transforms, and arbitrary browser
 painting remain outside the current profile. Layout-critical unsupported CSS is
 rejected; cosmetic omissions are available through `pdf.diagnostics` and can
 be promoted to errors with `strict: true`.

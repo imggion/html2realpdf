@@ -18,6 +18,12 @@ pub const StrokeRoundedRect = paint.types.StrokeRoundedRect;
 pub const StrokeLine = paint.types.StrokeLine;
 pub const LinkAnnotation = paint.types.LinkAnnotation;
 pub const Image = paint.types.Image;
+pub const GradientStop = paint.types.GradientStop;
+pub const GradientStops = paint.types.GradientStops;
+pub const LinearGradient = paint.types.LinearGradient;
+pub const RadialGradient = paint.types.RadialGradient;
+pub const ConicGradient = paint.types.ConicGradient;
+pub const BoxShadow = paint.types.BoxShadow;
 pub const Command = paint.types.Command;
 pub const PageCommand = paint.types.PageCommand;
 pub const DisplayList = paint.types.DisplayList;
@@ -31,10 +37,13 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
     for (ordered) |paged| {
         const fragment = paged.fragment;
         const command_start = commands.items.len;
+        try paint.effects.appendOuterBoxShadows(allocator, &commands, paged.page_index, fragment);
         try paint.backgrounds.append(allocator, &commands, paged.page_index, fragment);
+        try paint.effects.appendInsetBoxShadows(allocator, &commands, paged.page_index, fragment);
         try paint.borders.append(allocator, &commands, paged.page_index, fragment);
 
         if (fragment.kind == .text) {
+            try paint.effects.appendTextShadows(allocator, &commands, paged.page_index, fragment);
             try commands.append(allocator, .{
                 .page_index = paged.page_index,
                 .command = .{ .text = .{
@@ -84,7 +93,8 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
             command.clip_rect = fragment.clip_rect;
             command.clip_radii = fragment.clip_radii;
             command.clip_transform = fragment.clip_transform;
-            command.opacity = fragment.opacity;
+            command.opacity = if (fragment.opacity_groups.len > 0) 1 else fragment.opacity;
+            command.opacity_groups = fragment.opacity_groups;
             command.transform = fragment.transform;
         }
     }

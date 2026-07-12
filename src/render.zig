@@ -36,6 +36,7 @@ pub const Error = error{
     UnsupportedFloatLayout,
     UnsupportedDisplayLayout,
     UnsupportedTransform,
+    UnsupportedPaintEffects,
     MissingGlyph,
 };
 
@@ -92,6 +93,10 @@ pub fn renderHtml(
         if (style.position != .static and options.css_profile == .document) return Error.UnsupportedPositionedLayout;
         if (style.float_direction != .none and options.css_profile == .document) return Error.UnsupportedFloatLayout;
         if (style.transform.len > 0 and options.css_profile == .document) return Error.UnsupportedTransform;
+        if (options.css_profile == .document and
+            (!std.ascii.eqlIgnoreCase(style.background_image, "none") or
+                !std.ascii.eqlIgnoreCase(style.box_shadow, "none") or
+                !std.ascii.eqlIgnoreCase(style.text_shadow, "none"))) return Error.UnsupportedPaintEffects;
     }
     var tree = try box.Builder.build(arena, &document, styles, document.root);
     defer tree.deinit(arena);
@@ -189,6 +194,10 @@ test "reject positioned and floating layout instead of silently misrendering" {
         renderHtml(allocator, "<div style=\"transform:translateX(10px)\">no</div>", .{}),
     );
     try std.testing.expectError(
+        Error.UnsupportedPaintEffects,
+        renderHtml(allocator, "<div style=\"background-image:linear-gradient(red,blue)\">no</div>", .{}),
+    );
+    try std.testing.expectError(
         Error.MissingGlyph,
         renderHtml(allocator, "<p>Unsupported emoji 😀</p>", .{}),
     );
@@ -217,6 +226,42 @@ test "render Web 2D transforms as native PDF matrices" {
     try std.testing.expect(std.mem.startsWith(u8, result.bytes, "%PDF-1.7"));
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Link") != null);
+}
+
+test "render Web gradient backgrounds as native PDF shadings" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<div style='width:240px;height:100px;border-radius:12px;background:linear-gradient(120deg,#2563eb 0%,#7c3aed 55%,#db2777 100%) no-repeat'>gradient</div>",
+        .{ .css_profile = .web },
+    );
+    defer result.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/ShadingType 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
+}
+
+test "render Web PNG data URL backgrounds as scoped image objects" {
+    const allocator = std.testing.allocator;
+    const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X1y8WQAAAABJRU5ErkJggg==";
+    const source = try std.fmt.allocPrint(allocator, "<div style=\"width:120px;height:70px;background-image:url('{s}');background-size:20px 20px;background-repeat:space round\"></div>", .{png});
+    defer allocator.free(source);
+    var result = try renderHtml(allocator, source, .{ .css_profile = .web });
+    defer result.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") != null);
+}
+
+test "render Web shadows and nested opacity as native PDF effects" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<div style='width:220px;height:90px;opacity:.65;border-radius:14px;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,.35),inset 0 0 6px #2563eb'>" ++
+            "<strong style='opacity:.7;text-shadow:2px 3px 4px rgba(0,0,0,.45)'>native effects</strong></div>",
+        .{ .css_profile = .web },
+    );
+    defer result.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Group << /S /Transparency /I true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Artifact BMC") == null); // compressed page/form content
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
 }
 
 test "render Web floats and clear as native PDF content" {

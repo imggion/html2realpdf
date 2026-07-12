@@ -451,6 +451,22 @@ pub const TransformOperation = union(enum) {
     skew: struct { x: f32 = 0, y: f32 = 0 },
 };
 
+pub const OpacityGroupPath = struct {
+    ids: [32]BoxId = @splat(0),
+    values: [32]f32 = @splat(1),
+    len: u8 = 0,
+
+    pub fn append(self: *@This(), id: BoxId, opacity: f32) void {
+        if (self.len < self.ids.len) {
+            self.ids[self.len] = id;
+            self.values[self.len] = opacity;
+            self.len += 1;
+        } else {
+            self.values[self.values.len - 1] *= opacity;
+        }
+    }
+};
+
 pub fn resolveTransform(operations: []const TransformOperation, width: f32, height: f32) geometry.AffineTransform {
     var result = geometry.AffineTransform.identity;
     for (operations) |operation| {
@@ -809,6 +825,12 @@ pub const Style = struct {
     font_style: FontStyle = .normal,
     color: []const u8 = "black",
     background: ?[]const u8 = null,
+    background_image: []const u8 = "none",
+    background_position: []const u8 = "0% 0%",
+    background_size: []const u8 = "auto",
+    background_repeat: []const u8 = "repeat",
+    box_shadow: []const u8 = "none",
+    text_shadow: []const u8 = "none",
 
     width: Length = .auto,
     height: Length = .auto,
@@ -1115,6 +1137,11 @@ const BuildState = struct {
         style.float_direction = .none;
         style.clear_direction = .none;
         style.background = null;
+        style.background_image = "none";
+        style.background_position = "0% 0%";
+        style.background_size = "auto";
+        style.background_repeat = "repeat";
+        style.box_shadow = "none";
         style.width = .auto;
         style.height = .auto;
         style.min_width = .auto;
@@ -1441,6 +1468,11 @@ fn anonymousStyle(parent: Style) Style {
     style.float_direction = .none;
     style.clear_direction = .none;
     style.background = null;
+    style.background_image = "none";
+    style.background_position = "0% 0%";
+    style.background_size = "auto";
+    style.background_repeat = "repeat";
+    style.box_shadow = "none";
     style.width = .auto;
     style.height = .auto;
     style.min_width = .auto;

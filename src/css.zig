@@ -1106,6 +1106,21 @@ test "cascade: 2D transforms retain typed operations percentages and origin" {
     try std.testing.expectEqual(@as(usize, 0), ct.styles[span_id].transform.len);
 }
 
+test "cascade: background shorthand expands native image layers and paint controls" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='background:linear-gradient(90deg, red, blue) 25% 75% / 40px 50% no-repeat, #123456 radial-gradient(circle, white, black) center / cover repeat-x;box-shadow:2px 3px 4px #000;text-shadow:1px 1px red'>layers</div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const style = ct.styles[div_id];
+    try std.testing.expectEqualStrings("#123456", style.background.?);
+    try std.testing.expectEqualStrings("linear-gradient(90deg, red, blue), radial-gradient(circle, white, black)", style.background_image);
+    try std.testing.expectEqualStrings("25% 75%, center", style.background_position);
+    try std.testing.expectEqualStrings("40px 50%, cover", style.background_size);
+    try std.testing.expectEqualStrings("no-repeat, repeat-x", style.background_repeat);
+    try std.testing.expectEqualStrings("2px 3px 4px #000", style.box_shadow);
+    try std.testing.expectEqualStrings("1px 1px red", style.text_shadow);
+}
+
 test "cascade: text-decoration shorthand keeps line style color and thickness" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");

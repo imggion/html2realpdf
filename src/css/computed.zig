@@ -78,28 +78,29 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "align-content",           "align-items",               "align-self",                 "aspect-ratio",          "background-color",
-    "border-bottom-color",     "border-bottom-left-radius", "border-bottom-right-radius", "border-bottom-style",   "border-bottom-width",
-    "border-collapse",         "border-left-color",         "border-left-style",          "border-left-width",     "border-radius",
-    "border-right-color",      "border-right-style",        "border-right-width",         "border-top-color",      "border-top-left-radius",
-    "border-top-right-radius", "border-top-style",          "border-top-width",           "box-decoration-break",  "bottom",
-    "box-sizing",              "break-after",               "break-before",               "break-inside",          "caption-side",
-    "clear",                   "color",                     "column-gap",                 "direction",             "display",
-    "flex-basis",              "flex-direction",            "flex-grow",                  "flex-shrink",           "flex-wrap",
-    "float",                   "font-family",               "font-size",                  "font-style",            "font-weight",
-    "gap",                     "grid-auto-columns",         "grid-auto-flow",             "grid-auto-rows",        "grid-column-end",
-    "grid-column-start",       "grid-row-end",              "grid-row-start",             "grid-template-areas",   "grid-template-columns",
-    "grid-template-rows",      "height",                    "justify-content",            "justify-items",         "justify-self",
-    "left",                    "letter-spacing",            "line-height",                "list-style-position",   "list-style-type",
-    "margin-bottom",           "margin-left",               "margin-right",               "margin-top",            "max-height",
-    "max-width",               "min-height",                "min-width",                  "object-fit",            "object-position",
-    "opacity",                 "order",                     "orphans",                    "overflow",              "overflow-wrap",
-    "padding-bottom",          "padding-left",              "padding-right",              "padding-top",           "page-break-after",
-    "page-break-before",       "page-break-inside",         "position",                   "right",                 "row-gap",
-    "text-align",              "text-decoration-color",     "text-decoration-line",       "text-decoration-style", "text-decoration-thickness",
-    "text-indent",             "text-overflow",             "text-transform",             "top",                   "transform",
-    "transform-origin",        "vertical-align",            "white-space",                "widows",                "width",
-    "word-break",              "word-spacing",              "z-index",
+    "align-content",             "align-items",                "align-self",           "aspect-ratio",           "background-color",
+    "background-image",          "background-position",        "background-repeat",    "background-size",        "border-bottom-color",
+    "border-bottom-left-radius", "border-bottom-right-radius", "border-bottom-style",  "border-bottom-width",    "border-collapse",
+    "border-left-color",         "border-left-style",          "border-left-width",    "border-radius",          "border-right-color",
+    "border-right-style",        "border-right-width",         "border-top-color",     "border-top-left-radius", "border-top-right-radius",
+    "border-top-style",          "border-top-width",           "box-decoration-break", "box-shadow",             "box-sizing",
+    "bottom",                    "break-after",                "break-before",         "break-inside",           "caption-side",
+    "clear",                     "color",                      "column-gap",           "direction",              "display",
+    "flex-basis",                "flex-direction",             "flex-grow",            "flex-shrink",            "flex-wrap",
+    "float",                     "font-family",                "font-size",            "font-style",             "font-weight",
+    "gap",                       "grid-auto-columns",          "grid-auto-flow",       "grid-auto-rows",         "grid-column-end",
+    "grid-column-start",         "grid-row-end",               "grid-row-start",       "grid-template-areas",    "grid-template-columns",
+    "grid-template-rows",        "height",                     "justify-content",      "justify-items",          "justify-self",
+    "left",                      "letter-spacing",             "line-height",          "list-style-position",    "list-style-type",
+    "margin-bottom",             "margin-left",                "margin-right",         "margin-top",             "max-height",
+    "max-width",                 "min-height",                 "min-width",            "object-fit",             "object-position",
+    "opacity",                   "order",                      "orphans",              "overflow",               "overflow-wrap",
+    "padding-bottom",            "padding-left",               "padding-right",        "padding-top",            "page-break-after",
+    "page-break-before",         "page-break-inside",          "position",             "right",                  "row-gap",
+    "text-align",                "text-decoration-color",      "text-decoration-line", "text-decoration-style",  "text-decoration-thickness",
+    "text-indent",               "text-overflow",              "text-shadow",          "text-transform",         "top",
+    "transform",                 "transform-origin",           "vertical-align",       "white-space",            "widows",
+    "width",                     "word-break",                 "word-spacing",         "z-index",
 };
 
 const logical_properties = [_][]const u8{
@@ -265,7 +266,19 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
         else
             value;
     } else if (eqlProp(name, "background-color")) {
-        style.background = if (eqlProp(normalized, "currentColor")) style.color else value;
+        style.background = if (eqlProp(normalized, "currentColor")) style.color else try context.allocator.dupe(u8, normalized);
+    } else if (eqlProp(name, "background-image")) {
+        style.background_image = try context.allocator.dupe(u8, normalized);
+    } else if (eqlProp(name, "background-position")) {
+        style.background_position = try context.allocator.dupe(u8, normalized);
+    } else if (eqlProp(name, "background-size")) {
+        style.background_size = try context.allocator.dupe(u8, normalized);
+    } else if (eqlProp(name, "background-repeat")) {
+        style.background_repeat = try context.allocator.dupe(u8, normalized);
+    } else if (eqlProp(name, "box-shadow")) {
+        style.box_shadow = try context.allocator.dupe(u8, normalized);
+    } else if (eqlProp(name, "text-shadow")) {
+        style.text_shadow = try context.allocator.dupe(u8, normalized);
     } else if (eqlProp(name, "width")) {
         if (try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(style.font_size))) |w| style.width = w;
     } else if (eqlProp(name, "height")) {
@@ -766,6 +779,30 @@ fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) 
     }
     if (eqlProp(name, "transform-origin")) {
         target.transform_origin = source.transform_origin;
+        return;
+    }
+    if (eqlProp(name, "background-image")) {
+        target.background_image = source.background_image;
+        return;
+    }
+    if (eqlProp(name, "background-position")) {
+        target.background_position = source.background_position;
+        return;
+    }
+    if (eqlProp(name, "background-size")) {
+        target.background_size = source.background_size;
+        return;
+    }
+    if (eqlProp(name, "background-repeat")) {
+        target.background_repeat = source.background_repeat;
+        return;
+    }
+    if (eqlProp(name, "box-shadow")) {
+        target.box_shadow = source.box_shadow;
+        return;
+    }
+    if (eqlProp(name, "text-shadow")) {
+        target.text_shadow = source.text_shadow;
         return;
     }
     if (eqlProp(name, "flex-direction")) {

@@ -20,6 +20,7 @@ pub const TextRun = struct {
     font_weight: box.FontWeight = .normal,
     font_style: box.FontStyle = .normal,
     color: geometry.Color,
+    artifact: bool = false,
 };
 
 pub const FillRect = struct {
@@ -63,6 +64,58 @@ pub const Image = struct {
     intrinsic_height: ?f32 = null,
     object_fit: box.ObjectFit = .fill,
     object_position: box.ObjectPosition = .{},
+    paint_clip: ?geometry.Rect = null,
+    paint_clip_radii: box.ResolvedBorderRadii = .{},
+};
+
+pub const GradientStop = struct {
+    offset: f32,
+    color: geometry.Color,
+};
+
+pub const GradientStops = struct {
+    values: [16]GradientStop = @splat(.{ .offset = 0, .color = geometry.Color.transparent }),
+    len: u8 = 0,
+
+    pub fn slice(self: *const GradientStops) []const GradientStop {
+        return self.values[0..self.len];
+    }
+};
+
+pub const LinearGradient = struct {
+    paint_rect: geometry.Rect,
+    paint_radii: box.ResolvedBorderRadii = .{},
+    start: geometry.Point,
+    end: geometry.Point,
+    stops: GradientStops,
+};
+
+pub const RadialGradient = struct {
+    paint_rect: geometry.Rect,
+    paint_radii: box.ResolvedBorderRadii = .{},
+    center: geometry.Point,
+    radius_x: f32,
+    radius_y: f32,
+    stops: GradientStops,
+};
+
+pub const ConicGradient = struct {
+    paint_rect: geometry.Rect,
+    paint_radii: box.ResolvedBorderRadii = .{},
+    center: geometry.Point,
+    start_angle: f32,
+    stops: GradientStops,
+};
+
+pub const BoxShadow = struct {
+    rect: geometry.Rect,
+    radii: box.ResolvedBorderRadii = .{},
+    offset_x: f32,
+    offset_y: f32,
+    blur: f32 = 0,
+    spread: f32 = 0,
+    color: geometry.Color,
+    inset: bool = false,
 };
 
 pub const Command = union(enum) {
@@ -73,6 +126,10 @@ pub const Command = union(enum) {
     text: TextRun,
     link: LinkAnnotation,
     image: Image,
+    linear_gradient: LinearGradient,
+    radial_gradient: RadialGradient,
+    conic_gradient: ConicGradient,
+    box_shadow: BoxShadow,
 };
 
 pub const PageCommand = struct {
@@ -82,6 +139,7 @@ pub const PageCommand = struct {
     clip_radii: ?box.ResolvedBorderRadii = null,
     clip_transform: geometry.AffineTransform = .identity,
     opacity: f32 = 1,
+    opacity_groups: box.OpacityGroupPath = .{},
     transform: geometry.AffineTransform = .identity,
 };
 

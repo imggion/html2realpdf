@@ -1,6 +1,7 @@
 //! Expansion of supported CSS shorthands before computed-value application.
 
 const std = @import("std");
+const geometry = @import("../geometry.zig");
 const syntax = @import("syntax.zig");
 const values = @import("values.zig");
 
@@ -51,10 +52,13 @@ pub fn expand(
     if (values.eqlProp(name, "border-inline-end")) return try expandLogicalBorder(allocator, "inline-end", false, value, important);
     if (values.eqlProp(name, "border-block")) return try expandLogicalBorder(allocator, "block", true, value, important);
     if (values.eqlProp(name, "border-inline")) return try expandLogicalBorder(allocator, "inline", true, value, important);
-    if (values.eqlProp(name, "background")) return try single(allocator, "background-color", value, important);
+    if (values.eqlProp(name, "background")) return try expandBackground(allocator, value, important);
     if (values.eqlProp(name, "flex")) return try expandFlex(allocator, value, important);
     if (values.eqlProp(name, "flex-flow")) return try expandFlexFlow(allocator, value, important);
     if (values.eqlProp(name, "gap")) return try expandGap(allocator, value, important);
+    if (values.eqlProp(name, "place-content")) return try expandPlace(allocator, "content", value, important);
+    if (values.eqlProp(name, "place-items")) return try expandPlace(allocator, "items", value, important);
+    if (values.eqlProp(name, "place-self")) return try expandPlace(allocator, "self", value, important);
     if (values.eqlProp(name, "inset")) return try expandInset(allocator, value, important);
     if (values.eqlProp(name, "inset-block")) return try expandLogicalPair(allocator, "inset-block", null, value, important);
     if (values.eqlProp(name, "inset-inline")) return try expandLogicalPair(allocator, "inset-inline", null, value, important);
@@ -91,6 +95,128 @@ fn expandBorderRadius(allocator: std.mem.Allocator, value: []const u8, important
         .important = important,
     };
     return .{ .declarations = declarations, .owns_names = false, .owns_values = true };
+}
+
+fn expandBackground(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
+    const names = [_][]const u8{
+        "background-color",
+        "background-image",
+        "background-position",
+        "background-size",
+        "background-repeat",
+    };
+    const normalized = std.mem.trim(u8, value, " \t\n\r\x0C");
+    const declarations = try allocator.alloc(Declaration, names.len);
+    if (isCssWideKeyword(normalized)) {
+        for (names, 0..) |name, index| declarations[index] = .{
+            .name = name,
+            .value = try allocator.dupe(u8, normalized),
+            .important = important,
+        };
+        return .{ .declarations = declarations, .owns_names = false, .owns_values = true };
+    }
+
+    const layers = splitCommaComponents(normalized);
+    if (layers.len == 0) {
+        allocator.free(declarations);
+        return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+    }
+
+    var images = std.Io.Writer.Allocating.init(allocator);
+    errdefer images.deinit();
+    var positions = std.Io.Writer.Allocating.init(allocator);
+    errdefer positions.deinit();
+    var sizes = std.Io.Writer.Allocating.init(allocator);
+    errdefer sizes.deinit();
+    var repeats = std.Io.Writer.Allocating.init(allocator);
+    errdefer repeats.deinit();
+    var color: []const u8 = "transparent";
+
+    for (layers.slice(), 0..) |layer, layer_index| {
+        const axes = splitSlashComponents(layer);
+        if (axes.len == 0 or axes.len > 2) continue;
+        const before = splitComponents(axes.items[0]);
+        const after = if (axes.len == 2) splitComponents(axes.items[1]) else Components{};
+        var image: []const u8 = "none";
+        var position_components = Components{};
+        var size_components = Components{};
+        var repeat_components = Components{};
+
+        for (before.slice()) |component| {
+            if (isBackgroundImage(component)) {
+                image = component;
+            } else if (isBackgroundRepeat(component)) {
+                appendComponent(&repeat_components, component);
+            } else if (isBackgroundColor(component) and layer_index + 1 == layers.len) {
+                color = component;
+            } else {
+                appendComponent(&position_components, component);
+            }
+        }
+        for (after.slice()) |component| {
+            if (isBackgroundRepeat(component)) appendComponent(&repeat_components, component) else appendComponent(&size_components, component);
+        }
+
+        if (layer_index > 0) {
+            try images.writer.writeAll(", ");
+            try positions.writer.writeAll(", ");
+            try sizes.writer.writeAll(", ");
+            try repeats.writer.writeAll(", ");
+        }
+        try images.writer.writeAll(image);
+        try writeComponents(&positions.writer, if (position_components.len > 0) position_components else componentsOf("0%", "0%"));
+        try writeComponents(&sizes.writer, if (size_components.len > 0) size_components else componentsOf("auto", ""));
+        try writeComponents(&repeats.writer, if (repeat_components.len > 0) repeat_components else componentsOf("repeat", ""));
+    }
+
+    const owned_values = [_][]u8{
+        try allocator.dupe(u8, color),
+        try images.toOwnedSlice(),
+        try positions.toOwnedSlice(),
+        try sizes.toOwnedSlice(),
+        try repeats.toOwnedSlice(),
+    };
+    for (names, owned_values, 0..) |name, owned, index| declarations[index] = .{
+        .name = name,
+        .value = owned,
+        .important = important,
+    };
+    return .{ .declarations = declarations, .owns_names = false, .owns_values = true };
+}
+
+fn isBackgroundImage(component: []const u8) bool {
+    return values.eqlProp(component, "none") or std.mem.indexOf(u8, component, "gradient(") != null or
+        std.ascii.startsWithIgnoreCase(component, "url(");
+}
+
+fn isBackgroundRepeat(component: []const u8) bool {
+    return values.eqlProp(component, "repeat") or values.eqlProp(component, "no-repeat") or
+        values.eqlProp(component, "repeat-x") or values.eqlProp(component, "repeat-y") or
+        values.eqlProp(component, "space") or values.eqlProp(component, "round");
+}
+
+fn isBackgroundColor(component: []const u8) bool {
+    return values.eqlProp(component, "currentColor") or geometry.parseColor(component) != null;
+}
+
+fn appendComponent(components: *Components, value: []const u8) void {
+    if (components.len == components.items.len) return;
+    components.items[components.len] = value;
+    components.len += 1;
+}
+
+fn componentsOf(first: []const u8, second: []const u8) Components {
+    var result = Components{};
+    appendComponent(&result, first);
+    if (second.len > 0) appendComponent(&result, second);
+    return result;
+}
+
+fn writeComponents(writer: *std.Io.Writer, components: Components) !void {
+    for (components.slice(), 0..) |component, index| {
+        if (index > 0) try writer.writeByte(' ');
+        try writer.writeAll(component);
+    }
 }
 
 fn expandRadiusQuad(components: Components) [4][]const u8 {
@@ -242,6 +368,23 @@ fn expandGap(allocator: std.mem.Allocator, value: []const u8, important: bool) !
     declarations[0] = .{ .name = "row-gap", .value = row, .important = important };
     declarations[1] = .{ .name = "column-gap", .value = column, .important = important };
     return .{ .declarations = declarations, .owns_names = false };
+}
+
+fn expandPlace(allocator: std.mem.Allocator, suffix: []const u8, value: []const u8, important: bool) !Expansion {
+    const components = splitComponents(value);
+    if (components.len == 0 or components.len > 2) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = true };
+    const declarations = try allocator.alloc(Declaration, 2);
+    declarations[0] = .{
+        .name = try std.fmt.allocPrint(allocator, "align-{s}", .{suffix}),
+        .value = components.items[0],
+        .important = important,
+    };
+    declarations[1] = .{
+        .name = try std.fmt.allocPrint(allocator, "justify-{s}", .{suffix}),
+        .value = if (components.len == 2) components.items[1] else components.items[0],
+        .important = important,
+    };
+    return .{ .declarations = declarations, .owns_names = true };
 }
 
 fn expandListStyle(
@@ -497,13 +640,44 @@ fn isBorderWidth(value: []const u8) bool {
 }
 
 const Components = struct {
-    items: [8][]const u8 = @splat(""),
+    items: [16][]const u8 = @splat(""),
     len: usize = 0,
 
     fn slice(self: *const Components) []const []const u8 {
         return self.items[0..self.len];
     }
 };
+
+fn splitCommaComponents(value: []const u8) Components {
+    var result = Components{};
+    var start: usize = 0;
+    var index: usize = 0;
+    var depth: usize = 0;
+    var quote: ?u8 = null;
+    while (index <= value.len) : (index += 1) {
+        const at_end = index == value.len;
+        const byte = if (at_end) 0 else value[index];
+        if (!at_end and quote != null) {
+            if (byte == '\\' and index + 1 < value.len) index += 1 else if (byte == quote.?) quote = null;
+            continue;
+        }
+        if (!at_end and (byte == '"' or byte == '\'')) {
+            quote = byte;
+        } else if (!at_end and (byte == '(' or byte == '[' or byte == '{')) {
+            depth += 1;
+        } else if (!at_end and (byte == ')' or byte == ']' or byte == '}')) {
+            depth -|= 1;
+        } else if (at_end or (depth == 0 and byte == ',')) {
+            if (result.len == result.items.len) break;
+            const component = std.mem.trim(u8, value[start..index], " \t\n\r\x0C");
+            if (component.len == 0) return .{};
+            result.items[result.len] = component;
+            result.len += 1;
+            start = index + 1;
+        }
+    }
+    return result;
+}
 
 fn splitSlashComponents(value: []const u8) Components {
     var result = Components{};
@@ -659,6 +833,16 @@ test "expand flex flow sizing and gap shorthands" {
     defer gap.deinit(allocator);
     try std.testing.expectEqualStrings("8px", gap.declarations[0].value);
     try std.testing.expectEqualStrings("12px", gap.declarations[1].value);
+}
+
+test "expand place alignment shorthands" {
+    const allocator = std.testing.allocator;
+    const content = (try expand(allocator, "place-content", "center space-between", false)).?;
+    defer content.deinit(allocator);
+    try std.testing.expectEqualStrings("align-content", content.declarations[0].name);
+    try std.testing.expectEqualStrings("center", content.declarations[0].value);
+    try std.testing.expectEqualStrings("justify-content", content.declarations[1].name);
+    try std.testing.expectEqualStrings("space-between", content.declarations[1].value);
 }
 
 test "expand physical and logical inset shorthands" {

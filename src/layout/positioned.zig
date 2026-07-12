@@ -130,16 +130,20 @@ pub fn assignPaintMetadata(state: anytype) !void {
     defer state.allocator.free(orders);
     const opacity = try state.allocator.alloc(f32, count);
     defer state.allocator.free(opacity);
+    const opacity_groups = try state.allocator.alloc(box.OpacityGroupPath, count);
+    defer state.allocator.free(opacity_groups);
     const transforms = try state.allocator.alloc(geometry.AffineTransform, count);
     defer state.allocator.free(transforms);
     @memset(orders, 0);
     @memset(opacity, 1);
+    @memset(opacity_groups, box.OpacityGroupPath{});
     @memset(transforms, geometry.AffineTransform.identity);
     var next_order: usize = 0;
-    try assignBoxMetadata(state, state.tree.root, 1, geometry.AffineTransform.identity, orders, opacity, transforms, &next_order);
+    try assignBoxMetadata(state, state.tree.root, 1, .{}, geometry.AffineTransform.identity, orders, opacity, opacity_groups, transforms, &next_order);
     for (state.fragments.items) |*fragment| {
         fragment.paint_order = orders[fragment.source_box];
         fragment.opacity = opacity[fragment.source_box];
+        fragment.opacity_groups = opacity_groups[fragment.source_box];
         fragment.transform = transforms[fragment.source_box];
         if (fragment.clip_rect != null) {
             if (nearestClippingAncestor(state, fragment.source_box)) |ancestor_id| fragment.clip_transform = transforms[ancestor_id];
@@ -171,9 +175,11 @@ fn assignBoxMetadata(
     state: anytype,
     box_id: box.BoxId,
     parent_opacity: f32,
+    parent_opacity_groups: box.OpacityGroupPath,
     parent_transform: geometry.AffineTransform,
     orders: []usize,
     opacity: []f32,
+    opacity_groups: []box.OpacityGroupPath,
     transforms: []geometry.AffineTransform,
     next_order: *usize,
 ) !void {
@@ -181,6 +187,8 @@ fn assignBoxMetadata(
     orders[box_id] = next_order.*;
     next_order.* += 1;
     opacity[box_id] = parent_opacity * source.style.opacity;
+    opacity_groups[box_id] = parent_opacity_groups;
+    if (source.style.opacity < 0.9999) opacity_groups[box_id].append(box_id, source.style.opacity);
     transforms[box_id] = parent_transform.multiply(resolveBoxTransform(state, box_id));
 
     var children = try std.ArrayList(Child).initCapacity(state.allocator, 0);
@@ -196,7 +204,7 @@ fn assignBoxMetadata(
         .flex_parent = source.style.display == .flex or source.style.display == .inlineFlex or source.style.display == .grid or source.style.display == .inlineGrid,
     }, childLessThan);
     for (children.items) |entry| {
-        try assignBoxMetadata(state, entry.box_id, opacity[box_id], transforms[box_id], orders, opacity, transforms, next_order);
+        try assignBoxMetadata(state, entry.box_id, opacity[box_id], opacity_groups[box_id], transforms[box_id], orders, opacity, opacity_groups, transforms, next_order);
     }
 }
 

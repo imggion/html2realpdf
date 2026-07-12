@@ -96,6 +96,11 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "border-bottom-right-radius",
   "border-bottom-left-radius",
   "background-color",
+  "background-image",
+  "background-position",
+  "background-size",
+  "background-repeat",
+  "box-shadow",
   "color",
   "direction",
   "font-family",
@@ -112,6 +117,7 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "overflow-wrap",
   "overflow",
   "text-overflow",
+  "text-shadow",
   "vertical-align",
   "text-decoration-line",
   "text-decoration-style",
@@ -165,6 +171,7 @@ const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   "page-break-inside", "list-style", "flex", "flex-flow", "gap", "inset", "inset-block", "inset-inline",
   "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end", "orphans", "widows",
   "grid", "grid-template", "grid-column", "grid-row", "grid-area",
+  "place-content", "place-items", "place-self",
 ]);
 
 export async function snapshotSource(source: HtmlSource, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -329,6 +336,7 @@ async function snapshotElement(element: Element, options: SnapshotOptions): Prom
 
   await materializeInlineSvgs(clone, options, diagnostics);
   inspectAuthoredCss(clone, options, diagnostics);
+  await materializeBackgroundImages(clone, options, diagnostics);
   await materializeImages(clone, options, diagnostics);
   return { clone, diagnostics };
 }
@@ -783,12 +791,13 @@ function materializeComputedStyle(
 
   if (!isSvgElement(original)) {
     const unsupportedComputed = [
-      ["background-image", computed.getPropertyValue("background-image"), "none"],
-      ["box-shadow", computed.getPropertyValue("box-shadow"), "none"],
-      ["filter", computed.getPropertyValue("filter"), "none"],
+      ["filter", computed.getPropertyValue("filter"), "none", false],
+      ["background-image", computed.getPropertyValue("background-image"), "none", true],
+      ["box-shadow", computed.getPropertyValue("box-shadow"), "none", true],
+      ["text-shadow", computed.getPropertyValue("text-shadow"), "none", true],
     ] as const;
-    for (const [property, value, initial] of unsupportedComputed) {
-      if (value && value !== initial && !/^0px(?: 0px){0,3}$/.test(value)) {
+    for (const [property, value, initial, webSupported] of unsupportedComputed) {
+      if (value && value !== initial && (!webSupported || !usesWebLayout(options)) && !/^0px(?: 0px){0,3}$/.test(value)) {
         reportUnsupportedCss(property, options, diagnostics);
       }
     }
@@ -1221,6 +1230,7 @@ async function materializeImages(
   diagnostics: Diagnostic[],
 ): Promise<void> {
   const images = [...root.querySelectorAll("img")];
+  if (root.nodeType === Node.ELEMENT_NODE && (root as Element).localName === "img") images.unshift(root as HTMLImageElement);
   for (const image of images) {
     const source = (image as HTMLImageElement).currentSrc || image.getAttribute("src") || "";
     if (!source || source.startsWith("data:image/jpeg") || source.startsWith("data:image/jpg") || source.startsWith("data:image/png")) continue;
@@ -1248,6 +1258,49 @@ async function materializeImages(
   }
 }
 
+async function materializeBackgroundImages(
+  root: ParentNode,
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+): Promise<void> {
+  const elements: Element[] = [...root.querySelectorAll<HTMLElement>("[style]")];
+  if (root.nodeType === Node.ELEMENT_NODE && (root as Element).hasAttribute("style")) elements.unshift(root as Element);
+  for (const element of elements) {
+    const backgroundImage = (element as HTMLElement).style.getPropertyValue("background-image");
+    if (!backgroundImage || backgroundImage === "none") continue;
+    let materialized = backgroundImage;
+    const matches = [...backgroundImage.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi)];
+    for (const match of matches) {
+      const source = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+      if (!source || /^data:image\/(?:jpeg|jpg|png);/i.test(source)) continue;
+      try {
+        const url = new URL(source, options.baseUrl ?? element.ownerDocument.baseURI);
+        const resolved = await options.resourceResolver?.({ kind: "image", url });
+        let dataUrl: string;
+        if (typeof resolved === "string" && /^data:image\/(?:jpeg|jpg|png);/i.test(resolved)) {
+          dataUrl = resolved;
+        } else {
+          const blob = resolved instanceof Blob ? resolved : await fetchImageBlob(
+            typeof resolved === "string" ? new URL(resolved, url) : url,
+          );
+          dataUrl = blob.type === "image/jpeg" ? await blobToDataUrl(blob) : await rasterizeBlobToPng(blob);
+        }
+        materialized = materialized.replace(match[0], `url("${dataUrl}")`);
+      } catch (error) {
+        if (options.resourcePolicy === "error") throw new ResourceLoadError(source, { cause: error });
+        materialized = materialized.replace(match[0], "none");
+        diagnostics.push({
+          code: "RESOURCE_OMITTED",
+          severity: "warning",
+          message: `Background image resource was omitted: ${source}`,
+          phase: "snapshot",
+        });
+      }
+    }
+    (element as HTMLElement).style.setProperty("background-image", materialized);
+  }
+}
+
 async function fetchImageBlob(url: URL): Promise<Blob> {
   const response = await fetch(url, { mode: "cors" });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1264,7 +1317,7 @@ function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnost
       const value = (match[2]?.trim().toLowerCase() ?? "").replace(/\s*!important\s*$/, "");
       if (!property || property.startsWith("--")) continue;
       validateAuthoredLayout(property, value, options);
-      if (property === "background" && /(?:url|(?:repeating-)?(?:linear|radial|conic)-gradient)\s*\(/.test(value)) {
+      if (property === "background" && !usesWebLayout(options) && /(?:url|(?:repeating-)?(?:linear|radial|conic)-gradient)\s*\(/.test(value)) {
         reportUnsupportedCss("background-image", options, diagnostics);
       }
       if (SUPPORTED_CSS_PROPERTIES.has(property)) continue;

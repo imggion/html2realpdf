@@ -173,6 +173,13 @@ const AlphaUsage = struct {
 
     fn collect(self: *AlphaUsage, allocator: std.mem.Allocator, list: *const display_list.DisplayList) !void {
         for (list.commands.items) |page_command| {
+            for (0..page_command.opacity_groups.len) |depth| try self.add(allocator, page_command.opacity_groups.values[depth]);
+            switch (page_command.command) {
+                .linear_gradient => |gradient| if (gradientHasVariableAlpha(gradient.stops)) try self.collectGradient(allocator, gradient.stops, page_command.opacity, 128),
+                .radial_gradient => |gradient| if (gradientHasVariableAlpha(gradient.stops)) try self.collectGradient(allocator, gradient.stops, page_command.opacity, 96),
+                .conic_gradient => |gradient| if (gradientHasVariableAlpha(gradient.stops)) try self.collectGradient(allocator, gradient.stops, page_command.opacity, 180),
+                else => {},
+            }
             const alpha: ?f32 = switch (page_command.command) {
                 .fill_rect => |command| command.color.alpha * page_command.opacity,
                 .fill_rounded_rect => |command| command.color.alpha * page_command.opacity,
@@ -180,10 +187,22 @@ const AlphaUsage = struct {
                 .stroke_line => |command| command.color.alpha * page_command.opacity,
                 .text => |command| command.color.alpha * page_command.opacity,
                 .image => page_command.opacity,
+                .linear_gradient => |command| uniformGradientAlpha(command.stops) * page_command.opacity,
+                .radial_gradient => |command| uniformGradientAlpha(command.stops) * page_command.opacity,
+                .conic_gradient => |command| uniformGradientAlpha(command.stops) * page_command.opacity,
+                .box_shadow => |command| boxShadowStepAlpha(command) * page_command.opacity,
                 .link => null,
             };
             if (alpha) |value| try self.add(allocator, value);
         }
+    }
+
+    fn collectGradient(self: *AlphaUsage, allocator: std.mem.Allocator, stops: display_list.GradientStops, opacity: f32, segments: usize) !void {
+        for (0..segments) |segment| {
+            const midpoint = (@as(f32, @floatFromInt(segment)) + 0.5) / @as(f32, @floatFromInt(segments));
+            try self.add(allocator, quantizeAlpha(gradientColorAt(stops, midpoint).alpha * opacity));
+        }
+        try self.add(allocator, quantizeAlpha(stops.values[stops.len - 1].color.alpha * opacity));
     }
 
     fn add(self: *AlphaUsage, allocator: std.mem.Allocator, raw: f32) !void {
@@ -204,6 +223,14 @@ const AlphaUsage = struct {
     }
 };
 
+const OpacityGroup = struct {
+    page_index: usize,
+    id: @import("box.zig").BoxId,
+    depth: usize,
+    path: @import("box.zig").OpacityGroupPath,
+    opacity: f32,
+};
+
 pub fn write(allocator: std.mem.Allocator, list: *const display_list.DisplayList) ![]u8 {
     return writeWithOptions(allocator, list, .{});
 }
@@ -217,6 +244,8 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     var alpha_usage = try AlphaUsage.init(allocator);
     defer alpha_usage.deinit(allocator);
     try alpha_usage.collect(allocator, list);
+    var opacity_groups = try collectOpacityGroups(allocator, list);
+    defer opacity_groups.deinit(allocator);
 
     const first_page_id = 3 + font_usage.fonts.items.len * font_object_span + font_usage.customMapCount();
     const page_object_count = first_page_id - 1 + list.page_count * 2;
@@ -224,7 +253,10 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     const first_annotation_id = page_object_count + 1;
     const image_count = countImages(list);
     const first_image_id = first_annotation_id + annotation_count;
-    const info_id = page_object_count + annotation_count + image_count * 2 + 1;
+    const gradient_count = countGradientShadings(list);
+    const first_gradient_id = first_image_id + image_count * 2;
+    const first_opacity_group_id = first_gradient_id + gradient_count;
+    const info_id = first_opacity_group_id + opacity_groups.items.len;
     const object_count = info_id;
     const offsets = try allocator.alloc(usize, object_count + 1);
     defer allocator.free(offsets);
@@ -291,7 +323,30 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
                 image_index += 1;
             }
         }
+        for (opacity_groups.items, 0..) |group, group_index| {
+            if (group.page_index != page_index) continue;
+            if (!wrote_images) {
+                try writer.writeAll(" /XObject <<");
+                wrote_images = true;
+            }
+            try writer.print(" /OG{d} {d} 0 R", .{ group_index + 1, first_opacity_group_id + group_index });
+        }
         if (wrote_images) try writer.writeAll(" >>");
+        var gradient_index: usize = 0;
+        var wrote_gradients = false;
+        for (list.commands.items) |command| {
+            if (isNativeShadingCommand(command.command)) {
+                if (command.page_index == page_index) {
+                    if (!wrote_gradients) {
+                        try writer.writeAll(" /Shading <<");
+                        wrote_gradients = true;
+                    }
+                    try writer.print(" /Sh{d} {d} 0 R", .{ gradient_index + 1, first_gradient_id + gradient_index });
+                }
+                gradient_index += 1;
+            }
+        }
+        if (wrote_gradients) try writer.writeAll(" >>");
         try writer.print(" >> /Contents {d} 0 R", .{content_id});
         var annotation_index: usize = 0;
         var wrote_annots = false;
@@ -310,7 +365,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
         if (wrote_annots) try writer.writeAll(" ]");
         try writer.writeAll(" >>\nendobj\n");
 
-        const content = try pageContent(allocator, list, page_index, &font_usage, &alpha_usage);
+        const content = try pageContent(allocator, list, page_index, &font_usage, &alpha_usage, opacity_groups.items, null);
         defer allocator.free(content);
         const compressed_content = try image_decoder.compressZlib(allocator, content);
         defer allocator.free(compressed_content);
@@ -342,6 +397,45 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
         image_index += 1;
     }
 
+    var gradient_index: usize = 0;
+    for (list.commands.items) |page_command| {
+        switch (page_command.command) {
+            .linear_gradient, .radial_gradient, .conic_gradient => if (isNativeShadingCommand(page_command.command)) {
+                try writeGradientObject(
+                    &output,
+                    offsets,
+                    first_gradient_id + gradient_index,
+                    list,
+                    page_command.command,
+                );
+                gradient_index += 1;
+            },
+            else => {},
+        }
+    }
+
+    for (opacity_groups.items, 0..) |group, group_index| {
+        const content = try pageContent(
+            allocator,
+            list,
+            group.page_index,
+            &font_usage,
+            &alpha_usage,
+            opacity_groups.items,
+            group_index,
+        );
+        defer allocator.free(content);
+        const compressed = try image_decoder.compressZlib(allocator, content);
+        defer allocator.free(compressed);
+        try beginObject(&output, offsets, first_opacity_group_id + group_index);
+        try writer.print(
+            "<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 {d:.3} {d:.3}] /Group << /S /Transparency /I true /K false >> /Length {d} /Filter /FlateDecode >>\nstream\n",
+            .{ list.page_spec.width_points, list.page_spec.height_points, compressed.len },
+        );
+        try writer.writeAll(compressed);
+        try writer.writeAll("\nendstream\nendobj\n");
+    }
+
     try beginObject(&output, offsets, info_id);
     try writeDocumentInfo(writer, options.metadata);
     try writer.writeAll("\nendobj\n");
@@ -366,6 +460,8 @@ fn pageContent(
     page_index: usize,
     font_usage: *const FontUsage,
     alpha_usage: *const AlphaUsage,
+    opacity_groups: []const OpacityGroup,
+    active_group_index: ?usize,
 ) ![]u8 {
     var content = std.Io.Writer.Allocating.init(allocator);
     errdefer content.deinit();
@@ -380,6 +476,24 @@ fn pageContent(
         const page_command = list.commands.items[command_index];
         defer command_index += 1;
         if (page_command.page_index != page_index) continue;
+        if (active_group_index) |active_index| {
+            const active = opacity_groups[active_index];
+            const direct_depth = active.depth + 1;
+            if (!opacityPathHasPrefix(page_command.opacity_groups, active.path, direct_depth)) continue;
+            if (page_command.opacity_groups.len > direct_depth) {
+                const nested_id = page_command.opacity_groups.ids[direct_depth];
+                const nested_index = findOpacityGroup(opacity_groups, page_index, nested_id) orelse continue;
+                try writeOpacityGroupInvocation(writer, alpha_usage, opacity_groups[nested_index], nested_index);
+                command_index = lastCommandInOpacityPrefix(list, command_index, page_index, page_command.opacity_groups, direct_depth + 1);
+                continue;
+            }
+        } else if (page_command.opacity_groups.len > 0) {
+            const group_id = page_command.opacity_groups.ids[0];
+            const group_index = findOpacityGroup(opacity_groups, page_index, group_id) orelse continue;
+            try writeOpacityGroupInvocation(writer, alpha_usage, opacity_groups[group_index], group_index);
+            command_index = lastCommandInOpacityPrefix(list, command_index, page_index, page_command.opacity_groups, 1);
+            continue;
+        }
         const has_transform = !page_command.transform.isIdentity();
         if (page_command.clip_rect) |clip| try writeClipRect(writer, list, clip, page_command.clip_radii, page_command.clip_transform);
         if (has_transform) try writeTransformState(writer, list, page_command.transform);
@@ -449,6 +563,7 @@ fn pageContent(
                 const font_size_points = run.font_size * scale;
                 const x = margins.left + run.position.x * scale;
                 const baseline = page_height - margins.top - (run.position.y + run.font_size * metrics.ascentRatio()) * scale;
+                if (run.artifact) try writer.writeAll("/Artifact BMC\n");
                 try writeAlphaState(writer, alpha_usage, run.color.alpha * page_command.opacity);
                 try writeFillColor(writer, run.color);
                 if (requiresPositionedGlyphs(&font_usage.fonts.items[used_font_index], run)) {
@@ -462,6 +577,7 @@ fn pageContent(
                         baseline,
                         scale,
                     );
+                    if (run.artifact) try writer.writeAll("EMC\n");
                     if (has_transform) try writer.writeAll("Q\n");
                     if (page_command.clip_rect != null) try writer.writeAll("Q\n");
                     continue;
@@ -491,7 +607,9 @@ fn pageContent(
                         !clipRadiiEqual(next_command.clip_radii, page_command.clip_radii) or
                         !next_command.clip_transform.approxEqual(page_command.clip_transform, 0.0001) or
                         !next_command.transform.approxEqual(page_command.transform, 0.0001) or
+                        !opacityPathsEqual(next_command.opacity_groups, page_command.opacity_groups) or
                         @abs(next_command.opacity - page_command.opacity) > 0.0001 or
+                        next_run.artifact != run.artifact or
                         !colorsEqual(next_run.color, run.color) or
                         @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) > 0.1) break;
 
@@ -501,6 +619,7 @@ fn pageContent(
                 }
 
                 try endTextGlyphs(writer, run.word_spacing);
+                if (run.artifact) try writer.writeAll("EMC\n");
             },
             .link => {},
             .image => |image_command| {
@@ -511,7 +630,12 @@ fn pageContent(
                 const x = margins.left + fitted.x * scale;
                 const y = page_height - margins.top - (fitted.y + fitted.height) * scale;
                 try writeAlphaState(writer, alpha_usage, page_command.opacity);
-                try writer.print("q {d:.3} {d:.3} {d:.3} {d:.3} re W n {d:.3} 0 0 {d:.3} {d:.3} {d:.3} cm /Im{d} Do Q\n", .{
+                try writer.writeAll("q ");
+                if (image_command.paint_clip) |paint_clip| {
+                    try writePaintClipPath(writer, list, paint_clip, image_command.paint_clip_radii);
+                    try writer.writeAll("W n ");
+                }
+                try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} re W n {d:.3} 0 0 {d:.3} {d:.3} {d:.3} cm /Im{d} Do Q\n", .{
                     clip_x,
                     clip_y,
                     image_command.rect.width * scale,
@@ -523,6 +647,47 @@ fn pageContent(
                     image_index + 1,
                 });
             },
+            .linear_gradient => |gradient| linear: {
+                if (gradientHasVariableAlpha(gradient.stops)) {
+                    try writeLinearAlphaGradient(writer, list, gradient, page_command.opacity, alpha_usage);
+                    break :linear;
+                }
+                const gradient_index = gradientIndexAt(list, command_index);
+                try writeAlphaState(writer, alpha_usage, uniformGradientAlpha(gradient.stops) * page_command.opacity);
+                try writer.writeAll("q ");
+                try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+                try writer.print("W n /Sh{d} sh Q\n", .{gradient_index + 1});
+            },
+            .radial_gradient => |gradient| radial: {
+                if (gradientHasVariableAlpha(gradient.stops)) {
+                    try writeRadialAlphaGradient(writer, list, gradient, page_command.opacity, alpha_usage);
+                    break :radial;
+                }
+                const gradient_index = gradientIndexAt(list, command_index);
+                const center = cssPointToPdf(list, gradient.center);
+                try writeAlphaState(writer, alpha_usage, uniformGradientAlpha(gradient.stops) * page_command.opacity);
+                try writer.writeAll("q ");
+                try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+                try writer.print("W n {d:.6} 0 0 {d:.6} {d:.3} {d:.3} cm /Sh{d} sh Q\n", .{
+                    @max(gradient.radius_x * scale, 0.001),
+                    @max(gradient.radius_y * scale, 0.001),
+                    center.x,
+                    center.y,
+                    gradient_index + 1,
+                });
+            },
+            .conic_gradient => |gradient| conic: {
+                if (isNativeShadingCommand(page_command.command)) {
+                    const gradient_index = gradientIndexAt(list, command_index);
+                    try writeAlphaState(writer, alpha_usage, uniformGradientAlpha(gradient.stops) * page_command.opacity);
+                    try writer.writeAll("q ");
+                    try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+                    try writer.print("W n /Sh{d} sh Q\n", .{gradient_index + 1});
+                    break :conic;
+                }
+                try writeConicGradient(writer, list, gradient, page_command.opacity, alpha_usage);
+            },
+            .box_shadow => |shadow| try writeBoxShadow(writer, list, shadow, page_command.opacity, alpha_usage),
         }
         if (has_transform) try writer.writeAll("Q\n");
         if (page_command.clip_rect != null) try writer.writeAll("Q\n");
@@ -530,6 +695,217 @@ fn pageContent(
     try writer.writeAll("Q");
 
     return content.toOwnedSlice();
+}
+
+fn writeBoxShadow(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    shadow: display_list.BoxShadow,
+    opacity: f32,
+    alpha_usage: *const AlphaUsage,
+) !void {
+    const steps: usize = if (shadow.blur > 0.01) 12 else 1;
+    try writeAlphaState(writer, alpha_usage, boxShadowStepAlpha(shadow) * opacity);
+    try writeFillColor(writer, shadow.color);
+    try writer.writeAll("q\n");
+    for (0..steps) |index| {
+        const reverse_step = steps - index;
+        const blur_expansion = shadow.blur * @as(f32, @floatFromInt(reverse_step)) / @as(f32, @floatFromInt(steps));
+        if (shadow.inset) {
+            try writePaintClipPath(writer, list, shadow.rect, shadow.radii);
+            const inset = @max(shadow.spread + blur_expansion, 0);
+            const inner = geometry.Rect{
+                .x = shadow.rect.x + inset + shadow.offset_x,
+                .y = shadow.rect.y + inset + shadow.offset_y,
+                .width = @max(shadow.rect.width - inset * 2, 0),
+                .height = @max(shadow.rect.height - inset * 2, 0),
+            };
+            try writePaintClipPath(writer, list, inner, insetRadii(shadow.radii, inset));
+            try writer.writeAll("f*\n");
+        } else {
+            const expansion = shadow.spread + blur_expansion;
+            const outer = geometry.Rect{
+                .x = shadow.rect.x + shadow.offset_x - expansion,
+                .y = shadow.rect.y + shadow.offset_y - expansion,
+                .width = @max(shadow.rect.width + expansion * 2, 0),
+                .height = @max(shadow.rect.height + expansion * 2, 0),
+            };
+            try writePaintClipPath(writer, list, outer, expandRadii(shadow.radii, expansion));
+            try writePaintClipPath(writer, list, shadow.rect, shadow.radii);
+            try writer.writeAll("f*\n");
+        }
+    }
+    try writer.writeAll("Q\n");
+}
+
+fn boxShadowStepAlpha(shadow: display_list.BoxShadow) f32 {
+    if (shadow.blur <= 0.01) return shadow.color.alpha;
+    return 1 - std.math.pow(f32, 1 - std.math.clamp(shadow.color.alpha, 0, 1), 1.0 / 12.0);
+}
+
+fn expandRadii(radii: @import("box.zig").ResolvedBorderRadii, amount: f32) @import("box.zig").ResolvedBorderRadii {
+    var result = radii;
+    inline for (.{ &result.top_left, &result.top_right, &result.bottom_right, &result.bottom_left }) |corner| {
+        corner.x = @max(corner.x + amount, 0);
+        corner.y = @max(corner.y + amount, 0);
+    }
+    return result;
+}
+
+fn insetRadii(radii: @import("box.zig").ResolvedBorderRadii, amount: f32) @import("box.zig").ResolvedBorderRadii {
+    var result = radii;
+    inline for (.{ &result.top_left, &result.top_right, &result.bottom_right, &result.bottom_left }) |corner| {
+        corner.x = @max(corner.x - amount, 0);
+        corner.y = @max(corner.y - amount, 0);
+    }
+    return result;
+}
+
+fn writePaintClipPath(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    rect: geometry.Rect,
+    radii: @import("box.zig").ResolvedBorderRadii,
+) !void {
+    const scale = geometry.css_px_to_pdf_points;
+    const point = cssPointToPdf(list, .{ .x = rect.x, .y = rect.y + rect.height });
+    try writeRoundedRectPathRadii(
+        writer,
+        point.x,
+        point.y,
+        @max(rect.width * scale, 0),
+        @max(rect.height * scale, 0),
+        resolvedCommandRadii(radii, 0, scale),
+    );
+}
+
+fn writeConicGradient(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    gradient: display_list.ConicGradient,
+    opacity: f32,
+    alpha_usage: *const AlphaUsage,
+) !void {
+    const rect = gradient.paint_rect;
+    const left = gradient.center.x - rect.x;
+    const right = rect.x + rect.width - gradient.center.x;
+    const top = gradient.center.y - rect.y;
+    const bottom = rect.y + rect.height - gradient.center.y;
+    const radius = @sqrt(@max(left, right) * @max(left, right) + @max(top, bottom) * @max(top, bottom)) * 1.01;
+    const center = cssPointToPdf(list, gradient.center);
+    const segments: usize = 180;
+    try writer.writeAll("q ");
+    try writePaintClipPath(writer, list, rect, gradient.paint_radii);
+    try writer.writeAll("W n\n");
+    for (0..segments) |index| {
+        const start_t = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(segments));
+        const end_t = @as(f32, @floatFromInt(index + 1)) / @as(f32, @floatFromInt(segments));
+        const midpoint = (start_t + end_t) / 2;
+        const color = gradientColorAt(gradient.stops, midpoint);
+        const start_angle = gradient.start_angle + start_t * @as(f32, std.math.pi) * 2;
+        const end_angle = gradient.start_angle + end_t * @as(f32, std.math.pi) * 2;
+        const first = cssPointToPdf(list, .{
+            .x = gradient.center.x + @sin(start_angle) * radius,
+            .y = gradient.center.y - @cos(start_angle) * radius,
+        });
+        const second = cssPointToPdf(list, .{
+            .x = gradient.center.x + @sin(end_angle) * radius,
+            .y = gradient.center.y - @cos(end_angle) * radius,
+        });
+        try writeAlphaState(writer, alpha_usage, quantizeAlpha(color.alpha * opacity));
+        try writeFillColor(writer, color);
+        try writer.print("{d:.3} {d:.3} m {d:.3} {d:.3} l {d:.3} {d:.3} l h f\n", .{
+            center.x, center.y, first.x, first.y, second.x, second.y,
+        });
+    }
+    try writer.writeAll("Q\n");
+}
+
+fn writeLinearAlphaGradient(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    gradient: display_list.LinearGradient,
+    opacity: f32,
+    alpha_usage: *const AlphaUsage,
+) !void {
+    const segments: usize = 128;
+    const dx = gradient.end.x - gradient.start.x;
+    const dy = gradient.end.y - gradient.start.y;
+    const length = @max(@sqrt(dx * dx + dy * dy), 0.001);
+    const extent = @sqrt(gradient.paint_rect.width * gradient.paint_rect.width + gradient.paint_rect.height * gradient.paint_rect.height) * 1.5;
+    const normal_x = -dy / length * extent;
+    const normal_y = dx / length * extent;
+    try writer.writeAll("q ");
+    try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+    try writer.writeAll("W n\n");
+    for (0..segments) |segment| {
+        const start_t = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(segments));
+        const end_t = @as(f32, @floatFromInt(segment + 1)) / @as(f32, @floatFromInt(segments));
+        const midpoint = (start_t + end_t) / 2;
+        const color = gradientColorAt(gradient.stops, midpoint);
+        const start = geometry.Point{ .x = gradient.start.x + dx * start_t, .y = gradient.start.y + dy * start_t };
+        const end = geometry.Point{ .x = gradient.start.x + dx * end_t, .y = gradient.start.y + dy * end_t };
+        const points = [_]geometry.Point{
+            .{ .x = start.x + normal_x, .y = start.y + normal_y },
+            .{ .x = end.x + normal_x, .y = end.y + normal_y },
+            .{ .x = end.x - normal_x, .y = end.y - normal_y },
+            .{ .x = start.x - normal_x, .y = start.y - normal_y },
+        };
+        try writeAlphaState(writer, alpha_usage, quantizeAlpha(color.alpha * opacity));
+        try writeFillColor(writer, color);
+        for (points, 0..) |point, index| {
+            const pdf_point = cssPointToPdf(list, point);
+            try writer.print("{d:.3} {d:.3} {s}\n", .{ pdf_point.x, pdf_point.y, if (index == 0) "m" else "l" });
+        }
+        try writer.writeAll("h f\n");
+    }
+    try writer.writeAll("Q\n");
+}
+
+fn writeRadialAlphaGradient(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    gradient: display_list.RadialGradient,
+    opacity: f32,
+    alpha_usage: *const AlphaUsage,
+) !void {
+    const segments: usize = 96;
+    const center = cssPointToPdf(list, gradient.center);
+    const scale = geometry.css_px_to_pdf_points;
+    try writer.writeAll("q ");
+    try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+    try writer.writeAll("W n\n");
+
+    const outside = gradientColorAt(gradient.stops, 1);
+    try writeAlphaState(writer, alpha_usage, quantizeAlpha(outside.alpha * opacity));
+    try writeFillColor(writer, outside);
+    try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+    try writeEllipsePath(writer, center, gradient.radius_x * scale, gradient.radius_y * scale);
+    try writer.writeAll("f*\n");
+
+    var segment: usize = 0;
+    while (segment < segments) : (segment += 1) {
+        const inner_t = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(segments));
+        const outer_t = @as(f32, @floatFromInt(segment + 1)) / @as(f32, @floatFromInt(segments));
+        const color = gradientColorAt(gradient.stops, (inner_t + outer_t) / 2);
+        try writeAlphaState(writer, alpha_usage, quantizeAlpha(color.alpha * opacity));
+        try writeFillColor(writer, color);
+        try writeEllipsePath(writer, center, gradient.radius_x * outer_t * scale, gradient.radius_y * outer_t * scale);
+        if (inner_t > 0.0001) try writeEllipsePath(writer, center, gradient.radius_x * inner_t * scale, gradient.radius_y * inner_t * scale);
+        try writer.writeAll(if (inner_t > 0.0001) "f*\n" else "f\n");
+    }
+    try writer.writeAll("Q\n");
+}
+
+fn writeEllipsePath(writer: *std.Io.Writer, center: geometry.Point, radius_x: f32, radius_y: f32) !void {
+    const control: f32 = 0.55228475;
+    const rx = @max(radius_x, 0);
+    const ry = @max(radius_y, 0);
+    try writer.print("{d:.3} {d:.3} m\n", .{ center.x + rx, center.y });
+    try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c\n", .{ center.x + rx, center.y + ry * control, center.x + rx * control, center.y + ry, center.x, center.y + ry });
+    try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c\n", .{ center.x - rx * control, center.y + ry, center.x - rx, center.y + ry * control, center.x - rx, center.y });
+    try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c\n", .{ center.x - rx, center.y - ry * control, center.x - rx * control, center.y - ry, center.x, center.y - ry });
+    try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c h\n", .{ center.x + rx * control, center.y - ry, center.x + rx, center.y - ry * control, center.x + rx, center.y });
 }
 
 fn writeTransformState(writer: *std.Io.Writer, list: *const display_list.DisplayList, transform: geometry.AffineTransform) !void {
@@ -780,11 +1156,89 @@ fn countLinkAnnotations(list: *const display_list.DisplayList) usize {
     return count;
 }
 
+fn collectOpacityGroups(allocator: std.mem.Allocator, list: *const display_list.DisplayList) !std.ArrayList(OpacityGroup) {
+    var groups = try std.ArrayList(OpacityGroup).initCapacity(allocator, 0);
+    errdefer groups.deinit(allocator);
+    for (list.commands.items) |command| {
+        for (0..command.opacity_groups.len) |depth| {
+            const id = command.opacity_groups.ids[depth];
+            if (findOpacityGroup(groups.items, command.page_index, id) != null) continue;
+            try groups.append(allocator, .{
+                .page_index = command.page_index,
+                .id = id,
+                .depth = depth,
+                .path = command.opacity_groups,
+                .opacity = command.opacity_groups.values[depth],
+            });
+        }
+    }
+    return groups;
+}
+
+fn findOpacityGroup(groups: []const OpacityGroup, page_index: usize, id: @import("box.zig").BoxId) ?usize {
+    for (groups, 0..) |group, index| if (group.page_index == page_index and group.id == id) return index;
+    return null;
+}
+
+fn writeOpacityGroupInvocation(
+    writer: *std.Io.Writer,
+    alpha_usage: *const AlphaUsage,
+    group: OpacityGroup,
+    group_index: usize,
+) !void {
+    try writer.writeAll("q ");
+    try writeAlphaState(writer, alpha_usage, group.opacity);
+    try writer.print("/OG{d} Do Q\n", .{group_index + 1});
+}
+
+fn lastCommandInOpacityPrefix(
+    list: *const display_list.DisplayList,
+    start_index: usize,
+    page_index: usize,
+    path: @import("box.zig").OpacityGroupPath,
+    prefix_len: usize,
+) usize {
+    var last = start_index;
+    var index = start_index + 1;
+    while (index < list.commands.items.len) : (index += 1) {
+        const command = list.commands.items[index];
+        if (command.page_index != page_index or !opacityPathHasPrefix(command.opacity_groups, path, prefix_len)) break;
+        last = index;
+    }
+    return last;
+}
+
+fn opacityPathHasPrefix(
+    candidate: @import("box.zig").OpacityGroupPath,
+    prefix: @import("box.zig").OpacityGroupPath,
+    prefix_len: usize,
+) bool {
+    if (candidate.len < prefix_len or prefix.len < prefix_len) return false;
+    for (0..prefix_len) |index| if (candidate.ids[index] != prefix.ids[index]) return false;
+    return true;
+}
+
+fn opacityPathsEqual(left: @import("box.zig").OpacityGroupPath, right: @import("box.zig").OpacityGroupPath) bool {
+    if (left.len != right.len) return false;
+    for (0..left.len) |index| {
+        if (left.ids[index] != right.ids[index] or @abs(left.values[index] - right.values[index]) > 0.0001) return false;
+    }
+    return true;
+}
+
 fn countImages(list: *const display_list.DisplayList) usize {
     var count: usize = 0;
     for (list.commands.items) |command| if (command.command == .image) {
         count += 1;
     };
+    return count;
+}
+
+fn countGradientShadings(list: *const display_list.DisplayList) usize {
+    var count: usize = 0;
+    for (list.commands.items) |command| {
+        if (isNativeShadingCommand(command.command)) count += 1;
+    }
     return count;
 }
 
@@ -794,6 +1248,164 @@ fn imageIndexAt(list: *const display_list.DisplayList, command_index: usize) usi
         if (command.command == .image) image_index += 1;
     }
     return image_index;
+}
+
+fn gradientIndexAt(list: *const display_list.DisplayList, command_index: usize) usize {
+    var gradient_index: usize = 0;
+    for (list.commands.items[0..command_index]) |command| {
+        if (isNativeShadingCommand(command.command)) gradient_index += 1;
+    }
+    return gradient_index;
+}
+
+fn isNativeShadingCommand(command: display_list.Command) bool {
+    return switch (command) {
+        .linear_gradient => |gradient| !gradientHasVariableAlpha(gradient.stops),
+        .radial_gradient => |gradient| !gradientHasVariableAlpha(gradient.stops),
+        .conic_gradient => |gradient| !gradientHasVariableAlpha(gradient.stops),
+        else => false,
+    };
+}
+
+fn uniformGradientAlpha(stops: display_list.GradientStops) f32 {
+    const values = stops.slice();
+    if (values.len == 0) return 1;
+    const alpha = values[0].color.alpha;
+    for (values[1..]) |stop| if (@abs(stop.color.alpha - alpha) > 0.0001) return 1;
+    return alpha;
+}
+
+fn gradientHasVariableAlpha(stops: display_list.GradientStops) bool {
+    const values = stops.slice();
+    if (values.len < 2) return false;
+    const alpha = values[0].color.alpha;
+    for (values[1..]) |stop| if (@abs(stop.color.alpha - alpha) > 0.0001) return true;
+    return false;
+}
+
+fn quantizeAlpha(value: f32) f32 {
+    return @round(std.math.clamp(value, 0, 1) * 64) / 64;
+}
+
+fn gradientColorAt(stops: display_list.GradientStops, raw_offset: f32) geometry.Color {
+    const values = stops.slice();
+    if (values.len == 0) return geometry.Color.transparent;
+    const offset = std.math.clamp(raw_offset, 0, 1);
+    if (offset <= values[0].offset) return values[0].color;
+    for (values[1..], 1..) |stop, index| {
+        if (offset > stop.offset) continue;
+        const previous = values[index - 1];
+        const span = stop.offset - previous.offset;
+        const progress = if (span <= 0.00001) 1 else (offset - previous.offset) / span;
+        return .{
+            .red = previous.color.red + (stop.color.red - previous.color.red) * progress,
+            .green = previous.color.green + (stop.color.green - previous.color.green) * progress,
+            .blue = previous.color.blue + (stop.color.blue - previous.color.blue) * progress,
+            .alpha = previous.color.alpha + (stop.color.alpha - previous.color.alpha) * progress,
+        };
+    }
+    return values[values.len - 1].color;
+}
+
+fn writeGradientObject(
+    output: *std.Io.Writer.Allocating,
+    offsets: []usize,
+    object_id: usize,
+    list: *const display_list.DisplayList,
+    command: display_list.Command,
+) !void {
+    const writer = &output.writer;
+    try beginObject(output, offsets, object_id);
+    switch (command) {
+        .linear_gradient => |gradient| {
+            const start = cssPointToPdf(list, gradient.start);
+            const end = cssPointToPdf(list, gradient.end);
+            try writer.print("<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [{d:.4} {d:.4} {d:.4} {d:.4}] /Domain [0 1] /Extend [true true] /Function ", .{
+                start.x, start.y, end.x, end.y,
+            });
+            try writeGradientFunction(writer, gradient.stops);
+            try writer.writeAll(" >>\nendobj\n");
+        },
+        .radial_gradient => |gradient| {
+            try writer.writeAll("<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [0 0 0 0 0 1] /Domain [0 1] /Extend [true true] /Function ");
+            try writeGradientFunction(writer, gradient.stops);
+            try writer.writeAll(" >>\nendobj\n");
+        },
+        .conic_gradient => |gradient| {
+            const segments: usize = 180;
+            const stream_length = segments * 3 * 16 + 1;
+            try writer.print(
+                "<< /ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 16 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 {d:.4} 0 {d:.4} 0 1 0 1 0 1] /AntiAlias true /Filter /ASCIIHexDecode /Length {d} >>\nstream\n",
+                .{ list.page_spec.width_points, list.page_spec.height_points, stream_length },
+            );
+            const rect = gradient.paint_rect;
+            const left = gradient.center.x - rect.x;
+            const right = rect.x + rect.width - gradient.center.x;
+            const top = gradient.center.y - rect.y;
+            const bottom = rect.y + rect.height - gradient.center.y;
+            const radius = @sqrt(@max(left, right) * @max(left, right) + @max(top, bottom) * @max(top, bottom)) * 1.02;
+            for (0..segments) |segment| {
+                const start_t = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(segments));
+                const end_t = @as(f32, @floatFromInt(segment + 1)) / @as(f32, @floatFromInt(segments));
+                const start_angle = gradient.start_angle + start_t * @as(f32, std.math.pi) * 2;
+                const end_angle = gradient.start_angle + end_t * @as(f32, std.math.pi) * 2;
+                try writeMeshVertex(writer, list, gradient.center, gradientColorAt(gradient.stops, (start_t + end_t) / 2));
+                try writeMeshVertex(writer, list, .{
+                    .x = gradient.center.x + @sin(start_angle) * radius,
+                    .y = gradient.center.y - @cos(start_angle) * radius,
+                }, gradientColorAt(gradient.stops, start_t));
+                try writeMeshVertex(writer, list, .{
+                    .x = gradient.center.x + @sin(end_angle) * radius,
+                    .y = gradient.center.y - @cos(end_angle) * radius,
+                }, gradientColorAt(gradient.stops, end_t));
+            }
+            try writer.writeAll(">\nendstream\nendobj\n");
+        },
+        else => unreachable,
+    }
+}
+
+fn writeMeshVertex(writer: *std.Io.Writer, list: *const display_list.DisplayList, point: geometry.Point, color: geometry.Color) !void {
+    const pdf_point = cssPointToPdf(list, point);
+    const x: u16 = @intFromFloat(@round(std.math.clamp(pdf_point.x / list.page_spec.width_points, 0, 1) * 65535));
+    const y: u16 = @intFromFloat(@round(std.math.clamp(pdf_point.y / list.page_spec.height_points, 0, 1) * 65535));
+    const red: u8 = @intFromFloat(@round(std.math.clamp(color.red, 0, 1) * 255));
+    const green: u8 = @intFromFloat(@round(std.math.clamp(color.green, 0, 1) * 255));
+    const blue: u8 = @intFromFloat(@round(std.math.clamp(color.blue, 0, 1) * 255));
+    try writer.print("00{X:0>4}{X:0>4}{X:0>2}{X:0>2}{X:0>2}", .{ x, y, red, green, blue });
+}
+
+fn writeGradientFunction(writer: *std.Io.Writer, stops: display_list.GradientStops) !void {
+    const values = stops.slice();
+    if (values.len < 2) {
+        try writer.writeAll("<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [0 0 0] /N 1 >>");
+        return;
+    }
+    if (values.len == 2) {
+        try writeInterpolationFunction(writer, values[0].color, values[1].color);
+        return;
+    }
+    try writer.writeAll("<< /FunctionType 3 /Domain [0 1] /Functions [");
+    for (values[0 .. values.len - 1], values[1..]) |start, end| {
+        try writer.writeByte(' ');
+        try writeInterpolationFunction(writer, start.color, end.color);
+    }
+    try writer.writeAll(" ] /Bounds [");
+    var previous: f32 = 0;
+    for (values[1 .. values.len - 1]) |stop| {
+        const bound = std.math.clamp(@max(stop.offset, previous + 0.00001), 0.00001, 0.99999);
+        try writer.print(" {d:.6}", .{bound});
+        previous = bound;
+    }
+    try writer.writeAll(" ] /Encode [");
+    for (0..values.len - 1) |_| try writer.writeAll(" 0 1");
+    try writer.writeAll(" ] >>");
+}
+
+fn writeInterpolationFunction(writer: *std.Io.Writer, start: geometry.Color, end: geometry.Color) !void {
+    try writer.print("<< /FunctionType 2 /Domain [0 1] /C0 [{d:.6} {d:.6} {d:.6}] /C1 [{d:.6} {d:.6} {d:.6}] /N 1 >>", .{
+        start.red, start.green, start.blue, end.red, end.green, end.blue,
+    });
 }
 
 fn writeImageObjects(
@@ -1364,6 +1976,90 @@ test "write real fill and stroke alpha through PDF ExtGState" {
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.1250 /CA 0.1250") != null);
 }
 
+test "serialize Web gradients as axial radial and mesh PDF shadings" {
+    const pagination = @import("pagination.zig");
+    const allocator = std.testing.allocator;
+    const stops = display_list.GradientStops{
+        .values = blk: {
+            var values: [16]display_list.GradientStop = @splat(.{ .offset = 0, .color = geometry.Color.transparent });
+            values[0] = .{ .offset = 0, .color = .{ .red = 1, .green = 0, .blue = 0 } };
+            values[1] = .{ .offset = 0.5, .color = .{ .red = 0, .green = 1, .blue = 0 } };
+            values[2] = .{ .offset = 1, .color = .{ .red = 0, .green = 0, .blue = 1 } };
+            break :blk values;
+        },
+        .len = 3,
+    };
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 3);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .linear_gradient = .{
+        .paint_rect = .{ .width = 100, .height = 40 },
+        .start = .{ .x = 0, .y = 20 },
+        .end = .{ .x = 100, .y = 20 },
+        .stops = stops,
+    } } });
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .radial_gradient = .{
+        .paint_rect = .{ .y = 50, .width = 100, .height = 40 },
+        .center = .{ .x = 50, .y = 70 },
+        .radius_x = 50,
+        .radius_y = 20,
+        .stops = stops,
+    } } });
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .conic_gradient = .{
+        .paint_rect = .{ .y = 100, .width = 100, .height = 40 },
+        .center = .{ .x = 50, .y = 120 },
+        .start_angle = 0,
+        .stops = stops,
+    } } });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    const bytes = try write(allocator, &list);
+    defer allocator.free(bytes);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/Shading << /Sh1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ShadingType 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ShadingType 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ShadingType 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/FunctionType 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/Subtype /Image") == null);
+}
+
+test "serialize nested opacity as isolated PDF transparency groups" {
+    const pagination = @import("pagination.zig");
+    const allocator = std.testing.allocator;
+    var outer_path = @import("box.zig").OpacityGroupPath{};
+    outer_path.append(10, 0.5);
+    var inner_path = outer_path;
+    inner_path.append(11, 0.4);
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 3);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{ .page_index = 0, .opacity_groups = outer_path, .command = .{ .fill_rect = .{
+        .rect = .{ .width = 80, .height = 40 },
+        .color = .{ .red = 1, .green = 0, .blue = 0 },
+    } } });
+    try commands.append(allocator, .{ .page_index = 0, .opacity_groups = outer_path, .command = .{ .fill_rect = .{
+        .rect = .{ .x = 30, .width = 80, .height = 40 },
+        .color = .{ .red = 0, .green = 0, .blue = 1 },
+    } } });
+    try commands.append(allocator, .{ .page_index = 0, .opacity_groups = inner_path, .command = .{ .fill_rect = .{
+        .rect = .{ .x = 20, .y = 10, .width = 40, .height = 20 },
+        .color = .{ .red = 0, .green = 1, .blue = 0 },
+    } } });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    const bytes = try write(allocator, &list);
+    defer allocator.free(bytes);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, bytes, "/Group << /S /Transparency /I true"));
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/OG1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/OG2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.5000 /CA 0.5000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ca 0.4000 /CA 0.4000") != null);
+}
+
 test "write word spacing with Type 0 font TJ adjustments" {
     const allocator = std.testing.allocator;
     var output = std.Io.Writer.Allocating.init(allocator);
@@ -1467,7 +2163,7 @@ test "wrap clipped paint commands in PDF graphics state" {
     var alpha_usage = try AlphaUsage.init(allocator);
     defer alpha_usage.deinit(allocator);
     try alpha_usage.collect(allocator, &list);
-    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage);
+    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage, &.{}, null);
     defer allocator.free(content);
     try std.testing.expect(std.mem.indexOf(u8, content, " re W n\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "Q\nQ") != null);
@@ -1509,7 +2205,7 @@ test "serialize elliptical rounded paths and rounded clipping as PDF curves" {
     var alpha_usage = try AlphaUsage.init(allocator);
     defer alpha_usage.deinit(allocator);
     try alpha_usage.collect(allocator, &list);
-    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage);
+    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage, &.{}, null);
     defer allocator.free(content);
 
     try std.testing.expectEqual(@as(usize, 6), std.mem.count(u8, content, " c\n"));
@@ -1552,7 +2248,7 @@ test "serialize CSS transforms as PDF matrices and transform link bounds" {
     var alpha_usage = try AlphaUsage.init(allocator);
     defer alpha_usage.deinit(allocator);
     try alpha_usage.collect(allocator, &list);
-    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage);
+    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage, &.{}, null);
     defer allocator.free(content);
     try std.testing.expect(std.mem.indexOf(u8, content, "1.000000 -0.000000 -0.000000 1.000000 7.500 -15.000 cm") != null);
 
