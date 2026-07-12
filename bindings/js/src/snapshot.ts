@@ -1,5 +1,5 @@
 import { InvalidSourceError, ResourceLoadError, UnsupportedCssError, UnsupportedEnvironmentError } from "./errors.js";
-import type { CssProfile, Diagnostic, HtmlSource, MediaType, ResourceResolver, UnsupportedCssPolicy, ViewportOptions } from "./types.js";
+import type { CssProfile, Diagnostic, FallbackPolicy, HtmlSource, MediaType, ResourceResolver, UnsupportedCssPolicy, ViewportOptions } from "./types.js";
 
 export interface SnapshotOptions {
   baseUrl?: string | URL;
@@ -10,6 +10,7 @@ export interface SnapshotOptions {
   mediaType?: MediaType;
   viewport?: ViewportOptions;
   unsupportedCss?: UnsupportedCssPolicy;
+  fallback?: FallbackPolicy;
   includeShadowDom?: boolean;
   enableLinks?: boolean;
 }
@@ -130,16 +131,27 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
 ] as const;
 
 const SVG_COMPUTED_PROPERTIES = [
+  "clip-path",
+  "filter",
   "fill",
   "fill-opacity",
   "fill-rule",
+  "marker-end",
+  "marker-mid",
+  "marker-start",
+  "mask-image",
+  "mix-blend-mode",
+  "paint-order",
   "stroke",
   "stroke-dasharray",
   "stroke-dashoffset",
   "stroke-linecap",
   "stroke-linejoin",
+  "stroke-miterlimit",
   "stroke-opacity",
   "stroke-width",
+  "vector-effect",
+  "visibility",
 ] as const;
 
 const SUPPORTED_DISPLAY = new Set([
@@ -164,6 +176,19 @@ const SUPPORTED_DISPLAY = new Set([
 ]);
 
 const ACTIVE_ELEMENTS = "script,iframe,object,embed";
+const VECTOR_SVG_ELEMENTS = new Set(["svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "title", "desc"]);
+const VECTOR_SVG_UNSUPPORTED_PROPERTIES = [
+  "filter",
+  "mix-blend-mode",
+  "clip-path",
+  "mask",
+  "mask-image",
+  "marker-start",
+  "marker-mid",
+  "marker-end",
+  "vector-effect",
+  "paint-order",
+] as const;
 const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   ...SUPPORTED_COMPUTED_PROPERTIES,
   "margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left", "border-radius",
@@ -1152,15 +1177,37 @@ async function materializeInlineSvgs(
     if (!svg.isConnected && !svg.parentNode && svg !== root) continue;
     try {
       if (!svg.hasAttribute("xmlns")) svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      const unsupportedReason = vectorSvgUnsupportedReason(svg);
       const source = new XMLSerializer().serializeToString(svg);
       const replacement = svg.ownerDocument.createElement("img");
       for (const attribute of svg.attributes) {
-        if (attribute.name !== "xmlns") replacement.setAttribute(attribute.name, attribute.value);
+        if (attribute.name === "style") {
+          replacement.setAttribute("style", stripStyleProperties(attribute.value, SVG_COMPUTED_PROPERTIES));
+        } else if (attribute.name !== "xmlns") {
+          replacement.setAttribute(attribute.name, attribute.value);
+        }
       }
-      replacement.src = await rasterizeBlobToPng(new Blob([source], { type: "image/svg+xml" }));
+      setSvgIntrinsicSize(svg, replacement);
+      if (unsupportedReason === null) {
+        replacement.src = await blobToDataUrl(new Blob([source], { type: "image/svg+xml" }));
+      } else {
+        if (options.fallback === "error") {
+          throw new UnsupportedCssError(`Inline SVG requires subtree rasterization: ${unsupportedReason}`);
+        }
+        replacement.src = await rasterizeBlobToPng(new Blob([source], { type: "image/svg+xml" }));
+        diagnostics.push({
+          code: "CSS_SUBTREE_RASTERIZED",
+          severity: "warning",
+          message: `Inline SVG was rasterized because native vector paint does not support ${unsupportedReason}`,
+          nodePath: snapshotNodePath(svg, root),
+          phase: "paint",
+          fallback: "rasterized-subtree",
+        });
+      }
       replacement.alt = svg.getAttribute("aria-label") ?? "";
       svg.replaceWith(replacement);
     } catch (error) {
+      if (error instanceof UnsupportedCssError) throw error;
       if (options.resourcePolicy === "error") throw new ResourceLoadError("inline SVG", { cause: error });
       svg.remove();
       diagnostics.push({
@@ -1170,6 +1217,126 @@ async function materializeInlineSvgs(
       });
     }
   }
+}
+
+function stripStyleProperties(style: string, properties: readonly string[]): string {
+  const omitted = new Set(properties);
+  return style.split(";").filter((declaration) => {
+    const colon = declaration.indexOf(":");
+    return colon < 0 || !omitted.has(declaration.slice(0, colon).trim().toLowerCase());
+  }).join(";");
+}
+
+function vectorSvgUnsupportedReason(svg: SVGSVGElement): string | null {
+  const elements = [svg, ...svg.querySelectorAll("*")];
+  for (const element of elements) {
+    if (!isSvgElement(element) || !VECTOR_SVG_ELEMENTS.has(element.localName)) return `<${element.localName}>`;
+    if (element !== svg && element.localName === "svg") return "nested <svg> viewport";
+    if (element.localName === "title" || element.localName === "desc") continue;
+    const style = (element as SVGElement).style;
+    for (const property of VECTOR_SVG_UNSUPPORTED_PROPERTIES) {
+      const authored = element.getAttribute(property);
+      const computed = style.getPropertyValue(property);
+      if ((authored && svgUnsupportedPropertyIsActive(property, authored)) || (computed && svgUnsupportedPropertyIsActive(property, computed))) return property;
+    }
+    for (const property of ["fill", "stroke"] as const) {
+      const paint = style.getPropertyValue(property) || element.getAttribute(property) || "";
+      if (/url\s*\(/i.test(paint)) return `${property} paint server`;
+      if (svgPaintIsTranslucent(paint)) return `${property} opacity`;
+    }
+    for (const property of ["opacity", "fill-opacity", "stroke-opacity"] as const) {
+      const raw = style.getPropertyValue(property) || element.getAttribute(property) || "1";
+      const value = Number.parseFloat(raw);
+      if (!Number.isFinite(value) || value < 0.9999) return property;
+    }
+    const transform = style.getPropertyValue("transform");
+    if (transform.startsWith("matrix3d(")) return "3D transform";
+    const transformOrigin = style.getPropertyValue("transform-origin");
+    if (element !== svg && transform && transform !== "none" && transformOrigin && !isZeroSvgTransformOrigin(transformOrigin)) return "transform-origin";
+  }
+  return null;
+}
+
+function svgUnsupportedPropertyIsActive(property: string, raw: string): boolean {
+  const value = raw.trim().toLowerCase();
+  if (!value || value === "none" || value === "auto") return false;
+  if ((property === "mix-blend-mode" || property === "paint-order") && value === "normal") return false;
+  return true;
+}
+
+function svgPaintIsTranslucent(raw: string): boolean {
+  const value = raw.trim().toLowerCase();
+  if (!value || value === "none") return false;
+  if (value === "transparent") return true;
+  const hex = value.match(/^#(?:[0-9a-f]{4}|[0-9a-f]{8})$/i);
+  if (hex) return value.length === 5 ? value[4] !== "f" : value.slice(7, 9) !== "ff";
+  const commaAlpha = value.match(/^rgba\([^)]*,\s*([+-]?(?:\d+\.?\d*|\.\d+)%?)\s*\)$/);
+  if (commaAlpha) return cssAlphaValue(commaAlpha[1]!) < 0.9999;
+  const slashAlpha = value.match(/\/\s*([+-]?(?:\d+\.?\d*|\.\d+)%?)\s*\)$/);
+  return slashAlpha ? cssAlphaValue(slashAlpha[1]!) < 0.9999 : false;
+}
+
+function cssAlphaValue(raw: string): number {
+  const value = Number.parseFloat(raw);
+  return raw.endsWith("%") ? value / 100 : value;
+}
+
+function isZeroSvgTransformOrigin(raw: string): boolean {
+  const tokens = raw.trim().split(/\s+/);
+  return tokens.length >= 2 && tokens.every((token) => /^0(?:px)?$/i.test(token));
+}
+
+function setSvgIntrinsicSize(svg: SVGSVGElement, replacement: HTMLImageElement): void {
+  const viewBox = parseSvgViewBox(svg.getAttribute("viewBox"));
+  let width = parseSvgPixelLength(svg.getAttribute("width")) ?? parseSvgPixelLength(svg.style.width);
+  let height = parseSvgPixelLength(svg.getAttribute("height")) ?? parseSvgPixelLength(svg.style.height);
+  if (viewBox && width === null && height === null) {
+    width = viewBox.width;
+    height = viewBox.height;
+  } else if (viewBox && width !== null && height === null && viewBox.width > 0) {
+    height = width * viewBox.height / viewBox.width;
+  } else if (viewBox && height !== null && width === null && viewBox.height > 0) {
+    width = height * viewBox.width / viewBox.height;
+  }
+  if (width !== null && width > 0) replacement.dataset.html2realpdfIntrinsicWidth = String(width);
+  if (height !== null && height > 0) replacement.dataset.html2realpdfIntrinsicHeight = String(height);
+}
+
+function parseSvgViewBox(raw: string | null): { width: number; height: number } | null {
+  if (!raw) return null;
+  const values = raw.trim().split(/[\s,]+/).map(Number);
+  if (values.length !== 4 || values.some((value) => !Number.isFinite(value)) || values[2]! <= 0 || values[3]! <= 0) return null;
+  return { width: values[2]!, height: values[3]! };
+}
+
+function parseSvgPixelLength(raw: string | null): number | null {
+  if (!raw) return null;
+  const match = raw.trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+))(?:px)?$/i);
+  if (!match) return null;
+  const value = Number.parseFloat(match[1]!);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function snapshotNodePath(element: Element, root: ParentNode): string {
+  const parts: string[] = [];
+  let current: Element | null = element;
+  while (current) {
+    if (current.id) {
+      parts.unshift(`#${CSS.escape(current.id)}`);
+      break;
+    }
+    let part = current.localName;
+    const classes = [...current.classList].slice(0, 2);
+    if (classes.length > 0) part += classes.map((name) => `.${CSS.escape(name)}`).join("");
+    if (current.parentElement) {
+      const siblings = [...current.parentElement.children].filter((candidate) => candidate.localName === current!.localName);
+      if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+    }
+    parts.unshift(part);
+    if (current === root || current.parentNode === root) break;
+    current = current.parentElement;
+  }
+  return parts.join(" > ");
 }
 
 function materializeLiveState(original: Element, target: Element): Element {
@@ -1233,7 +1400,25 @@ async function materializeImages(
   if (root.nodeType === Node.ELEMENT_NODE && (root as Element).localName === "img") images.unshift(root as HTMLImageElement);
   for (const image of images) {
     const source = (image as HTMLImageElement).currentSrc || image.getAttribute("src") || "";
-    if (!source || source.startsWith("data:image/jpeg") || source.startsWith("data:image/jpg") || source.startsWith("data:image/png")) continue;
+    if (!source) continue;
+    if (/^data:image\/svg\+xml;/i.test(source)) {
+      try {
+        const response = await fetch(source);
+        await materializeSvgImageBlob(image as HTMLImageElement, await response.blob(), options, diagnostics, root);
+      } catch (error) {
+        if (error instanceof UnsupportedCssError) throw error;
+        if (options.resourcePolicy === "error") throw new ResourceLoadError(source, { cause: error });
+        image.remove();
+        diagnostics.push({
+          code: "RESOURCE_OMITTED",
+          severity: "warning",
+          message: "SVG image resource was omitted",
+          phase: "snapshot",
+        });
+      }
+      continue;
+    }
+    if (/^data:image\/(?:jpeg|jpg|png);/i.test(source)) continue;
 
     try {
       const url = new URL(source, options.baseUrl ?? image.ownerDocument.baseURI);
@@ -1245,8 +1430,13 @@ async function materializeImages(
       const blob = resolved instanceof Blob ? resolved : await fetchImageBlob(
         typeof resolved === "string" ? new URL(resolved, url) : url,
       );
+      if (blob.type === "image/svg+xml") {
+        await materializeSvgImageBlob(image as HTMLImageElement, blob, options, diagnostics, root);
+        continue;
+      }
       (image as HTMLImageElement).src = blob.type === "image/jpeg" ? await blobToDataUrl(blob) : await rasterizeBlobToPng(blob);
     } catch (error) {
+      if (error instanceof UnsupportedCssError) throw error;
       if (options.resourcePolicy === "error") throw new ResourceLoadError(source, { cause: error });
       image.remove();
       diagnostics.push({
@@ -1256,6 +1446,51 @@ async function materializeImages(
       });
     }
   }
+}
+
+async function materializeSvgImageBlob(
+  image: HTMLImageElement,
+  blob: Blob,
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+  snapshotRoot: ParentNode,
+): Promise<void> {
+  image.src = await materializeSvgResourceBlob(blob, options, diagnostics, image, snapshotRoot, "SVG image");
+}
+
+async function materializeSvgResourceBlob(
+  blob: Blob,
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+  target: Element,
+  snapshotRoot: ParentNode,
+  label: string,
+): Promise<string> {
+  const source = await blob.text();
+  const parsed = new DOMParser().parseFromString(source, "image/svg+xml");
+  if (parsed.querySelector("parsererror") || !isSvgElement(parsed.documentElement) || parsed.documentElement.localName !== "svg") {
+    throw new Error("Invalid SVG image resource");
+  }
+  const svg = parsed.documentElement as unknown as SVGSVGElement;
+  if (!svg.hasAttribute("xmlns")) svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  const normalized = new XMLSerializer().serializeToString(svg);
+  const normalizedBlob = new Blob([normalized], { type: "image/svg+xml" });
+  const unsupportedReason = vectorSvgUnsupportedReason(svg);
+  if (unsupportedReason === null) {
+    return blobToDataUrl(normalizedBlob);
+  }
+  if (options.fallback === "error") {
+    throw new UnsupportedCssError(`${label} requires subtree rasterization: ${unsupportedReason}`);
+  }
+  diagnostics.push({
+    code: "CSS_SUBTREE_RASTERIZED",
+    severity: "warning",
+    message: `${label} was rasterized because native vector paint does not support ${unsupportedReason}`,
+    nodePath: snapshotNodePath(target, snapshotRoot),
+    phase: "paint",
+    fallback: "rasterized-subtree",
+  });
+  return rasterizeBlobToPng(normalizedBlob);
 }
 
 async function materializeBackgroundImages(
@@ -1283,10 +1518,13 @@ async function materializeBackgroundImages(
           const blob = resolved instanceof Blob ? resolved : await fetchImageBlob(
             typeof resolved === "string" ? new URL(resolved, url) : url,
           );
-          dataUrl = blob.type === "image/jpeg" ? await blobToDataUrl(blob) : await rasterizeBlobToPng(blob);
+          dataUrl = blob.type === "image/svg+xml"
+            ? await materializeSvgResourceBlob(blob, options, diagnostics, element, root, "Background SVG")
+            : blob.type === "image/jpeg" ? await blobToDataUrl(blob) : await rasterizeBlobToPng(blob);
         }
         materialized = materialized.replace(match[0], `url("${dataUrl}")`);
       } catch (error) {
+        if (error instanceof UnsupportedCssError) throw error;
         if (options.resourcePolicy === "error") throw new ResourceLoadError(source, { cause: error });
         materialized = materialized.replace(match[0], "none");
         diagnostics.push({

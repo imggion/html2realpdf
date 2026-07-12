@@ -37,8 +37,9 @@ The browser package is published as `@imggion/html2realpdf`.
 - selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
 - HarfBuzz OpenType shaping, kerning, ligatures, and positioned RTL runs in the
   `web` and `strict` profiles while `document` remains byte-stable;
-- JPEG pass-through, transparent PNG soft masks, vector backgrounds/borders,
-  and live link annotations;
+- JPEG pass-through, transparent PNG soft masks, supported SVG shape/path
+  resources as native PDF Form XObjects, vector backgrounds/borders, and live
+  link annotations;
 - per-corner circular/elliptical `border-radius` fills, borders, and overflow clips emitted as native PDF Bézier paths;
 - compressed PDF 1.7 streams, metadata, deterministic classic xref output;
 - a versioned WASM ABI with independent result handles and structured errors;
@@ -50,7 +51,9 @@ similar documents. The Web profile additionally enables floats, Flexbox,
 positioned layout, CSS Grid, 2D transforms, layered backgrounds, gradients,
 shadows, and isolated opacity. Filters, blend modes, 3D transforms, and
 arbitrary browser painting are still rejected or reported instead of silently
-rasterizing the whole page.
+rasterizing the whole page. Canvas and unsupported SVG paint can rasterize only
+their own subtree; every such SVG fallback is exposed through structured
+diagnostics and can be disabled with `fallback: "error"`.
 
 See [docs/css-support.md](docs/css-support.md) for the versioned property and
 pipeline-stage support matrix.

@@ -13,7 +13,8 @@ label "CSS3".
   behavior fails instead of being silently painted incorrectly.
 - **web** is the staged `0.2+` profile. It enables the Unicode typography,
   browser snapshot, normal-flow, table, float, Flexbox, positioned-layout, and
-  Grid formatting contexts; the remaining web effects are staged separately.
+  Grid formatting contexts plus native 2D transforms, backgrounds, shadows,
+  isolated opacity, and supported SVG vector paint.
 - **strict** uses the same layout engine and turns unsupported CSS into an
   immediate error at the browser snapshot boundary.
 
@@ -29,6 +30,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`/`min()`/`max()`/`clamp()`, `min-content`/`max-content`/`fit-content()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
 | `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic fallback for replaced elements; web/strict transfer the preferred ratio into auto block size for normal boxes |
 | `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
+| inline/data URL SVG | Y | Y | Y | Y | Y | Y | Y | `path`, rect, circle/ellipse, line, polyline/polygon, nested groups, affine transforms, arcs, rounded rects, solid fill/stroke, dash/cap/join, viewBox and preserveAspectRatio become clipped PDF Form XObjects; SVG text, paint servers, masks, filters and unsupported elements use a diagnostic scoped fallback |
 | margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; web/strict collapse sibling, parent/child, empty-block, and mixed positive/negative margin groups across eligible block formatting contexts; flex items consume main/cross `auto` margins |
 | logical sizing/margin/padding/border | Y | Y | Y | Y | Y | Y | Y | `*-block`/`*-inline` longhands and axis shorthands map with final `direction`, share cascade priority with physical peers, and preserve logical `inherit`; horizontal-tb writing mode |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
@@ -99,13 +101,16 @@ Playwright E2E make the matrix verifiable.
 - CSS Fragmentation fragmentainers, `@page`, named pages, and margin boxes.
 
 These features are not silently represented as whole-page screenshots. Canvas
-and unsupported SVG subtrees remain scoped image resources; normal text, links,
-backgrounds, gradients, shadows, borders, and fills remain native PDF content.
+and unsupported SVG subtrees remain scoped image resources; supported SVG is a
+native PDF Form XObject, while normal text, links, backgrounds, gradients,
+shadows, borders, and fills remain native PDF content.
 
 Unsupported declarations found by the Zig/native path are returned through the
 WASM result handle as owned structured diagnostics. Browser snapshots attach
 the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
-"ignore"`; subtree raster fallback is not enabled yet.
+"ignore"`. Unsupported inline SVG emits `CSS_SUBTREE_RASTERIZED` with a
+`nodePath`, `phase: "paint"`, and `fallback: "rasterized-subtree"`; callers can
+disable that scoped fallback with `fallback: "error"`.
 
 ## Verification gates
 
@@ -118,7 +123,9 @@ the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
   Web Flexbox, positioned-layout, and Grid vector geometry with live DOM
   rectangles within `0.75` CSS px; the positioned gate also verifies clipping,
   opacity, stacking order, fixed-page repetition, and absence of raster
-  fallback.
+  fallback. Chromium also verifies that supported SVG yields vector PDF paths
+  without image objects and that unsupported SVG fallback remains scoped and
+  diagnostic.
 - `make test-baseline` regenerates the versioned PDF fixtures in memory and
   compares their SHA-256 digests with the committed visual baseline manifest.
 - `make test-release` runs all of the above plus package and React builds.

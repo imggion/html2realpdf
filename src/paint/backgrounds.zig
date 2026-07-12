@@ -8,6 +8,7 @@ const box = @import("../box.zig");
 const geometry = @import("../geometry.zig");
 const image_decoder = @import("../image.zig");
 const layout = @import("../layout.zig");
+const svg = @import("../svg.zig");
 const types = @import("types.zig");
 
 const max_parts = 16;
@@ -448,6 +449,11 @@ fn resolveTileSize(paint_rect: geometry.Rect, size: Size, intrinsic: ?IntrinsicS
 }
 
 fn imageIntrinsicSize(allocator: std.mem.Allocator, source: []const u8) ?IntrinsicSize {
+    if (svg.isDataUrl(source)) {
+        var document = svg.parseDataUrl(allocator, source) catch return null;
+        defer document.deinit(allocator);
+        return .{ .width = document.view_box.width, .height = document.view_box.height };
+    }
     if (std.mem.startsWith(u8, source, "data:image/png;base64,")) {
         var image = image_decoder.decodePngDataUrl(allocator, source) catch return null;
         defer image.deinit(allocator);

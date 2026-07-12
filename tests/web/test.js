@@ -552,7 +552,9 @@ async function renderWithPackageApi() {
   const bytes = packagePdf.toUint8Array();
   if (decoder.decode(bytes.subarray(0, 8)) !== "%PDF-1.7") throw new Error("Package API returned an invalid PDF header");
   if (!decoder.decode(bytes).includes("/SMask")) throw new Error("Canvas transparency was not preserved as a PDF soft mask");
-  if ((decoder.decode(bytes).match(/\/Subtype \/Image/g) ?? []).length < 4) throw new Error("Canvas or inline SVG snapshot was not embedded as a PDF image");
+  const pdfStructure = decoder.decode(bytes);
+  if ((pdfStructure.match(/\/Subtype \/Image/g) ?? []).length < 2) throw new Error("Canvas snapshot was not embedded as a PDF image with transparency");
+  if (!pdfStructure.includes("/Subtype /Form")) throw new Error("Supported inline SVG was not preserved as a PDF vector Form XObject");
   if (!decoder.decode(bytes).includes("/Title (Browser package QA)")) throw new Error("Package metadata did not reach the PDF info dictionary");
   if (packagePdf.pageCount !== 1) throw new Error(`DOM snapshot produced ${packagePdf.pageCount} pages instead of 1`);
   // Keep a defensive copy available to automated browser QA. This never

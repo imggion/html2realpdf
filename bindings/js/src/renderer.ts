@@ -137,6 +137,7 @@ export class Html2RealPdf {
       // API opts into print rather than silently changing existing documents.
       mediaType: options.mediaType ?? "screen",
       unsupportedCss: options.unsupportedCss ?? (options.cssProfile === "strict" || options.strict ? "error" : "warn"),
+      fallback: options.fallback ?? (options.cssProfile === "strict" || options.strict ? "error" : "rasterize-subtree"),
     };
     if (options.baseUrl !== undefined) snapshotOptions.baseUrl = options.baseUrl;
     if (options.resourceResolver !== undefined) snapshotOptions.resourceResolver = options.resourceResolver;

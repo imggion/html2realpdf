@@ -6,6 +6,8 @@ const wasmPath = new URL("../bindings/js/dist/libhtml2realpdf.wasm", import.meta
 const wasm = await readFile(wasmPath);
 const { instance } = await WebAssembly.instantiate(wasm, {});
 const exports = instance.exports;
+const vectorSvg = `<svg viewBox="0 0 520 210" preserveAspectRatio="xMidYMid meet"><rect x="4" y="4" width="512" height="202" rx="28" fill="#eff6ff" stroke="#2563eb" stroke-width="8"/><g transform="translate(30 24)"><circle cx="72" cy="78" r="54" fill="#16a34a"/><ellipse cx="205" cy="78" rx="74" ry="48" fill="#f59e0b"/><path d="M292 138 C330 22 390 168 454 42 A24 18 0 0 1 486 76" fill="none" stroke="#7c3aed" stroke-width="12" stroke-linecap="round"/></g></svg>`;
+const vectorSvgDataUrl = `data:image/svg+xml;base64,${Buffer.from(vectorSvg).toString("base64")}`;
 const html = `
   <article style="font-family: Noto Sans; color: #172033">
     <div style="position: fixed; left: 0; right: 0; top: 0; height: 8px; z-index: 50; background: #0f172a; opacity: .9"></div>
@@ -90,6 +92,11 @@ const html = `
         <strong style="position: absolute; left: 326px; top: 30px; opacity: .7; color: #0f172a">isolated</strong>
       </div>
       <p style="margin-bottom: 0">Overlapping descendants are composited once through nested isolated PDF transparency groups.</p>
+    </section>
+    <section style="page-break-before: always; width: 560px; padding: 20px; background: #f8fafc">
+      <h2 style="margin-top: 0; color: #172033">Native SVG Form XObject</h2>
+      <p>Supported SVG paths and shapes stay vector while this label remains selectable PDF text.</p>
+      <img src="${vectorSvgDataUrl}" width="520" height="210" style="display: block; width: 520px; height: 210px; object-fit: contain">
     </section>
     <section style="page-break-before: always; display: grid; width: 600px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: 72px 110px; grid-template-areas: &quot;hero hero aside&quot; &quot;revenue users aside&quot;; gap: 14px; padding: 14px; background: #f8fafc">
       <div style="grid-area: hero; padding: 14px; background: #1e3a8a; color: white"><strong>Native CSS Grid dashboard</strong><br>Explicit named areas and flexible tracks</div>

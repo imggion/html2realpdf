@@ -133,6 +133,7 @@ pub const web_foundations = [_]FeatureSupport{
     .{ .name = "shadow-effects", .stage = full, .notes = "multiple outer inset and text shadows remain native PDF paint" },
     .{ .name = "shorthand-expansion", .stage = computed_only, .notes = "supported shorthands become physical longhands before computed values" },
     .{ .name = "stacking-contexts", .stage = full, .notes = "positioned and opacity contexts retain atomic tree-derived paint order" },
+    .{ .name = "svg-vector-resources", .stage = full, .notes = "validated shapes paths arcs groups and affine transforms become PDF Form XObjects with diagnostic scoped fallback" },
     .{ .name = "unicode-line-breaking", .stage = full, .notes = "libunibreak UAX 14 opportunities plus CSS emergency wrapping" },
 };
 

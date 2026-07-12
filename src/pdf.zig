@@ -9,6 +9,7 @@ const display_list = @import("display_list.zig");
 const font = @import("font.zig");
 const geometry = @import("geometry.zig");
 const image_decoder = @import("image.zig");
+const svg = @import("svg.zig");
 
 const font_object_span = 5;
 
@@ -1416,6 +1417,24 @@ fn writeImageObjects(
     image_command: display_list.Image,
 ) !void {
     const writer = &output.writer;
+    if (svg.isDataUrl(image_command.source)) {
+        var document = try svg.parseDataUrl(allocator, image_command.source);
+        defer document.deinit(allocator);
+        const content = try svgFormContent(allocator, document, image_command);
+        defer allocator.free(content);
+        const compressed = try image_decoder.compressZlib(allocator, content);
+        defer allocator.free(compressed);
+        try beginObject(output, offsets, object_id);
+        try writer.print(
+            "<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 1 1] /Resources << >> /Length {d} /Filter /FlateDecode >>\nstream\n",
+            .{compressed.len},
+        );
+        try writer.writeAll(compressed);
+        try writer.writeAll("\nendstream\nendobj\n");
+        try beginObject(output, offsets, object_id + 1);
+        try writer.writeAll("null\nendobj\n");
+        return;
+    }
     if (std.mem.startsWith(u8, image_command.source, "data:image/png;base64,")) {
         var png = try image_decoder.decodePngDataUrl(allocator, image_command.source);
         defer png.deinit(allocator);
@@ -1465,6 +1484,66 @@ fn writeImageObjects(
     try writer.writeAll("\nendstream\nendobj\n");
     try beginObject(output, offsets, object_id + 1);
     try writer.writeAll("null\nendobj\n");
+}
+
+fn svgFormContent(allocator: std.mem.Allocator, document: svg.Document, image_command: display_list.Image) ![]u8 {
+    var content = std.Io.Writer.Allocating.init(allocator);
+    errdefer content.deinit();
+    const writer = &content.writer;
+    const fitted = fittedImageRect(image_command);
+    const root_transform = document.formTransform(fitted.width, fitted.height);
+    try writer.writeAll("q 0 0 1 1 re W n\n");
+    for (document.shapes.items) |shape| {
+        if (shape.style.fill == null and (shape.style.stroke == null or shape.style.stroke_width <= 0)) continue;
+        const transform = root_transform.multiply(shape.transform);
+        try writer.print("q {d:.8} {d:.8} {d:.8} {d:.8} {d:.8} {d:.8} cm\n", .{
+            transform.a,
+            transform.b,
+            transform.c,
+            transform.d,
+            transform.e,
+            transform.f,
+        });
+        if (shape.style.fill) |fill| try writeFillColor(writer, fill);
+        if (shape.style.stroke) |stroke| {
+            try writeStrokeColor(writer, stroke);
+            try writer.print("{d:.5} w {d} J {d} j {d:.5} M [", .{
+                shape.style.stroke_width,
+                @intFromEnum(shape.style.line_cap),
+                @intFromEnum(shape.style.line_join),
+                shape.style.miter_limit,
+            });
+            for (shape.style.dash_values[0..shape.style.dash_len]) |value| try writer.print(" {d:.5}", .{value});
+            try writer.print(" ] {d:.5} d\n", .{shape.style.dash_offset});
+        }
+        try writeSvgPath(writer, document.ops.items[shape.first_op..][0..shape.op_count]);
+        if (shape.style.fill != null and shape.style.stroke != null and shape.style.stroke_width > 0) {
+            try writer.writeAll(if (shape.style.fill_rule == .evenodd) "B*\n" else "B\n");
+        } else if (shape.style.fill != null) {
+            try writer.writeAll(if (shape.style.fill_rule == .evenodd) "f*\n" else "f\n");
+        } else {
+            try writer.writeAll("S\n");
+        }
+        try writer.writeAll("Q\n");
+    }
+    try writer.writeAll("Q\n");
+    return content.toOwnedSlice();
+}
+
+fn writeSvgPath(writer: *std.Io.Writer, ops: []const svg.PathOp) !void {
+    for (ops) |op| switch (op) {
+        .move_to => |point| try writer.print("{d:.5} {d:.5} m\n", .{ point.x, point.y }),
+        .line_to => |point| try writer.print("{d:.5} {d:.5} l\n", .{ point.x, point.y }),
+        .cubic_to => |curve| try writer.print("{d:.5} {d:.5} {d:.5} {d:.5} {d:.5} {d:.5} c\n", .{
+            curve.control1.x,
+            curve.control1.y,
+            curve.control2.x,
+            curve.control2.y,
+            curve.end.x,
+            curve.end.y,
+        }),
+        .close => try writer.writeAll("h\n"),
+    };
 }
 
 fn writeLinkAnnotation(
@@ -2281,4 +2360,39 @@ test "fit and position native images inside their content box" {
     try std.testing.expectApproxEqAbs(@as(f32, 200), cover.width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, -100), cover.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), cover.y, 0.001);
+}
+
+test "preserve supported SVG images as native PDF Form XObjects" {
+    const pagination = @import("pagination.zig");
+    const allocator = std.testing.allocator;
+    const xml = "<svg viewBox='0 0 100 50'><rect x='5' y='5' width='90' height='40' rx='8' fill='#2563eb'/><path d='M20 30 C35 5 65 45 80 20' fill='none' stroke='#111827' stroke-width='3'/></svg>";
+    const encoded_len = std.base64.standard.Encoder.calcSize(xml.len);
+    const encoded = try allocator.alloc(u8, encoded_len);
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, xml);
+    const source = try std.fmt.allocPrint(allocator, "data:image/svg+xml;base64,{s}", .{encoded});
+    defer allocator.free(source);
+
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .command = .{ .image = .{
+            .rect = .{ .x = 10, .y = 20, .width = 200, .height = 100 },
+            .source = source,
+            .intrinsic_width = 100,
+            .intrinsic_height = 50,
+        } },
+    });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    const bytes = try write(allocator, &list);
+    defer allocator.free(bytes);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/Subtype /Form") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/Subtype /Image") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/Im1 ") != null);
+    try std.testing.expect(std.mem.endsWith(u8, bytes, "%%EOF\n"));
 }

@@ -442,3 +442,23 @@ test "embed transparent PNG data URLs with a PDF soft mask" {
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/SMask") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Im1 ") != null);
 }
+
+test "render supported SVG data URLs as vector PDF forms" {
+    const allocator = std.testing.allocator;
+    const svg_source = "<svg viewBox='0 0 80 40'><rect x='2' y='2' width='76' height='36' rx='8' fill='#dbeafe' stroke='#2563eb' stroke-width='4'/><path d='M12 28 C28 4 50 36 68 12' fill='none' stroke='#7c3aed' stroke-width='5'/></svg>";
+    const encoded_len = std.base64.standard.Encoder.calcSize(svg_source.len);
+    const encoded = try allocator.alloc(u8, encoded_len);
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, svg_source);
+    const html_source = try std.fmt.allocPrint(
+        allocator,
+        "<p>Selectable sibling</p><img src=\"data:image/svg+xml;base64,{s}\" width=\"160\" height=\"80\">",
+        .{encoded},
+    );
+    defer allocator.free(html_source);
+    var result = try renderHtml(allocator, html_source, .{ .css_profile = .web });
+    defer result.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Form") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/ToUnicode") != null);
+}

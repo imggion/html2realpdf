@@ -31,8 +31,11 @@ the browser's built-in PDF viewer.
 
 `renderPdf` accepts an HTML string, an `Element`, or a ref-shaped object such
 as a React `RefObject<Element>`. DOM/ref input is cloned, computed styles and
-live form values are materialized, canvas/SVG content becomes a transparent
-PNG resource, and active elements or event attributes are removed.
+live form values are materialized, canvas content becomes a transparent PNG,
+and supported SVG shapes and paths remain native vector Form XObjects. An
+unsupported SVG rasterizes only that SVG, emits `CSS_SUBTREE_RASTERIZED`, and
+can instead fail with `fallback: "error"`; active elements and event attributes
+are removed.
 
 For DOM/ref input, transparent descendant backgrounds remain transparent,
 normal-flow dimensions are allowed to reflow unless explicitly authored, and
@@ -97,10 +100,13 @@ transparent PNG, per-corner elliptical rounded fills/borders and rounded
 overflow clipping, Noto Sans Latin/Arabic/Hebrew, and registered embeddable TTF
 fonts. The Web profile also supports Flexbox, Grid, floats, positioned layout,
 native 2D transforms, layered URL/gradient backgrounds, shadows, and isolated
-opacity groups. Filters, blend modes, 3D transforms, and arbitrary browser
-painting remain outside the current profile. Layout-critical unsupported CSS is
-rejected; cosmetic omissions are available through `pdf.diagnostics` and can
-be promoted to errors with `strict: true`.
+opacity groups, plus vector-preserved SVG `path`, `rect`, circle/ellipse, line,
+polyline, polygon, group transform, solid fill/stroke, and dash paint. Filters,
+blend modes, 3D transforms, SVG text/paint servers/masks, and arbitrary browser
+painting remain outside the current native profile. Layout-critical unsupported
+CSS is rejected; cosmetic omissions and scoped raster fallbacks are available
+through `pdf.diagnostics` and can be promoted to errors with `strict: true` or
+`fallback: "error"`.
 
 ## Runtime and licensing
 
