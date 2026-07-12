@@ -27,7 +27,8 @@ const PageSequence = struct {
     }
 
     fn spec(self: PageSequence, page_index: usize) PageSpec {
-        return resolvePageSpec(self.base, self.rules, self.pageName(page_index), page_index, false);
+        const is_blank = page_index < self.document.blank_pages.items.len and self.document.blank_pages.items[page_index];
+        return resolvePageSpec(self.base, self.rules, self.pageName(page_index), page_index, is_blank);
     }
 
     fn extent(self: PageSequence, page_index: usize) f32 {
@@ -182,6 +183,41 @@ test "fixed fragments repeat at page-relative coordinates" {
     try std.testing.expectEqual(@as(usize, 2), header_count);
 }
 
+test "auto-width box fragments resolve each page inline extent" {
+    const allocator = std.testing.allocator;
+    var source = try std.ArrayList(layout.Fragment).initCapacity(allocator, 1);
+    defer source.deinit(allocator);
+    try source.append(allocator, .{
+        .kind = .box,
+        .source_box = 0,
+        .rect = .{ .width = 70, .height = 150 },
+        .background = .{ .red = 1, .green = 0, .blue = 0 },
+        .fragmentainer_inline_insets = .{ .left = 10, .right = 20 },
+    });
+    var names = try std.ArrayList([]const u8).initCapacity(allocator, 2);
+    defer names.deinit(allocator);
+    try names.appendSlice(allocator, &.{ "Report", "Summary" });
+    const continuous = layout.LayoutDocument{
+        .fragments = source,
+        .page_names = names,
+        .content_width = 100,
+        .content_height = 150,
+    };
+    var paged = try paginateWithRules(
+        allocator,
+        &continuous,
+        .{ .width_points = 75, .height_points = 75 },
+        &.{.{ .selector = .{ .name = "Summary" }, .width_points = 150, .height_points = 75 }},
+    );
+    defer paged.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), paged.page_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), paged.fragments.items[0].fragment.rect.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 70), paged.fragments.items[0].fragment.rect.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), paged.fragments.items[1].fragment.rect.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 170), paged.fragments.items[1].fragment.rect.width, 0.01);
+}
+
 fn visiblePageCount(fragments: []const PagedFragment) usize {
     var count: usize = 1;
     for (fragments) |paged| {
@@ -237,6 +273,10 @@ fn appendSplitBox(
         var segment = fragment;
         segment.rect.y = page_y;
         segment.rect.height = segment_height;
+        if (segment.fragmentainer_inline_insets) |insets| {
+            segment.rect.x = insets.left;
+            segment.rect.width = @max(sequence.spec(page_index).contentWidthCssPx() - insets.left - insets.right, 1);
+        }
         segment.transform = shiftedTransform(fragment.transform, 0, -page_start);
         segment.clip_transform = shiftedTransform(fragment.clip_transform, 0, -page_start);
         segment.clip_rect = clipForPage(fragment.clip_rect, page_start, content_height);

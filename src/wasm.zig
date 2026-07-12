@@ -58,6 +58,7 @@ const JsonPageRule = struct {
     marginRightImportant: bool = false,
     marginBottomImportant: bool = false,
     marginLeftImportant: bool = false,
+    marginBoxes: []const JsonMarginBox = &.{},
 };
 
 const JsonRenderOptions = struct {
@@ -370,16 +371,7 @@ fn renderPdfWithJson(
     } else .{};
     const margin_boxes = std.heap.wasm_allocator.alloc(renderer.MarginBox, value.marginBoxes.len) catch return createErrorResult(-2, "Margin box allocation failed");
     defer std.heap.wasm_allocator.free(margin_boxes);
-    for (value.marginBoxes, margin_boxes) |input, *output| output.* = .{
-        .name = input.name,
-        .content = input.content,
-        .font_family = input.fontFamily,
-        .font_size = if (std.math.isFinite(input.fontSize)) @max(input.fontSize, 1) else 12,
-        .font_weight = input.fontWeight,
-        .font_style = input.fontStyle,
-        .color = geometry.parseColor(input.color) orelse geometry.Color.black,
-        .text_align = input.textAlign,
-    };
+    for (value.marginBoxes, margin_boxes) |input, *output| output.* = marginBoxFromJson(input);
     const page_rules = std.heap.wasm_allocator.alloc(renderer.PageRule, value.pageRules.len) catch return createErrorResult(-2, "Page rule allocation failed");
     defer std.heap.wasm_allocator.free(page_rules);
     for (value.pageRules, page_rules) |input, *output| output.* = .{
@@ -402,6 +394,18 @@ fn renderPdfWithJson(
         .margin_bottom_important = input.marginBottomImportant,
         .margin_left_important = input.marginLeftImportant,
     };
+    const page_margin_rules = std.heap.wasm_allocator.alloc(renderer.PageMarginRule, value.pageRules.len) catch return createErrorResult(-2, "Page margin rule allocation failed");
+    for (page_rules, page_margin_rules) |page_rule, *output| output.* = .{ .selector = page_rule.selector, .boxes = &.{} };
+    defer {
+        for (page_margin_rules) |rule| if (rule.boxes.len > 0) std.heap.wasm_allocator.free(@constCast(rule.boxes));
+        std.heap.wasm_allocator.free(page_margin_rules);
+    }
+    for (value.pageRules, page_margin_rules) |input, *output| {
+        if (input.marginBoxes.len == 0) continue;
+        const boxes = std.heap.wasm_allocator.alloc(renderer.MarginBox, input.marginBoxes.len) catch return createErrorResult(-2, "Page margin box allocation failed");
+        for (input.marginBoxes, boxes) |margin_input, *margin_output| margin_output.* = marginBoxFromJson(margin_input);
+        output.boxes = boxes;
+    }
     var registry = if (context) |available| available.registry() else font.Registry{};
     return renderPdf(ptr, len, .{
         .custom_page_width_points = value.pageWidthPoints,
@@ -416,8 +420,22 @@ fn renderPdfWithJson(
         .font_registry = if (context != null) &registry else null,
         .css_profile = value.cssProfile,
         .margin_boxes = margin_boxes,
+        .page_margin_rules = page_margin_rules,
         .page_rules = page_rules,
     });
+}
+
+fn marginBoxFromJson(input: JsonMarginBox) renderer.MarginBox {
+    return .{
+        .name = input.name,
+        .content = input.content,
+        .font_family = input.fontFamily,
+        .font_size = if (std.math.isFinite(input.fontSize)) @max(input.fontSize, 1) else 12,
+        .font_weight = input.fontWeight,
+        .font_style = input.fontStyle,
+        .color = geometry.parseColor(input.color) orelse geometry.Color.black,
+        .text_align = input.textAlign,
+    };
 }
 
 fn createErrorResult(status: i32, message: []const u8) usize {

@@ -10,6 +10,7 @@ const display_list = @import("display_list.zig");
 const font = @import("font.zig");
 const geometry = @import("geometry.zig");
 const intrinsic = @import("layout/intrinsic.zig");
+const pagination = @import("pagination.zig");
 
 pub const MarginBoxName = enum {
     top_left_corner,
@@ -41,6 +42,11 @@ pub const MarginBox = struct {
     text_align: ?box.TextAlign = null,
 };
 
+pub const MarginRule = struct {
+    selector: pagination.PageSelector,
+    boxes: []const MarginBox,
+};
+
 const Slot = struct {
     rect: geometry.Rect,
     default_align: box.TextAlign,
@@ -50,11 +56,34 @@ pub fn appendMarginBoxes(
     allocator: std.mem.Allocator,
     list: *display_list.DisplayList,
     boxes: []const MarginBox,
+    rules: []const MarginRule,
+    page_names: []const []const u8,
+    blank_pages: []const bool,
     registry: ?*const font.Registry,
     shaping_mode: font.ShapingMode,
 ) !void {
     for (0..list.page_count) |page_index| {
+        var selected = [_]?MarginBox{null} ** std.meta.fields(MarginBoxName).len;
+        var winners = [_]MarginWinner{.{}} ** std.meta.fields(MarginBoxName).len;
         for (boxes) |margin_box| {
+            const index = @intFromEnum(margin_box.name);
+            selected[index] = margin_box;
+            winners[index].set = true;
+        }
+        const page_name = if (page_index < page_names.len) page_names[page_index] else "";
+        const is_blank = page_index < blank_pages.len and blank_pages[page_index];
+        for (rules, 0..) |rule, order| {
+            if (!selectorMatches(rule.selector, page_name, page_index, is_blank)) continue;
+            const specificity = selectorSpecificity(rule.selector);
+            for (rule.boxes) |margin_box| {
+                const index = @intFromEnum(margin_box.name);
+                if (!winners[index].accepts(specificity, order)) continue;
+                selected[index] = margin_box;
+                winners[index] = .{ .set = true, .specificity = specificity, .order = order };
+            }
+        }
+        for (selected) |candidate| {
+            const margin_box = candidate orelse continue;
             const slot = slotFor(list.pageSpec(page_index), margin_box.name);
             if (slot.rect.width <= 0 or slot.rect.height <= 0) continue;
             const text = try expandCounters(allocator, margin_box.content, page_index + 1, list.page_count);
@@ -93,6 +122,35 @@ pub fn appendMarginBoxes(
             });
         }
     }
+}
+
+const MarginWinner = struct {
+    set: bool = false,
+    specificity: [3]u8 = .{ 0, 0, 0 },
+    order: usize = 0,
+
+    fn accepts(self: MarginWinner, specificity: [3]u8, order: usize) bool {
+        if (!self.set) return true;
+        const comparison = std.mem.order(u8, &specificity, &self.specificity);
+        return comparison == .gt or (comparison == .eq and order >= self.order);
+    }
+};
+
+fn selectorMatches(selector: pagination.PageSelector, page_name: []const u8, page_index: usize, is_blank: bool) bool {
+    if (selector.name.len > 0 and !std.mem.eql(u8, selector.name, page_name)) return false;
+    if (selector.first and page_index != 0) return false;
+    if (selector.left and page_index % 2 == 0) return false;
+    if (selector.right and page_index % 2 != 0) return false;
+    if (selector.blank and !is_blank) return false;
+    return true;
+}
+
+fn selectorSpecificity(selector: pagination.PageSelector) [3]u8 {
+    return .{
+        @intFromBool(selector.name.len > 0),
+        @intFromBool(selector.first) + @intFromBool(selector.blank),
+        @intFromBool(selector.left) + @intFromBool(selector.right),
+    };
 }
 
 fn slotFor(spec: @import("pagination.zig").PageSpec, name: MarginBoxName) Slot {
@@ -166,9 +224,42 @@ test "append selectable margin content on every page" {
         for (list.commands.items) |command| allocator.free(command.command.text.text);
         list.deinit(allocator);
     }
-    try appendMarginBoxes(allocator, &list, &.{.{ .name = .top_center, .content = "{{page}}/{{pages}}" }}, null, .identity);
+    try appendMarginBoxes(allocator, &list, &.{.{ .name = .top_center, .content = "{{page}}/{{pages}}" }}, &.{}, &.{}, &.{}, null, .identity);
     try std.testing.expectEqual(@as(usize, 2), list.commands.items.len);
     try std.testing.expectEqualStrings("1/2", list.commands.items[0].command.text.text);
     try std.testing.expectEqualStrings("2/2", list.commands.items[1].command.text.text);
     try std.testing.expect(list.commands.items[0].command.text.position.y < 0);
+}
+
+test "named and blank page margin boxes select by page specificity" {
+    const allocator = std.testing.allocator;
+    const commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 0);
+    var list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 3,
+        .page_spec = .{ .width_points = 150, .height_points = 75, .margins_points = .{ .bottom = 15 } },
+    };
+    defer {
+        for (list.commands.items) |command| allocator.free(command.command.text.text);
+        list.deinit(allocator);
+    }
+    const summary = [_]MarginBox{.{ .name = .bottom_center, .content = "Summary" }};
+    const blank = [_]MarginBox{.{ .name = .bottom_center, .content = "Blank" }};
+    try appendMarginBoxes(
+        allocator,
+        &list,
+        &.{.{ .name = .bottom_center, .content = "Default" }},
+        &.{
+            .{ .selector = .{ .name = "Summary" }, .boxes = &summary },
+            .{ .selector = .{ .name = "Summary", .blank = true }, .boxes = &blank },
+        },
+        &.{ "Report", "Summary", "Summary" },
+        &.{ false, true, false },
+        null,
+        .identity,
+    );
+    try std.testing.expectEqual(@as(usize, 3), list.commands.items.len);
+    try std.testing.expectEqualStrings("Default", list.commands.items[0].command.text.text);
+    try std.testing.expectEqualStrings("Blank", list.commands.items[1].command.text.text);
+    try std.testing.expectEqualStrings("Summary", list.commands.items[2].command.text.text);
 }

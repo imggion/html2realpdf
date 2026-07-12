@@ -56,6 +56,8 @@ pub fn layout(
     defer pending_positioned.deinit(allocator);
     var page_name_transitions = try std.ArrayList(PageNameTransition).initCapacity(allocator, tree.boxes.items.len * 2 + 1);
     defer page_name_transitions.deinit(allocator);
+    var blank_page_indices = try std.ArrayList(usize).initCapacity(allocator, tree.boxes.items.len * 2 + 1);
+    defer blank_page_indices.deinit(allocator);
     var state = State{
         .allocator = allocator,
         .tree = tree,
@@ -69,6 +71,7 @@ pub fn layout(
         .margin_cache = margin_cache,
         .pending_positioned = &pending_positioned,
         .page_name_transitions = &page_name_transitions,
+        .blank_page_indices = &blank_page_indices,
         .page_spec = options.page_spec,
         .page_rules = options.page_rules,
     };
@@ -81,6 +84,7 @@ pub fn layout(
     };
     _ = try state.layoutBlockWithOptions(tree.root, containing, &cursor_y, .{
         .containing_block_height = if (options.web_sizing) options.page_height else containing.height,
+        .fragmentainer_inline_insets = if (options.web_sizing and options.page_spec != null) .{} else null,
     });
     if (options.web_sizing) try positioned.layoutPending(&state, .{
         .width = containing.width,
@@ -90,10 +94,13 @@ pub fn layout(
 
     var page_names = try state.buildPageNames(cursor_y);
     errdefer page_names.deinit(allocator);
+    var blank_pages = try state.buildBlankPages(page_names.items.len);
+    errdefer blank_pages.deinit(allocator);
 
     return .{
         .fragments = state.fragments,
         .page_names = page_names,
+        .blank_pages = blank_pages,
         .content_width = containing.width,
         .content_height = cursor_y,
     };
@@ -112,6 +119,7 @@ const State = struct {
     margin_cache: []?block.MarginInfo,
     pending_positioned: *std.ArrayList(positioned.Pending),
     page_name_transitions: *std.ArrayList(PageNameTransition),
+    blank_page_indices: *std.ArrayList(usize),
     page_spec: ?page_geometry.PageSpec,
     page_rules: []const page_geometry.PageRule,
     next_line_id: usize = 0,
@@ -158,9 +166,13 @@ const State = struct {
         const source = self.tree.boxes.items[box_id];
         const style = source.style;
         var rect = raw_rect;
+        var resolved_containing = containing;
+        if (options.fragmentainer_inline_insets) |insets| {
+            resolved_containing = self.fragmentainerInlineContainingBlock(insets, raw_rect.y, containing.width);
+        }
         if (style.overflow.clips() and fragment_start < self.fragments.items.len) {
             const vertical_edges = source.border.top + source.border.bottom + source.padding.top + source.padding.bottom;
-            const containing_height: ?f32 = if (self.web_sizing) options.containing_block_height else containing.height;
+            const containing_height: ?f32 = if (self.web_sizing) options.containing_block_height else resolved_containing.height;
             if (intrinsic.resolveContentDimensionOptional(style.height, containing_height, vertical_edges, style.box_sizing)) |requested_content_height| {
                 const requested_outer_height = requested_content_height + vertical_edges;
                 if (requested_outer_height < rect.height) {
@@ -191,7 +203,7 @@ const State = struct {
             }
         }
         if (self.web_sizing and (style.position == .relative or style.position == .sticky)) {
-            self.shiftRelativeFragments(box_id, fragment_start, containing.width, options.containing_block_height orelse containing.height);
+            self.shiftRelativeFragments(box_id, fragment_start, resolved_containing.width, options.containing_block_height orelse resolved_containing.height);
         }
         return rect;
     }
@@ -233,8 +245,28 @@ const State = struct {
             .rules = self.page_rules,
             .initial_name = fragmentation.startPageName(self.tree, self.tree.root),
             .transitions = self.page_name_transitions.items,
+            .blank_pages = self.blank_page_indices.items,
         }, progression);
         return fragmentation.Context.init(page_height, progression);
+    }
+
+    pub fn fragmentainerInlineExtentAt(self: *const State, position: f32, fallback: f32) f32 {
+        const context = self.fragmentainer() orelse return @max(fallback, 1);
+        return context.inlineExtentAt(position, fallback);
+    }
+
+    pub fn fragmentainerInlineContainingBlock(
+        self: *const State,
+        insets: types.FragmentainerInlineInsets,
+        position: f32,
+        fallback: f32,
+    ) geometry.Rect {
+        const inline_extent = self.fragmentainerInlineExtentAt(position, fallback);
+        return .{
+            .x = insets.left,
+            .y = position,
+            .width = @max(inline_extent - insets.left - insets.right, 1),
+        };
     }
 
     fn rootFlowDirection(self: *const State) box.Direction {
@@ -247,9 +279,21 @@ const State = struct {
         return self.tree.boxes.items[self.tree.root].style.direction;
     }
 
-    pub fn applyForcedBreak(self: *const State, cursor_y: *f32, value: box.PageBreak) void {
+    pub fn applyForcedBreak(self: *State, cursor_y: *f32, value: box.PageBreak) void {
         const context = self.fragmentainer() orelse return;
-        cursor_y.* = context.forcedBreakStart(cursor_y.*, value);
+        const source_position = cursor_y.*;
+        const target_position = context.forcedBreakStart(source_position, value);
+        const source_page = context.pageIndex(source_position);
+        const target_page = context.pageIndex(target_position);
+        const blank_start = source_page + @intFromBool(context.offset(source_position) > 0.0001);
+        for (blank_start..target_page) |page_index| self.recordBlankPage(page_index);
+        const updated = self.fragmentainer() orelse return;
+        cursor_y.* = updated.pageStartForIndex(target_page);
+    }
+
+    fn recordBlankPage(self: *State, page_index: usize) void {
+        if (std.mem.indexOfScalar(usize, self.blank_page_indices.items, page_index) != null) return;
+        self.blank_page_indices.appendAssumeCapacity(page_index);
     }
 
     pub fn recordPageName(self: *State, position: f32, name: []const u8) void {
@@ -279,6 +323,15 @@ const State = struct {
                 if (transition.page_index <= page_index) name = transition.name;
             }
             try result.append(self.allocator, name);
+        }
+        return result;
+    }
+
+    fn buildBlankPages(self: *const State, page_count: usize) !std.ArrayList(bool) {
+        var result = try std.ArrayList(bool).initCapacity(self.allocator, page_count);
+        errdefer result.deinit(self.allocator);
+        for (0..page_count) |page_index| {
+            try result.append(self.allocator, std.mem.indexOfScalar(usize, self.blank_page_indices.items, page_index) != null);
         }
         return result;
     }
@@ -547,7 +600,7 @@ const State = struct {
         width: f32,
         text_align: box.TextAlign,
     ) !f32 {
-        return self.layoutInlineChildrenWithOffset(parent_id, start_x, start_y, width, text_align, 0);
+        return self.layoutInlineChildrenWithOffset(parent_id, start_x, start_y, width, text_align, 0, null);
     }
 
     pub fn layoutInlineChildrenWithOffset(
@@ -558,11 +611,23 @@ const State = struct {
         width: f32,
         text_align: box.TextAlign,
         first_line_offset: f32,
+        fragmentainer_inline_insets: ?types.FragmentainerInlineInsets,
     ) !f32 {
         const style = self.tree.boxes.items[parent_id].style;
         const text_indent = (style.text_indent.resolve(width) orelse 0) + first_line_offset;
         const ellipsis_enabled = style.text_overflow == .ellipsis and style.overflow.clips();
-        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, style.direction, text_indent, ellipsis_enabled);
+        var cursor = InlineCursor.init(
+            self,
+            start_x,
+            start_y,
+            width,
+            text_align,
+            style.direction,
+            text_indent,
+            ellipsis_enabled,
+            fragmentainer_inline_insets,
+            self.tree.boxes.items[parent_id].kind != .tableCell,
+        );
         const parent_link = self.linkForBox(parent_id);
         var child = self.tree.boxes.items[parent_id].first_child;
         while (child) |child_id| {
@@ -579,12 +644,25 @@ const State = struct {
         start_y: f32,
         width: f32,
         text_align: box.TextAlign,
+        fragmentainer_inline_insets: ?types.FragmentainerInlineInsets,
     ) !f32 {
         const first = self.tree.boxes.items[first_box];
         const style = if (first.parent) |parent_id| self.tree.boxes.items[parent_id].style else first.style;
         const text_indent = style.text_indent.resolve(width) orelse 0;
         const ellipsis_enabled = style.text_overflow == .ellipsis and style.overflow.clips();
-        var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, style.direction, text_indent, ellipsis_enabled);
+        const parent_kind = if (first.parent) |parent_id| self.tree.boxes.items[parent_id].kind else first.kind;
+        var cursor = InlineCursor.init(
+            self,
+            start_x,
+            start_y,
+            width,
+            text_align,
+            style.direction,
+            text_indent,
+            ellipsis_enabled,
+            fragmentainer_inline_insets,
+            parent_kind != .tableCell,
+        );
         try cursor.layoutBox(first_box, null, .baseline);
         return cursor.finish();
     }
@@ -1160,6 +1238,44 @@ test "Web facing-page breaks arbitrate adjacent before and after values" {
     try std.testing.expectApproxEqAbs(@as(f32, 200), right.?.y, 0.01);
 }
 
+test "Web forced facing breaks mark and size blank pages" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:20px;background:#ff0000'></div>" ++
+        "<div style='height:20px;break-before:right;background:#0000ff'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    const rules = [_]page_geometry.PageRule{
+        .{ .selector = .{ .blank = true }, .width_points = 150, .height_points = 112.5 },
+    };
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+        .page_spec = .{ .width_points = 75, .height_points = 75 },
+        .page_rules = &rules,
+    });
+    defer result.deinit(allocator);
+
+    var second_y: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.blue == 1 and color.red == 0) second_y = fragment.rect.y;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 250), second_y.?, 0.01);
+    try std.testing.expectEqualSlices(bool, &.{ false, true, false }, result.blank_pages.items);
+}
+
 test "Web named page changes force a new page at block boundaries" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -1260,6 +1376,145 @@ test "Web named page height controls later fragmentainer placement" {
     try std.testing.expectEqualStrings("Report", result.page_names.items[0]);
     try std.testing.expectEqualStrings("Summary", result.page_names.items[1]);
     try std.testing.expectEqualStrings("Summary", result.page_names.items[2]);
+}
+
+test "Web named page width controls auto block sizing" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:20px;page:Report;background:#ff0000'></div>" ++
+        "<div style='height:20px;page:Summary;background:#0000ff'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    const rules = [_]page_geometry.PageRule{
+        .{ .selector = .{ .name = "Summary" }, .width_points = 150, .height_points = 75 },
+    };
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+        .page_spec = .{ .width_points = 75, .height_points = 75 },
+        .page_rules = &rules,
+    });
+    defer result.deinit(allocator);
+
+    var report: ?geometry.Rect = null;
+    var summary_page: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) report = fragment.rect;
+        if (color.blue == 1 and color.red == 0) summary_page = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), report.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 200), summary_page.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), summary_page.?.y, 0.01);
+}
+
+test "Web pseudo page widths reflow inline lines" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source = "<p style='margin:0;font-size:16px;line-height:20px'>MMMMMM MMMMMM MMMMMM MMMMMM MMMMMM MMMMMM</p>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    const rules = [_]page_geometry.PageRule{
+        .{ .selector = .{ .left = true }, .width_points = 150, .height_points = 30 },
+    };
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 40,
+        .web_sizing = true,
+        .page_spec = .{ .width_points = 75, .height_points = 30 },
+        .page_rules = &rules,
+    });
+    defer result.deinit(allocator);
+
+    var page_line_ids = [_]std.ArrayList(usize){ .empty, .empty };
+    defer for (&page_line_ids) |*ids| ids.deinit(allocator);
+    var page_words = [_]usize{ 0, 0 };
+    const context = fragmentation.Context.initPaged(.{
+        .base = .{ .width_points = 75, .height_points = 30 },
+        .rules = &rules,
+    }, .left_to_right).?;
+    for (result.fragments.items) |fragment| {
+        if (fragment.text == null or !std.mem.eql(u8, fragment.text.?, "MMMMMM")) continue;
+        const page_index = context.pageIndex(fragment.rect.y);
+        if (page_index >= page_words.len) continue;
+        page_words[page_index] += 1;
+        const line_id = fragment.line_id.?;
+        if (std.mem.indexOfScalar(usize, page_line_ids[page_index].items, line_id) == null) {
+            try page_line_ids[page_index].append(allocator, line_id);
+        }
+    }
+    try std.testing.expectEqual([2]usize{ 2, 4 }, page_words);
+    try std.testing.expectEqual(@as(usize, 2), page_line_ids[0].items.len);
+    try std.testing.expectEqual(@as(usize, 2), page_line_ids[1].items.len);
+}
+
+test "Web named page widths reach Flex Grid and table formatting contexts" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:10px;page:Report'></div>" ++
+        "<div style='height:20px;page:FlexWide;display:flex'>" ++
+        "<div style='flex:1;background:#ff0000'></div><div style='flex:1;background:#00ff00'></div></div>" ++
+        "<div style='height:20px;page:GridWide;display:grid;grid-template-columns:1fr 1fr'>" ++
+        "<div style='background:#0000ff'></div><div style='background:#ffff00'></div></div>" ++
+        "<table style='page:TableWide;width:100%'><tr>" ++
+        "<td style='height:20px;background:#00ffff'></td><td style='height:20px;background:#ff00ff'></td></tr></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    const rules = [_]page_geometry.PageRule{
+        .{ .selector = .{ .name = "FlexWide" }, .width_points = 150, .height_points = 75 },
+        .{ .selector = .{ .name = "GridWide" }, .width_points = 150, .height_points = 75 },
+        .{ .selector = .{ .name = "TableWide" }, .width_points = 150, .height_points = 75 },
+    };
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+        .page_spec = .{ .width_points = 75, .height_points = 75 },
+        .page_rules = &rules,
+    });
+    defer result.deinit(allocator);
+
+    var widths: [6]?f32 = .{null} ** 6;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.green == 0 and color.blue == 0) widths[0] = fragment.rect.width;
+        if (color.green == 1 and color.red == 0 and color.blue == 0) widths[1] = fragment.rect.width;
+        if (color.blue == 1 and color.red == 0 and color.green == 0) widths[2] = fragment.rect.width;
+        if (color.red == 1 and color.green == 1 and color.blue == 0) widths[3] = fragment.rect.width;
+        if (color.green == 1 and color.blue == 1 and color.red == 0) widths[4] = fragment.rect.width;
+        if (color.red == 1 and color.blue == 1 and color.green == 0) widths[5] = fragment.rect.width;
+    }
+    for (widths) |width| try std.testing.expectApproxEqAbs(@as(f32, 100), width.?, 0.05);
 }
 
 fn expectNamedFormatterTransition(source: []const u8) !void {

@@ -41,6 +41,7 @@ export interface SnapshotPageRule {
   marginRightImportant?: boolean;
   marginBottomImportant?: boolean;
   marginLeftImportant?: boolean;
+  marginBoxes?: readonly SnapshotPageMarginBox[];
 }
 
 export type SnapshotPageMarginBoxName =
@@ -217,6 +218,16 @@ const SUPPORTED_DISPLAY = new Set([
 ]);
 
 const ACTIVE_ELEMENTS = "script,iframe,object,embed";
+const AUTHORED_PAGE_MIRROR = "--html2realpdf-authored-page";
+const AUTHORED_FLOW_DIMENSION_MIRRORS = {
+  width: "--html2realpdf-authored-width",
+  height: "--html2realpdf-authored-height",
+  "min-width": "--html2realpdf-authored-min-width",
+  "max-width": "--html2realpdf-authored-max-width",
+  "min-height": "--html2realpdf-authored-min-height",
+  "max-height": "--html2realpdf-authored-max-height",
+} as const;
+type FlowDimensionProperty = keyof typeof AUTHORED_FLOW_DIMENSION_MIRRORS;
 const VECTOR_SVG_ELEMENTS = new Set(["svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "title", "desc"]);
 const VECTOR_SVG_UNSUPPORTED_PROPERTIES = [
   "filter",
@@ -395,8 +406,9 @@ function readDefaultPageStyle(document: Document, options: SnapshotOptions, diag
       // declarations remain usable, but paged-media metadata is unavailable.
     }
   }
-  if (marginCascades.size === 0) {
-    for (const style of document.querySelectorAll("style")) {
+  for (const style of document.querySelectorAll("style")) {
+    collectAuthoredDiscardedPageRules(style.textContent ?? "", document, view, rawRules, options, diagnostics);
+    if (marginCascades.size === 0) {
       collectAuthoredPageMarginRules(style.textContent ?? "", document, view, marginCascades, options, diagnostics);
     }
   }
@@ -553,6 +565,8 @@ function materializePageRules(
       rule[output] = parsed;
       if (declaration.important) rule[importantOutput] = true;
     }
+    const marginBoxes = materializePageMarginBoxes(raw.marginCascades, options, diagnostics);
+    if (marginBoxes.length > 0) rule.marginBoxes = marginBoxes;
     result.push(rule);
   }
   return result;
@@ -663,6 +677,85 @@ function collectAuthoredPageMarginRules(
     // Unknown grouping conditions stay opaque: applying a raw @page from an
     // inactive container/scope would be worse than omission.
     cursor = close + 1;
+  }
+}
+
+/// Some engines discard selectors they do not implement (notably `:blank`)
+/// from CSSOM entirely. Recover only those discarded rules from same-document
+/// authored styles; selectors exposed by CSSOM keep their canonical ordering
+/// and are not duplicated here.
+function collectAuthoredDiscardedPageRules(
+  cssText: string,
+  document: Document,
+  view: Window,
+  rawRules: RawPageRule[],
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+): void {
+  let cursor = 0;
+  while (cursor < cssText.length) {
+    const at = nextCssAtRule(cssText, cursor);
+    if (at < 0) break;
+    const nameMatch = cssText.slice(at + 1).match(/^([\w-]+)/);
+    if (!nameMatch) {
+      cursor = at + 1;
+      continue;
+    }
+    let open = at + 1 + nameMatch[0].length;
+    while (open < cssText.length && cssText[open] !== "{" && cssText[open] !== ";") open += 1;
+    if (cssText[open] !== "{") {
+      cursor = open + 1;
+      continue;
+    }
+    const close = matchingCssBrace(cssText, open);
+    if (close < 0) break;
+    const atRuleName = nameMatch[1]!.toLowerCase();
+    const prelude = cssText.slice(at + 1 + nameMatch[0].length, open).trim();
+    const nested = cssText.slice(open + 1, close);
+    if (atRuleName === "page" && prelude) {
+      const marginCascades = new Map<SnapshotPageMarginBoxName, MarginBoxCascade>();
+      collectPageMarginRules(`@page {${nested}}`, document, marginCascades, options, diagnostics);
+      const recoversDiscardedGeometry = /:blank\b/i.test(prelude);
+      if (recoversDiscardedGeometry || marginCascades.size > 0) {
+        const selector = parsePageSelector(prelude);
+        if (!selector) {
+          reportUnsupportedPageValue("@page selector", prelude, options, diagnostics);
+        } else {
+          const cascade = recoversDiscardedGeometry ? parseAuthoredPageCascade(document, nested) : {};
+          rawRules.push({ selector, cascade, marginCascades });
+        }
+      }
+    } else if (atRuleName === "media") {
+      const viewport = options.viewport ?? { width: 1280, height: 720 };
+      if (matchesRequestedMedia(prelude, options.mediaType ?? "screen", viewport, view)) {
+        collectAuthoredDiscardedPageRules(nested, document, view, rawRules, options, diagnostics);
+      }
+    } else if (atRuleName === "supports") {
+      if (CSS.supports(prelude)) collectAuthoredDiscardedPageRules(nested, document, view, rawRules, options, diagnostics);
+    } else if (atRuleName === "layer") {
+      collectAuthoredDiscardedPageRules(nested, document, view, rawRules, options, diagnostics);
+    }
+    cursor = close + 1;
+  }
+}
+
+function parseAuthoredPageCascade(document: Document, body: string): PageCascade {
+  const styleElement = document.createElement("style");
+  styleElement.textContent = `@page {${body}}`;
+  (document.head ?? document.documentElement).append(styleElement);
+  try {
+    const rule = [...(styleElement.sheet?.cssRules ?? [])].find((candidate) => candidate.type === CSS_PAGE_RULE && "style" in candidate) as CSSPageRule | undefined;
+    const cascade: PageCascade = {};
+    if (!rule) return cascade;
+    const style = rule.style as unknown as CSSStyleDeclaration;
+    cascadePageDeclaration(cascade, style, "size");
+    cascadePageDeclaration(cascade, style, "margin-top");
+    cascadePageDeclaration(cascade, style, "margin-right");
+    cascadePageDeclaration(cascade, style, "margin-bottom");
+    cascadePageDeclaration(cascade, style, "margin-left");
+    return cascade;
+  } finally {
+    styleElement.remove();
   }
 }
 
@@ -940,6 +1033,128 @@ function serializeAccessibleStylesheets(source: Document): string {
   return output.join("\n");
 }
 
+function installAuthoredPageMirror(document: Document): () => void {
+  const view = document.defaultView ?? window;
+  const rules: string[] = [`*{${AUTHORED_PAGE_MIRROR}:auto}`];
+  for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])]) {
+    try {
+      collectAuthoredPageMirrorRules(sheet.cssRules, view, rules);
+    } catch {
+      // Cross-origin rules have the same authored-value limitation as the
+      // existing computed-style snapshot boundary.
+    }
+  }
+  const styleElement = document.createElement("style");
+  styleElement.dataset.html2realpdfPageMirror = "";
+  styleElement.textContent = rules.join("\n");
+  (document.head ?? document.documentElement).append(styleElement);
+
+  const restorations: Array<{ style: CSSStyleDeclaration; value: string; priority: string }> = [];
+  for (const element of document.querySelectorAll("[style]")) {
+    if (!("style" in element)) continue;
+    const style = (element as HTMLElement | SVGElement).style;
+    const page = style.getPropertyValue("page").trim();
+    if (!page) continue;
+    restorations.push({
+      style,
+      value: style.getPropertyValue(AUTHORED_PAGE_MIRROR),
+      priority: style.getPropertyPriority(AUTHORED_PAGE_MIRROR),
+    });
+    style.setProperty(AUTHORED_PAGE_MIRROR, page, style.getPropertyPriority("page"));
+  }
+
+  return () => {
+    for (const restoration of restorations) {
+      if (restoration.value) restoration.style.setProperty(AUTHORED_PAGE_MIRROR, restoration.value, restoration.priority);
+      else restoration.style.removeProperty(AUTHORED_PAGE_MIRROR);
+    }
+    styleElement.remove();
+  };
+}
+
+function collectAuthoredPageMirrorRules(rules: CSSRuleList, view: Window, output: string[]): void {
+  for (const rule of [...rules]) {
+    if (rule.type === CSS_STYLE_RULE && "style" in rule && "selectorText" in rule) {
+      const styleRule = rule as CSSStyleRule;
+      const page = styleRule.style.getPropertyValue("page").trim();
+      if (!page || styleRule.selectorText.includes("::")) continue;
+      const important = styleRule.style.getPropertyPriority("page") === "important" ? "!important" : "";
+      output.push(`${styleRule.selectorText}{${AUTHORED_PAGE_MIRROR}:${page}${important}}`);
+      continue;
+    }
+    if (!("cssRules" in rule) || !(rule as CSSGroupingRule).cssRules) continue;
+    if (rule.type === CSS_MEDIA_RULE && "conditionText" in rule && !view.matchMedia(String(rule.conditionText)).matches) continue;
+    if (rule.type === CSS_SUPPORTS_RULE && "conditionText" in rule && !CSS.supports(String(rule.conditionText))) continue;
+    collectAuthoredPageMirrorRules((rule as CSSGroupingRule).cssRules, view, output);
+  }
+}
+
+function installAuthoredFlowDimensionMirrors(document: Document): () => void {
+  const view = document.defaultView ?? window;
+  const reset = Object.values(AUTHORED_FLOW_DIMENSION_MIRRORS)
+    .map((property) => `${property}:initial`)
+    .join(";");
+  const rules: string[] = [`*{${reset}}`];
+  for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])]) {
+    try {
+      collectAuthoredFlowDimensionMirrorRules(sheet.cssRules, view, rules);
+    } catch {
+      // Cross-origin declarations fall back to their computed dimensions.
+    }
+  }
+  const styleElement = document.createElement("style");
+  styleElement.dataset.html2realpdfFlowDimensionMirror = "";
+  styleElement.textContent = rules.join("\n");
+  (document.head ?? document.documentElement).append(styleElement);
+
+  const restorations: Array<{ style: CSSStyleDeclaration; property: string; value: string; priority: string }> = [];
+  for (const element of document.querySelectorAll("[style]")) {
+    if (!("style" in element)) continue;
+    const style = (element as HTMLElement | SVGElement).style;
+    for (const [property, mirror] of Object.entries(AUTHORED_FLOW_DIMENSION_MIRRORS) as Array<[FlowDimensionProperty, string]>) {
+      const value = style.getPropertyValue(property).trim();
+      if (!value) continue;
+      restorations.push({
+        style,
+        property: mirror,
+        value: style.getPropertyValue(mirror),
+        priority: style.getPropertyPriority(mirror),
+      });
+      style.setProperty(mirror, value, style.getPropertyPriority(property));
+    }
+  }
+
+  return () => {
+    for (const restoration of restorations) {
+      if (restoration.value) restoration.style.setProperty(restoration.property, restoration.value, restoration.priority);
+      else restoration.style.removeProperty(restoration.property);
+    }
+    styleElement.remove();
+  };
+}
+
+function collectAuthoredFlowDimensionMirrorRules(rules: CSSRuleList, view: Window, output: string[]): void {
+  for (const rule of [...rules]) {
+    if (rule.type === CSS_STYLE_RULE && "style" in rule && "selectorText" in rule) {
+      const styleRule = rule as CSSStyleRule;
+      if (styleRule.selectorText.includes("::")) continue;
+      const declarations: string[] = [];
+      for (const [property, mirror] of Object.entries(AUTHORED_FLOW_DIMENSION_MIRRORS) as Array<[FlowDimensionProperty, string]>) {
+        const value = styleRule.style.getPropertyValue(property).trim();
+        if (!value) continue;
+        const important = styleRule.style.getPropertyPriority(property) === "important" ? "!important" : "";
+        declarations.push(`${mirror}:${value}${important}`);
+      }
+      if (declarations.length > 0) output.push(`${styleRule.selectorText}{${declarations.join(";")}}`);
+      continue;
+    }
+    if (!("cssRules" in rule) || !(rule as CSSGroupingRule).cssRules) continue;
+    if (rule.type === CSS_MEDIA_RULE && "conditionText" in rule && !view.matchMedia(String(rule.conditionText)).matches) continue;
+    if (rule.type === CSS_SUPPORTS_RULE && "conditionText" in rule && !CSS.supports(String(rule.conditionText))) continue;
+    collectAuthoredFlowDimensionMirrorRules((rule as CSSGroupingRule).cssRules, view, output);
+  }
+}
+
 function cloneEnvironmentNode(source: Node, targetDocument: Document): Node {
   if (source.nodeType === Node.TEXT_NODE) return targetDocument.createTextNode(source.textContent ?? "");
   if (source.nodeType !== Node.ELEMENT_NODE) return targetDocument.createDocumentFragment();
@@ -985,26 +1200,33 @@ async function snapshotElement(element: Element, options: SnapshotOptions): Prom
   pageRules?: readonly SnapshotPageRule[];
 }> {
   const diagnostics: Diagnostic[] = [];
-  const counters = CounterState.forSnapshotRoot(element, options.includeShadowDom === true);
-  const clone = cloneSnapshotElement(element, options, diagnostics, true, counters);
+  const removePageMirror = installAuthoredPageMirror(element.ownerDocument);
+  const removeFlowDimensionMirrors = installAuthoredFlowDimensionMirrors(element.ownerDocument);
+  try {
+    const counters = CounterState.forSnapshotRoot(element, options.includeShadowDom === true);
+    const clone = cloneSnapshotElement(element, options, diagnostics, true, counters);
 
-  for (const active of clone.matches(ACTIVE_ELEMENTS) ? [clone] : clone.querySelectorAll(ACTIVE_ELEMENTS)) {
-    active.remove();
+    for (const active of clone.matches(ACTIVE_ELEMENTS) ? [clone] : clone.querySelectorAll(ACTIVE_ELEMENTS)) {
+      active.remove();
+    }
+    if (options.enableLinks === false) for (const anchor of clone.querySelectorAll("a[href]")) anchor.removeAttribute("href");
+
+    await materializeInlineSvgs(clone, options, diagnostics);
+    inspectAuthoredCss(clone, options, diagnostics);
+    await materializeBackgroundImages(clone, options, diagnostics);
+    await materializeImages(clone, options, diagnostics);
+    const pageStyle = readDefaultPageStyle(element.ownerDocument, options, diagnostics);
+    return {
+      clone,
+      diagnostics,
+      ...(pageStyle.page ? { page: pageStyle.page } : {}),
+      ...(pageStyle.marginBoxes.length > 0 ? { pageMarginBoxes: pageStyle.marginBoxes } : {}),
+      ...(pageStyle.rules.length > 0 ? { pageRules: pageStyle.rules } : {}),
+    };
+  } finally {
+    removeFlowDimensionMirrors();
+    removePageMirror();
   }
-  if (options.enableLinks === false) for (const anchor of clone.querySelectorAll("a[href]")) anchor.removeAttribute("href");
-
-  await materializeInlineSvgs(clone, options, diagnostics);
-  inspectAuthoredCss(clone, options, diagnostics);
-  await materializeBackgroundImages(clone, options, diagnostics);
-  await materializeImages(clone, options, diagnostics);
-  const pageStyle = readDefaultPageStyle(element.ownerDocument, options, diagnostics);
-  return {
-    clone,
-    diagnostics,
-    ...(pageStyle.page ? { page: pageStyle.page } : {}),
-    ...(pageStyle.marginBoxes.length > 0 ? { pageMarginBoxes: pageStyle.marginBoxes } : {}),
-    ...(pageStyle.rules.length > 0 ? { pageRules: pageStyle.rules } : {}),
-  };
 }
 
 async function snapshotHtmlString(source: string, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -1483,12 +1705,19 @@ function materializeComputedStyle(
     ? [...SUPPORTED_COMPUTED_PROPERTIES, ...SVG_COMPUTED_PROPERTIES]
     : SUPPORTED_COMPUTED_PROPERTIES;
   for (const property of properties) {
+    const nativePage = property === "page" ? computed.getPropertyValue("page").trim() : "";
+    const mirroredPage = property === "page" ? computed.getPropertyValue(AUTHORED_PAGE_MIRROR).trim() : "";
     const value = property === "display"
       ? display
+      : property === "page"
+        ? nativePage && nativePage !== "auto" ? nativePage : mirroredPage || nativePage
       : authoredInsets && property in authoredInsets
         ? authoredInsets[property as keyof typeof authoredInsets]!
         : computed.getPropertyValue(property);
-    if (isFlowDimension(property) && !shouldMaterializeFlowDimension(original, property, isSnapshotRoot)) continue;
+    if (isFlowDimension(property)) {
+      const authored = computed.getPropertyValue(AUTHORED_FLOW_DIMENSION_MIRRORS[property]).trim();
+      if (authored === "auto" || !shouldMaterializeFlowDimension(original, property, isSnapshotRoot)) continue;
+    }
     // A fully transparent background has no paint effect. Omitting it keeps
     // the display list compact while semi-transparent colors retain real PDF
     // alpha through ExtGState.
@@ -1794,9 +2023,8 @@ function consumeCssString(source: string, start: number, quote: string): { value
   return null;
 }
 
-function isFlowDimension(property: string): boolean {
-  return property === "width" || property === "height" || property === "min-width" || property === "max-width" ||
-    property === "min-height" || property === "max-height";
+function isFlowDimension(property: string): property is FlowDimensionProperty {
+  return property in AUTHORED_FLOW_DIMENSION_MIRRORS;
 }
 
 function shouldMaterializeFlowDimension(original: Element, property: string, isSnapshotRoot: boolean): boolean {

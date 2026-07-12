@@ -91,6 +91,7 @@ pub const Sequence = struct {
     rules: []const PageRule = &.{},
     initial_name: []const u8 = "",
     transitions: []const PageNameTransition = &.{},
+    blank_pages: []const usize = &.{},
 
     pub fn pageName(self: Sequence, page_index: usize) []const u8 {
         var result = self.initial_name;
@@ -101,11 +102,19 @@ pub const Sequence = struct {
     }
 
     pub fn pageSpec(self: Sequence, page_index: usize) PageSpec {
-        return resolvePageSpec(self.base, self.rules, self.pageName(page_index), page_index, false);
+        return resolvePageSpec(self.base, self.rules, self.pageName(page_index), page_index, self.isBlank(page_index));
+    }
+
+    pub fn isBlank(self: Sequence, page_index: usize) bool {
+        return std.mem.indexOfScalar(usize, self.blank_pages, page_index) != null;
     }
 
     pub fn contentExtent(self: Sequence, page_index: usize) f32 {
         return self.pageSpec(page_index).contentHeightCssPx();
+    }
+
+    pub fn contentInlineExtent(self: Sequence, page_index: usize) f32 {
+        return self.pageSpec(page_index).contentWidthCssPx();
     }
 };
 

@@ -8,6 +8,14 @@ const geometry = @import("../geometry.zig");
 
 pub const FragmentId = usize;
 
+/// Physical insets from the current page area's inline edges. Auto-width
+/// initial-containing-block descendants retain these so each page fragment can
+/// resolve its border box against that page's own inline size.
+pub const FragmentainerInlineInsets = struct {
+    left: f32 = 0,
+    right: f32 = 0,
+};
+
 pub const FragmentKind = enum {
     box,
     text,
@@ -72,6 +80,7 @@ pub const Fragment = struct {
     page_break_before: box.PageBreak = .auto,
     page_break_after: box.PageBreak = .auto,
     page_break_inside: box.PageBreak = .auto,
+    fragmentainer_inline_insets: ?FragmentainerInlineInsets = null,
     fixed: bool = false,
     positioned_group: ?box.BoxId = null,
     z_index: ?i32 = null,
@@ -94,12 +103,14 @@ pub const Fragment = struct {
 pub const LayoutDocument = struct {
     fragments: std.ArrayList(Fragment),
     page_names: std.ArrayList([]const u8) = .empty,
+    blank_pages: std.ArrayList(bool) = .empty,
     content_width: f32,
     content_height: f32,
 
     pub fn deinit(self: *LayoutDocument, allocator: std.mem.Allocator) void {
         self.fragments.deinit(allocator);
         self.page_names.deinit(allocator);
+        self.blank_pages.deinit(allocator);
     }
 };
 

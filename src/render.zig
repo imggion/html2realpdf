@@ -22,6 +22,7 @@ pub const serializeDiagnostics = diagnostics.serialize;
 pub const CssProfile = enum { document, web, strict };
 pub const MarginBoxName = paged_media.MarginBoxName;
 pub const MarginBox = paged_media.MarginBox;
+pub const PageMarginRule = paged_media.MarginRule;
 pub const PageRule = pagination.PageRule;
 pub const PageSelector = pagination.PageSelector;
 
@@ -35,6 +36,7 @@ pub const Options = struct {
     font_registry: ?*const font.Registry = null,
     css_profile: CssProfile = .document,
     margin_boxes: []const MarginBox = &.{},
+    page_margin_rules: []const PageMarginRule = &.{},
     page_rules: []const PageRule = &.{},
 };
 
@@ -130,6 +132,9 @@ pub fn renderHtml(
         arena,
         &display,
         options.margin_boxes,
+        options.page_margin_rules,
+        laid_out.page_names.items,
+        laid_out.blank_pages.items,
         options.font_registry,
         if (options.css_profile == .document) .identity else .harfbuzz,
     );
@@ -525,4 +530,46 @@ test "render named page height as the layout fragmentainer extent" {
     try std.testing.expectEqual(@as(usize, 3), result.page_count);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.bytes, "/MediaBox [0 0 150.000 75.000]"));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, result.bytes, "/MediaBox [0 0 225.000 120.000]"));
+}
+
+test "render pseudo page width as the inline layout extent" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<p style='margin:0;font-size:16px;line-height:20px'>MMMMMM MMMMMM MMMMMM MMMMMM MMMMMM MMMMMM</p>",
+        .{
+            .css_profile = .web,
+            .custom_page_width_points = 75,
+            .custom_page_height_points = 30,
+            .page_rules = &.{
+                .{ .selector = .{ .left = true }, .width_points = 150, .height_points = 30 },
+            },
+        },
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), result.page_count);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.bytes, "/MediaBox [0 0 75.000 30.000]"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.bytes, "/MediaBox [0 0 150.000 30.000]"));
+}
+
+test "render forced blank pages with blank page geometry" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<div style='height:20px'>FIRST</div><div style='height:20px;break-before:right'>THIRD</div>",
+        .{
+            .css_profile = .web,
+            .custom_page_width_points = 75,
+            .custom_page_height_points = 75,
+            .page_rules = &.{
+                .{ .selector = .{ .blank = true }, .width_points = 150, .height_points = 112.5 },
+            },
+        },
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), result.page_count);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, result.bytes, "/MediaBox [0 0 75.000 75.000]"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.bytes, "/MediaBox [0 0 150.000 112.500]"));
 }

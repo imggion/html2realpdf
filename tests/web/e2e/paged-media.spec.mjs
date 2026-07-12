@@ -209,3 +209,139 @@ test("named @page selectors drive per-page PDF geometry and margins", async ({ p
   expect(result.pages[2].text).toContain("SUMMARY THREE");
   expect(result.pages[2].x).toBeCloseTo(15, 2);
 });
+
+test("pseudo page width reflows selectable inline text", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+    pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+    const renderer = await pkg.createRenderer({ execution: "main" });
+    const pdf = await renderer.render(`<style>
+      @page { size: 100px 40px; margin: 0; }
+      @page :left { size: 200px 40px; }
+      html, body, p { margin: 0; }
+      p { font-size: 16px; line-height: 20px; }
+    </style><p>MMMMMM MMMMMM MMMMMM MMMMMM MMMMMM MMMMMM</p>`, {
+      cssProfile: "web",
+      mediaType: "print",
+      unsupportedCss: "error",
+    });
+    const diagnostics = pdf.diagnostics;
+    const documentHandle = await pdfjs.getDocument({ data: pdf.toUint8Array() }).promise;
+    const pages = [];
+    for (let pageNumber = 1; pageNumber <= documentHandle.numPages; pageNumber += 1) {
+      const current = await documentHandle.getPage(pageNumber);
+      const viewport = current.getViewport({ scale: 1 });
+      const text = await current.getTextContent();
+      const joined = text.items.flatMap((item) => "str" in item ? [item.str] : []).join(" ");
+      pages.push({
+        viewport: [viewport.width, viewport.height],
+        words: joined.match(/MMMMMM/g)?.length ?? 0,
+      });
+    }
+    await documentHandle.destroy();
+    pdf.dispose();
+    renderer.dispose();
+    return { diagnostics, pages };
+  });
+
+  expect(result.diagnostics).toEqual([]);
+  expect(result.pages).toEqual([
+    { viewport: [75, 30], words: 2 },
+    { viewport: [150, 30], words: 4 },
+  ]);
+});
+
+test(":blank page geometry applies to forced facing-page gaps", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+    pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+    const renderer = await pkg.createRenderer({ execution: "main" });
+    const pdf = await renderer.render(`<style>
+      @page { size: 100px 100px; margin: 0; }
+      @page :blank { size: 200px 150px; }
+      html, body { margin: 0; }
+    </style><div style="height:20px">FIRST</div><div style="height:20px;break-before:right">THIRD</div>`, {
+      cssProfile: "web",
+      mediaType: "print",
+      unsupportedCss: "error",
+    });
+    const diagnostics = pdf.diagnostics;
+    const documentHandle = await pdfjs.getDocument({ data: pdf.toUint8Array() }).promise;
+    const pages = [];
+    for (let pageNumber = 1; pageNumber <= documentHandle.numPages; pageNumber += 1) {
+      const current = await documentHandle.getPage(pageNumber);
+      const viewport = current.getViewport({ scale: 1 });
+      const text = await current.getTextContent();
+      pages.push({
+        viewport: [viewport.width, viewport.height],
+        text: text.items.flatMap((item) => "str" in item ? [item.str] : []).join(" "),
+      });
+    }
+    await documentHandle.destroy();
+    pdf.dispose();
+    renderer.dispose();
+    return { diagnostics, pages };
+  });
+
+  expect(result.diagnostics).toEqual([]);
+  expect(result.pages).toHaveLength(3);
+  expect(result.pages[0].viewport).toEqual([75, 75]);
+  expect(result.pages[0].text).toContain("FIRST");
+  expect(result.pages[1].viewport).toEqual([150, 112.5]);
+  expect(result.pages[1].text).toBe("");
+  expect(result.pages[2].viewport).toEqual([75, 75]);
+  expect(result.pages[2].text).toContain("THIRD");
+});
+
+test("named and blank @page margin boxes select per page", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+    pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+    const renderer = await pkg.createRenderer({ execution: "main" });
+    const pdf = await renderer.render(`<style>
+      @page { size: 160px 100px; margin: 12px; @top-center { content: "DEFAULT"; font-size: 8px; } }
+      @page Report { @top-center { content: "REPORT HEAD"; font-size: 8px; } }
+      @page Report:blank { @top-center { content: "BLANK HEAD"; font-size: 8px; } }
+      @page Summary { @top-center { content: "SUMMARY HEAD"; font-size: 8px; } }
+      html, body { margin: 0; }
+    </style><div style="height:20px;page:Report">REPORT BODY</div>
+    <div style="height:20px;page:Summary;break-before:right">SUMMARY BODY</div>`, {
+      cssProfile: "web",
+      mediaType: "print",
+      unsupportedCss: "error",
+    });
+    const diagnostics = pdf.diagnostics;
+    const documentHandle = await pdfjs.getDocument({ data: pdf.toUint8Array() }).promise;
+    const pages = [];
+    for (let pageNumber = 1; pageNumber <= documentHandle.numPages; pageNumber += 1) {
+      const current = await documentHandle.getPage(pageNumber);
+      const text = await current.getTextContent();
+      pages.push(text.items.flatMap((item) => "str" in item ? [item.str] : []).join(" "));
+    }
+    await documentHandle.destroy();
+    pdf.dispose();
+    renderer.dispose();
+    return { diagnostics, pages };
+  });
+
+  expect(result.diagnostics).toEqual([]);
+  expect(result.pages).toHaveLength(3);
+  expect(result.pages[0]).toContain("REPORT HEAD");
+  expect(result.pages[0]).toContain("REPORT BODY");
+  expect(result.pages[1]).toContain("BLANK HEAD");
+  expect(result.pages[1]).not.toContain("BODY");
+  expect(result.pages[2]).toContain("SUMMARY HEAD");
+  expect(result.pages[2]).toContain("SUMMARY BODY");
+});

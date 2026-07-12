@@ -854,16 +854,20 @@ async function verifyInertHtmlStringComputedSnapshot() {
     <style>
       body { --page-width: 320px; }
       .string-card { width: calc(var(--page-width) - 32px); color: rgb(124, 58, 237); }
+      .auto-card { width: auto; }
       .string-card::before { content: "String " attr(data-code) ": "; font-weight: 700; }
     </style>
     <div class="string-card" data-code="S1">safe body</div>
+    <div class="auto-card">auto body</div>
     <script>window.__html2realpdfScriptExecuted = true</script>
   `, { resourcePolicy: "error", enableLinks: true });
   const template = document.createElement("template");
   template.innerHTML = snapshot.html;
   const card = template.content.querySelector(".string-card");
+  const autoCard = template.content.querySelector(".auto-card");
   const before = card?.querySelector("[data-html2realpdf-pseudo='before']");
   if ((card instanceof HTMLElement ? card.style.width : "") !== "288px") throw new Error(`HTML string computed width was ${card instanceof HTMLElement ? card.style.width : "missing"}`);
+  if (autoCard instanceof HTMLElement && autoCard.style.width !== "") throw new Error(`HTML string width:auto froze to ${autoCard.style.width}`);
   if (before?.textContent !== "String S1: ") throw new Error(`HTML string ::before was not materialized: ${before?.textContent}`);
   if (template.content.querySelector("script")) throw new Error("active script survived the inert snapshot");
   if (Reflect.get(window, "__html2realpdfScriptExecuted")) throw new Error("HTML string script executed during snapshot");

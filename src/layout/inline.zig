@@ -24,13 +24,28 @@ pub fn Cursor(comptime State: type) type {
         direction: box.Direction,
         line_start_fragment: usize,
         line_id: usize,
+        fragmentainer_inline_insets: ?types.FragmentainerInlineInsets,
+        fallback_inline_extent: f32,
+        line_indent: f32,
+        fragmentation_enabled: bool,
         has_content: bool = false,
         pending_space: bool = false,
         capitalize_next: bool = true,
         ellipsis_enabled: bool = false,
         truncated: bool = false,
 
-        pub fn init(state: *State, start_x: f32, start_y: f32, width: f32, text_align: box.TextAlign, direction: box.Direction, text_indent: f32, ellipsis_enabled: bool) Self {
+        pub fn init(
+            state: *State,
+            start_x: f32,
+            start_y: f32,
+            width: f32,
+            text_align: box.TextAlign,
+            direction: box.Direction,
+            text_indent: f32,
+            ellipsis_enabled: bool,
+            fragmentainer_inline_insets: ?types.FragmentainerInlineInsets,
+            fragmentation_enabled: bool,
+        ) Self {
             const line_id = state.next_line_id;
             state.next_line_id += 1;
             return .{
@@ -46,6 +61,10 @@ pub fn Cursor(comptime State: type) type {
                 .line_start_fragment = state.fragments.items.len,
                 .line_id = line_id,
                 .ellipsis_enabled = ellipsis_enabled,
+                .fragmentainer_inline_insets = fragmentainer_inline_insets,
+                .fallback_inline_extent = if (fragmentainer_inline_insets) |insets| width + insets.left + insets.right else width,
+                .line_indent = text_indent,
+                .fragmentation_enabled = fragmentation_enabled,
             };
         }
 
@@ -87,21 +106,24 @@ pub fn Cursor(comptime State: type) type {
         /// replaced and inline elements as well as block boxes.
         fn forcePageBreak(self: *Self, value: box.PageBreak) void {
             if (self.state.page_height == null) return;
-            if (self.has_content) {
+            const had_content = self.has_content;
+            if (had_content) {
                 self.alignCurrentLine(false);
                 self.line_y += if (self.line_height > 0) self.line_height else 18;
             }
             self.state.applyForcedBreak(&self.line_y, value);
-            self.x = self.start_x;
+            if (had_content) self.line_indent = 0;
             self.line_height = 0;
             self.line_start_fragment = self.state.fragments.items.len;
             self.line_id = self.state.next_line_id;
             self.state.next_line_id += 1;
             self.has_content = false;
             self.pending_space = false;
+            self.syncFragmentainerInlineSize();
         }
 
         fn layoutText(self: *Self, box_id: box.BoxId, text: []const u8, language: []const u8, style: box.Style, link_url: ?[]const u8) !void {
+            self.ensureLineFits(@max(style.line_height, style.font_size * 1.2));
             const transformed = try self.transformText(text, language, style.text_transform);
             switch (style.white_space) {
                 .normal => try self.layoutCollapsedText(box_id, transformed, style, link_url, true),
@@ -676,6 +698,7 @@ pub fn Cursor(comptime State: type) type {
             const outer_width = if (modern) source.margin.left + border_width + source.margin.right else border_width;
             const outer_height = if (modern) source.margin.top + border_height + source.margin.bottom else border_height;
 
+            self.ensureLineFits(outer_height);
             if (self.has_content and self.x + outer_width > self.start_x + self.width) self.newLine();
             self.line_height = @max(self.line_height, outer_height);
             const border_x = self.x + if (modern) source.margin.left else 0;
@@ -792,15 +815,40 @@ pub fn Cursor(comptime State: type) type {
         }
 
         fn newLine(self: *Self) void {
+            self.ensureLineFits(if (self.line_height > 0) self.line_height else 18);
             self.alignCurrentLine(false);
             self.line_y += if (self.line_height > 0) self.line_height else 18;
-            self.x = self.start_x;
+            self.line_indent = 0;
             self.line_height = 0;
             self.line_start_fragment = self.state.fragments.items.len;
             self.line_id = self.state.next_line_id;
             self.state.next_line_id += 1;
             self.has_content = false;
             self.pending_space = false;
+            self.syncFragmentainerInlineSize();
+        }
+
+        fn ensureLineFits(self: *Self, block_size: f32) void {
+            if (!self.fragmentation_enabled) return;
+            const shift = self.state.atomicFragmentainerShift(self.line_y, block_size);
+            if (shift <= 0) return;
+            for (self.state.fragments.items[self.line_start_fragment..]) |*fragment| {
+                if (self.belongsToCurrentLine(fragment.*)) shiftFragment(fragment, shift);
+            }
+            self.line_y += shift;
+            self.syncFragmentainerInlineSize();
+        }
+
+        fn syncFragmentainerInlineSize(self: *Self) void {
+            const insets = self.fragmentainer_inline_insets orelse {
+                self.x = self.start_x + (if (self.has_content) self.x - self.start_x else self.line_indent);
+                return;
+            };
+            const used = if (self.has_content) self.x - self.start_x else self.line_indent;
+            const page_inline_extent = self.state.fragmentainerInlineExtentAt(self.line_y, self.fallback_inline_extent);
+            self.start_x = insets.left;
+            self.width = @max(page_inline_extent - insets.left - insets.right, 1);
+            self.x = self.start_x + used;
         }
 
         fn alignCurrentLine(self: *Self, is_last_line: bool) void {
@@ -988,6 +1036,7 @@ pub fn Cursor(comptime State: type) type {
         }
 
         pub fn finish(self: *Self) f32 {
+            self.ensureLineFits(if (self.line_height > 0) self.line_height else 18);
             self.alignCurrentLine(true);
             if (!self.has_content and self.line_y == self.start_y) return 0;
             return (self.line_y + @max(self.line_height, 18)) - self.start_y;

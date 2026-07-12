@@ -21,6 +21,7 @@ pub const Options = struct {
     suppress_margin_bottom: bool = false,
     suppress_break_before: bool = false,
     suppress_break_after: bool = false,
+    fragmentainer_inline_insets: ?types.FragmentainerInlineInsets = null,
 };
 
 pub fn layout(
@@ -35,7 +36,7 @@ pub fn layout(
 pub fn layoutWithOptions(
     state: anytype,
     box_id: box.BoxId,
-    containing: geometry.Rect,
+    initial_containing: geometry.Rect,
     cursor_y: *f32,
     options: Options,
 ) std.mem.Allocator.Error!geometry.Rect {
@@ -44,7 +45,6 @@ pub fn layoutWithOptions(
     const margin = source.margin;
     const border = source.border;
     const padding = source.padding;
-    const containing_height: ?f32 = if (state.web_sizing) options.containing_block_height else containing.height;
     const margin_info = if (state.web_sizing) state.marginInfo(box_id) else MarginInfo.fromEdges(margin.top, margin.bottom);
     const used_margin_top = if (state.web_sizing and options.suppress_margin_top) 0 else margin_info.start.value();
     const used_margin_bottom = if (state.web_sizing and options.suppress_margin_bottom) 0 else margin_info.end.value();
@@ -65,6 +65,12 @@ pub fn layoutWithOptions(
         state.applyForcedBreak(cursor_y, break_before);
         if (state.web_sizing) state.recordPageName(cursor_y.*, fragmentation.startPageName(state.tree, box_id));
     }
+
+    var containing = initial_containing;
+    if (options.fragmentainer_inline_insets) |insets| {
+        containing = state.fragmentainerInlineContainingBlock(insets, cursor_y.*, initial_containing.width);
+    }
+    const containing_height: ?f32 = if (state.web_sizing) options.containing_block_height else containing.height;
 
     const fragment_start = state.fragments.items.len;
     const outer_x = containing.x + margin.left;
@@ -116,6 +122,17 @@ pub fn layoutWithOptions(
     else
         @min(content_width + horizontal_non_content, available_outer_width);
     var outer_y = cursor_y.* + used_margin_top;
+    const tracks_fragmentainer_inline = options.fragmentainer_inline_insets != null and
+        options.forced_content_width == null and !options.shrink_to_fit and
+        style.width.isAuto() and style.min_width.isAuto() and style.max_width.isAuto();
+    const fragmentainer_border_insets: ?types.FragmentainerInlineInsets = if (tracks_fragmentainer_inline) .{
+        .left = options.fragmentainer_inline_insets.?.left + margin.left,
+        .right = options.fragmentainer_inline_insets.?.right + margin.right,
+    } else null;
+    const fragmentainer_content_insets: ?types.FragmentainerInlineInsets = if (fragmentainer_border_insets) |insets| .{
+        .left = insets.left + border.left + padding.left,
+        .right = insets.right + border.right + padding.right,
+    } else null;
 
     const fragment_id = state.fragments.items.len;
     try state.fragments.append(state.allocator, .{
@@ -137,6 +154,7 @@ pub fn layoutWithOptions(
         .page_break_before = break_before,
         .page_break_after = break_after,
         .page_break_inside = style.page_break_inside,
+        .fragmentainer_inline_insets = fragmentainer_border_insets,
         .image_source = if (source.kind == .replaced) state.attributeForBox(box_id, "src") else null,
         .intrinsic_width = source.intrinsic_width,
         .intrinsic_height = source.intrinsic_height,
@@ -311,6 +329,7 @@ pub fn layoutWithOptions(
                                 &empty_cursor,
                                 .{
                                     .containing_block_height = specified_content_height,
+                                    .fragmentainer_inline_insets = fragmentainer_content_insets,
                                     .suppress_margin_top = true,
                                     .suppress_margin_bottom = true,
                                     .suppress_break_before = true,
@@ -345,6 +364,7 @@ pub fn layoutWithOptions(
                             &child_cursor_y,
                             .{
                                 .containing_block_height = specified_content_height,
+                                .fragmentainer_inline_insets = fragmentainer_content_insets,
                                 .suppress_margin_top = true,
                                 .suppress_margin_bottom = true,
                                 .suppress_break_before = true,
@@ -395,7 +415,7 @@ pub fn layoutWithOptions(
                         previous_break_after = .auto;
                         previous_page_box = null;
                     }
-                    const run_height = try state.layoutInlineRun(child_id, content_x, child_cursor_y, content_width, style.text_align);
+                    const run_height = try state.layoutInlineRun(child_id, content_x, child_cursor_y, content_width, style.text_align, fragmentainer_content_insets);
                     child_cursor_y += run_height;
                     previous_bottom_margin = 0;
                 }
@@ -408,7 +428,7 @@ pub fn layoutWithOptions(
                 child_cursor_y = @max(child_cursor_y, float_context.maximumBottom());
             }
         } else {
-            const inline_height = try state.layoutInlineChildrenWithOffset(box_id, content_x, content_y, content_width, style.text_align, inline_marker_offset);
+            const inline_height = try state.layoutInlineChildrenWithOffset(box_id, content_x, content_y, content_width, style.text_align, inline_marker_offset, fragmentainer_content_insets);
             child_cursor_y += inline_height;
         }
     } else if (marker_line_height > 0) {

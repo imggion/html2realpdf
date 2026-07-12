@@ -61,8 +61,8 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `orphans` / `widows` | Y | Y | Y | Y | - | Y | Y | paragraph line constraints |
 | `page` | Y | Y | Y | Y | - | Y | Y | `auto` plus case-sensitive custom identifiers; used values resolve through the nearest named ancestor, first/last eligible children propagate page names, and name changes force class A page breaks in block/table/Flex/Grid flows |
 | default `@page` size/margins | Y | Y | Y | Y | - | Y | Y | browser CSSOM cascade including `!important`; A3/A4/A5, Letter/Legal/Ledger/Tabloid, portrait/landscape, one/two absolute lengths, and physical margin longhands; explicit API page options override CSS |
-| named and pseudo `@page` geometry | Y | Y | Y | Y | - | Y | Y | case-sensitive page names plus `:first`, `:left`, `:right`, and `:blank`; importance, page-selector specificity, and source order resolve per-page PDF geometry, while the shared fragmentainer reflows block/table/Flex/Grid content against each page's resolved content height; variable-width reflow remains staged |
-| default `@page` margin boxes | Y | Y | Y | Y | Y | Y | Y | all 16 standard positions; concatenated CSS strings plus decimal `counter(page)`/`counter(pages)`; font family/size/weight/style, color, and text alignment remain selectable native PDF text |
+| named and pseudo `@page` geometry | Y | Y | Y | Y | - | Y | Y | case-sensitive page names plus `:first`, `:left`, `:right`, and `:blank`; importance, page-selector specificity, and source order resolve per-page PDF geometry; the shared fragmentainer uses variable content heights, re-sizes auto-width initial-containing-block descendants, rewraps inline lines, and records forced facing-page gaps as blank pages |
+| `@page` margin boxes | Y | Y | Y | Y | Y | Y | Y | default, named, and `:first`/`:left`/`:right`/`:blank` selection across all 16 standard positions; concatenated CSS strings plus decimal `counter(page)`/`counter(pages)`; font family/size/weight/style, color, and text alignment remain selectable native PDF text |
 | `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; authored top/right/bottom/left anchors survive browser used-value capture, fixed headers/footers repeat at page-relative coordinates, and sticky resolves as relative in paged media |
 | physical/logical inset | Y | Y | Y | Y | - | Y | Y | top/right/bottom/left plus block/inline logical forms; auto sizing, opposing-inset stretch, auto margins, and nearest positioned padding containing block |
 | `z-index` / stacking order | Y | Y | Y | Y | Y | Y | Y | negative, normal-flow, auto/zero, and positive positioned paint phases with atomic descendant traversal |
@@ -102,8 +102,9 @@ Playwright E2E make the matrix verifiable.
   Arabic and Hebrew have built-in shaped fallbacks, while emoji and other
   scripts require a registered embeddable TTF fallback;
   the package test suite registers a deterministic monochrome emoji fixture;
-- multi-column fragmentation, named/pseudo-specific margin boxes, non-text
-  margin-box painting, and reflow against variable per-page widths;
+- multi-column fragmentation and non-text margin-box painting;
+- rebuilding a non-auto Flex/Grid/table formatting context that has already
+  started when a later pseudo-page changes its inline size mid-context;
   page fragmentainers already coordinate block, inline, table, Flex, and Grid
   placement, and named/pseudo rules already produce per-page PDF geometry.
 

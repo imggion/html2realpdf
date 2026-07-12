@@ -143,6 +143,14 @@ pub const Context = struct {
         return self.extentForPage(self.pageIndex(position));
     }
 
+    pub fn inlineExtentForPage(self: Context, page_index: usize, fallback: f32) f32 {
+        return if (self.sequence) |sequence| @max(sequence.contentInlineExtent(page_index), 1) else @max(fallback, 1);
+    }
+
+    pub fn inlineExtentAt(self: Context, position: f32, fallback: f32) f32 {
+        return self.inlineExtentForPage(self.pageIndex(position), fallback);
+    }
+
     pub fn pageEnd(self: Context, position: f32) f32 {
         const page_index = self.pageIndex(position);
         return self.pageStartForIndex(page_index) + self.extentForPage(page_index);
