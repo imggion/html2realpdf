@@ -289,6 +289,7 @@ type CascadedPageValue = { value: string; important: boolean };
 type PageCascade = Partial<Record<"size" | "margin-top" | "margin-right" | "margin-bottom" | "margin-left", CascadedPageValue>>;
 
 const CSS_PAGE_RULE = 6;
+const CSS_STYLE_RULE = 1;
 const CSS_MEDIA_RULE = 4;
 const CSS_SUPPORTS_RULE = 12;
 const DEFAULT_PAGE_SIZE_POINTS = [595.2756, 841.8898] as const;
@@ -1005,11 +1006,18 @@ function materializeComputedStyle(
   }
 
   const declarations: string[] = [];
+  const authoredInsets = computedStyle === undefined && position !== "static"
+    ? authoredInsetOverrides(original, computed, view)
+    : undefined;
   const properties = isSvgElement(original)
     ? [...SUPPORTED_COMPUTED_PROPERTIES, ...SVG_COMPUTED_PROPERTIES]
     : SUPPORTED_COMPUTED_PROPERTIES;
   for (const property of properties) {
-    const value = property === "display" ? display : computed.getPropertyValue(property);
+    const value = property === "display"
+      ? display
+      : authoredInsets && property in authoredInsets
+        ? authoredInsets[property as keyof typeof authoredInsets]!
+        : computed.getPropertyValue(property);
     if (isFlowDimension(property) && !shouldMaterializeFlowDimension(original, property, isSnapshotRoot)) continue;
     // A fully transparent background has no paint effect. Omitting it keeps
     // the display list compact while semi-transparent colors retain real PDF
@@ -1018,6 +1026,69 @@ function materializeComputedStyle(
     if (value) declarations.push(`${property}:${value}`);
   }
   target.setAttribute("style", declarations.join(";"));
+}
+
+type InsetProperty = "top" | "right" | "bottom" | "left";
+
+function authoredInsetOverrides(
+  element: Element,
+  computed: CSSStyleDeclaration,
+  view: Window,
+): Partial<Record<InsetProperty, string>> | undefined {
+  const authored = new Set<InsetProperty>();
+  if ("style" in element) collectInsetDeclarations((element as HTMLElement | SVGElement).style, authored);
+
+  const stylesheets = [...element.ownerDocument.styleSheets, ...(element.ownerDocument.adoptedStyleSheets ?? [])];
+  for (const stylesheet of stylesheets) {
+    try {
+      collectMatchedInsetRules(element, stylesheet.cssRules, view, authored);
+    } catch {
+      // Cross-origin sheets do not expose their rules. The computed fallback
+      // remains available, but authored-side recovery cannot inspect them.
+    }
+  }
+
+  const result: Partial<Record<"top" | "right" | "bottom" | "left", string>> = {};
+  if (authored.has("top") || authored.has("bottom")) {
+    result.top = authored.has("top") ? computed.getPropertyValue("top") : "auto";
+    result.bottom = authored.has("bottom") ? computed.getPropertyValue("bottom") : "auto";
+  }
+  if (authored.has("left") || authored.has("right")) {
+    result.left = authored.has("left") ? computed.getPropertyValue("left") : "auto";
+    result.right = authored.has("right") ? computed.getPropertyValue("right") : "auto";
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function collectMatchedInsetRules(
+  element: Element,
+  rules: CSSRuleList,
+  view: Window,
+  authored: Set<InsetProperty>,
+): void {
+  for (const rule of [...rules]) {
+    if (rule.type === CSS_STYLE_RULE && "selectorText" in rule && "style" in rule) {
+      try {
+        if (element.matches(String(rule.selectorText))) {
+          collectInsetDeclarations((rule as CSSStyleRule).style, authored);
+        }
+      } catch {
+        // A selector unsupported by Element.matches cannot contribute to the
+        // browser's matched rule set for this snapshot element.
+      }
+      continue;
+    }
+    if (!("cssRules" in rule) || !(rule as CSSGroupingRule).cssRules) continue;
+    if (rule.type === CSS_MEDIA_RULE && "conditionText" in rule && !view.matchMedia(String(rule.conditionText)).matches) continue;
+    if (rule.type === CSS_SUPPORTS_RULE && "conditionText" in rule && !CSS.supports(String(rule.conditionText))) continue;
+    collectMatchedInsetRules(element, (rule as CSSGroupingRule).cssRules, view, authored);
+  }
+}
+
+function collectInsetDeclarations(style: CSSStyleDeclaration, authored: Set<InsetProperty>): void {
+  for (const property of ["top", "right", "bottom", "left"] as const) {
+    if (style.getPropertyValue(property).trim()) authored.add(property);
+  }
 }
 
 function materializePseudoElement(

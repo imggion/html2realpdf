@@ -113,11 +113,14 @@ pub fn paginate(
     // blank page. Text, images, borders, and non-white fills still determine
     // the final page count normally.
     page_count = visiblePageCount(fragments.items);
-    const first_page_fragment_count = fragments.items.len;
-    for (fragments.items[0..first_page_fragment_count]) |paged| {
-        if (!paged.fragment.fixed) continue;
+    var fixed_templates = try std.ArrayList(layout.Fragment).initCapacity(allocator, 0);
+    defer fixed_templates.deinit(allocator);
+    for (fragments.items) |paged| {
+        if (paged.fragment.fixed) try fixed_templates.append(allocator, paged.fragment);
+    }
+    for (fixed_templates.items) |template| {
         for (1..page_count) |page_index| {
-            try fragments.append(allocator, .{ .page_index = page_index, .fragment = paged.fragment });
+            try fragments.append(allocator, .{ .page_index = page_index, .fragment = template });
         }
     }
 

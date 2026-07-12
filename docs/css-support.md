@@ -56,11 +56,11 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `box-sizing` | Y | Y | Y | Y | - | Y | Y | content-box and border-box |
 | `border-collapse` | Y | Y | Y | Y | Y | Y | Y | table collapsed-border approximation |
 | `caption-side` | Y | Y | Y | Y | Y | Y | Y | inherited `top` and `bottom` placement on table captions |
-| table formatting | Y | Y | Y | Y | Y | Y | Y | intrinsic auto-layout tracks, percentage/column hints, rowspan/colspan, captions and column groups, repeated headers including avoid-linked row groups, and top/middle/bottom/baseline cell alignment including row spans |
+| table formatting | Y | Y | Y | Y | Y | Y | Y | intrinsic auto-layout tracks, percentage/column hints, rowspan/colspan, captions and column groups, repeated headers plus page-end footers with reserved body extent, avoid-linked row groups, and top/middle/bottom/baseline cell alignment including row spans |
 | break before/after/inside | Y | Y | Y | Y | - | Y | Y | `always` alias plus `page`, `left`, `right`, `recto`, `verso`, `avoid`, and `avoid-page`; adjacent values arbitrate together, first/last block-child values propagate, forced values override avoid, and block/table/Flex/Grid page opportunities share one fragmentainer model |
 | `orphans` / `widows` | Y | Y | Y | Y | - | Y | Y | paragraph line constraints |
 | default `@page` size/margins | Y | Y | Y | Y | - | Y | Y | browser CSSOM cascade including `!important`; A3/A4/A5, Letter/Legal/Ledger/Tabloid, portrait/landscape, one/two absolute lengths, and physical margin longhands; explicit API page options override CSS |
-| `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; fixed fragments repeat at page-relative coordinates and sticky resolves as relative in paged media |
+| `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; authored top/right/bottom/left anchors survive browser used-value capture, fixed headers/footers repeat at page-relative coordinates, and sticky resolves as relative in paged media |
 | physical/logical inset | Y | Y | Y | Y | - | Y | Y | top/right/bottom/left plus block/inline logical forms; auto sizing, opposing-inset stretch, auto margins, and nearest positioned padding containing block |
 | `z-index` / stacking order | Y | Y | Y | Y | Y | Y | Y | negative, normal-flow, auto/zero, and positive positioned paint phases with atomic descendant traversal |
 | `opacity` | Y | Y | Y | Y | Y | Y | Y | each opacity stacking context becomes a nested isolated PDF transparency Form XObject, so overlapping descendants are composited once |

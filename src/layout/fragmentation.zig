@@ -102,6 +102,19 @@ pub const Context = struct {
         // coordinates byte-for-byte.
         return self.extent - self.offset(position);
     }
+
+    /// Keeps an atomic item above page-end furniture such as a repeated table
+    /// footer without changing the page sequence's actual boundary cadence.
+    /// An item larger than the usable extent stays in place so layout can keep
+    /// making progress and later fragmentation can split it if appropriate.
+    pub fn atomicShiftBeforeEndInset(self: Context, position: f32, block_size: f32, end_inset: f32) f32 {
+        const inset = std.math.clamp(end_inset, 0, self.extent);
+        const usable_extent = self.extent - inset;
+        if (block_size > usable_extent + epsilon or block_size <= 0) return 0;
+        const page_offset = self.offset(position);
+        if (page_offset + block_size <= usable_extent + epsilon) return 0;
+        return self.extent - page_offset;
+    }
 };
 
 pub fn nextPageStart(position: f32, page_height: f32) f32 {
@@ -234,6 +247,8 @@ test "fragmentainer geometry reports remaining extent and atomic placement" {
     try std.testing.expectEqual(@as(f32, 75), context.remaining(125));
     try std.testing.expectEqual(@as(f32, 75), context.atomicShift(125, 80));
     try std.testing.expectEqual(@as(f32, 0), context.atomicShift(125, 101));
+    try std.testing.expectEqual(@as(f32, 75), context.atomicShiftBeforeEndInset(25, 70, 10));
+    try std.testing.expectEqual(@as(f32, 0), context.atomicShiftBeforeEndInset(10, 95, 10));
 }
 
 test "forced page sides honor page parity and progression" {

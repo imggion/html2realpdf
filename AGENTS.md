@@ -20,6 +20,8 @@ Read these local docs before changing code:
 - `tests/web/e2e/` runs the browser harness and built React fixture through Playwright on Chromium, Firefox, and WebKit.
 - `docs/css-support.md` is the public, versioned CSS support contract; `src/css/properties.zig` is its machine-readable property inventory.
 - `src/layout/fragmentation.zig` owns page-boundary geometry, facing-page resolution, break arbitration, and block-child propagation. Block, inline, table, Flex, and Grid formatters must use that shared fragmentainer model instead of duplicating modulo arithmetic.
+- Web table fragmentation measures `<tfoot>` groups before final placement, reserves their page-end extent, and repeats both `<thead>` and `<tfoot>` only on pages occupied by the table. Keep the rollback measurement scoped to table fragments, positioned descendants, and line identifiers.
+- Browser snapshots must preserve which positioned inset sides were authored; computed `top`/`left` used values derived from `bottom`/`right` cannot be reinterpreted against PDF page geometry. Pagination copies fixed templates before appending repeats so array reallocation cannot drop later fixed furniture.
 - `tests/baselines/0.1.0-alpha.0/` freezes deterministic PDFs, first-page Poppler PNGs, metrics, and digests from the document profile.
 - Rounded box painting uses a uniform `border-radius` propagated through layout and display-list commands into native PDF Bézier paths; keep per-corner and clipping behavior out until tested explicitly.
 - Overflow clipping is rectangular at the padding edge. Preserve `clip_rect` through pagination and every display-list command, and isolate each PDF clip with `q`/`Q`; rounded clipping remains pending.

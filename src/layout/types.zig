@@ -87,6 +87,7 @@ pub const Fragment = struct {
     object_position: box.ObjectPosition = .{},
     table_id: ?box.BoxId = null,
     is_table_header: bool = false,
+    is_table_footer: bool = false,
 };
 
 pub const LayoutDocument = struct {

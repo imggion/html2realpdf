@@ -1637,6 +1637,57 @@ test "repeat table headers when rows continue on another page" {
     try std.testing.expect(second_y >= 80);
 }
 
+test "Web table reserves and repeats footer groups on every occupied page" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:200px;border-collapse:collapse'>" ++
+        "<thead><tr style='height:20px'><th>HEAD</th></tr></thead>" ++
+        "<tfoot><tr style='height:20px'><td>FOOT</td></tr></tfoot>" ++
+        "<tbody><tr style='height:30px'><td>ONE</td></tr>" ++
+        "<tr style='height:30px'><td>TWO</td></tr>" ++
+        "<tr style='height:30px'><td>THREE</td></tr></tbody></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var head_pages: [2]bool = .{ false, false };
+    var foot_pages: [2]bool = .{ false, false };
+    var three_y: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        const page_index: usize = @intFromFloat(@floor(fragment.rect.y / 100));
+        if (std.mem.eql(u8, text, "HEAD") and page_index < head_pages.len) head_pages[page_index] = true;
+        if (std.mem.eql(u8, text, "FOOT") and page_index < foot_pages.len) foot_pages[page_index] = true;
+        if (std.mem.eql(u8, text, "THREE")) three_y = fragment.rect.y;
+    }
+
+    try std.testing.expectEqual([2]bool{ true, true }, head_pages);
+    try std.testing.expectEqual([2]bool{ true, true }, foot_pages);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), three_y.?, 0.01);
+    var footer_roots: [2]f32 = undefined;
+    var footer_count: usize = 0;
+    for (result.fragments.items) |fragment| {
+        if (!fragment.is_table_footer or tree.boxes.items[fragment.source_box].kind != .tableRow) continue;
+        footer_roots[footer_count] = fragment.rect.y;
+        footer_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), footer_count);
+    std.mem.sort(f32, &footer_roots, {}, std.sort.asc(f32));
+    try std.testing.expectApproxEqAbs(@as(f32, 80), footer_roots[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 180), footer_roots[1], 0.01);
+}
+
 test "Web table keeps avoid-linked rows with their repeated header" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -2167,6 +2218,7 @@ test "Web fixed positioning repeats without consuming normal flow" {
     const source =
         "<div style='height:80px;background:#00ff00'></div>" ++
         "<div style='position:fixed;left:10px;top:5px;width:50px;height:10px;background:#ff0000'>header</div>" ++
+        "<div style='position:fixed;left:10px;bottom:5px;width:50px;height:10px;background:#ff00ff'>footer</div>" ++
         "<div style='height:80px;background:#0000ff'></div>";
     var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
     defer tokens.deinit(allocator);
@@ -2181,14 +2233,29 @@ test "Web fixed positioning repeats without consuming normal flow" {
     defer pages.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 3), pages.page_count);
-    var fixed_count: usize = 0;
+    var header_count: usize = 0;
+    var footer_count: usize = 0;
+    var footer_text_count: usize = 0;
     for (pages.fragments.items) |paged| {
+        if (paged.fragment.fixed and paged.fragment.text != null and std.mem.eql(u8, paged.fragment.text.?, "footer")) {
+            footer_text_count += 1;
+            try std.testing.expectApproxEqAbs(@as(f32, 45), paged.fragment.rect.y, 0.01);
+        }
         if (!paged.fragment.fixed or paged.fragment.background == null) continue;
-        fixed_count += 1;
+        const color = paged.fragment.background.?;
         try std.testing.expectApproxEqAbs(@as(f32, 10), paged.fragment.rect.x, 0.01);
-        try std.testing.expectApproxEqAbs(@as(f32, 5), paged.fragment.rect.y, 0.01);
+        if (color.red == 1 and color.green == 0 and color.blue == 0) {
+            header_count += 1;
+            try std.testing.expectApproxEqAbs(@as(f32, 5), paged.fragment.rect.y, 0.01);
+        }
+        if (color.red == 1 and color.green == 0 and color.blue == 1) {
+            footer_count += 1;
+            try std.testing.expectApproxEqAbs(@as(f32, 45), paged.fragment.rect.y, 0.01);
+        }
     }
-    try std.testing.expectEqual(@as(usize, 3), fixed_count);
+    try std.testing.expectEqual(@as(usize, 3), header_count);
+    try std.testing.expectEqual(@as(usize, 3), footer_count);
+    try std.testing.expectEqual(@as(usize, 3), footer_text_count);
 }
 
 test "Web stacking metadata orders positioned layers and compounds opacity" {

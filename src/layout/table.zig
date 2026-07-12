@@ -8,6 +8,7 @@ const box = @import("../box.zig");
 const font = @import("../font.zig");
 const geometry = @import("../geometry.zig");
 const fragmentation = @import("fragmentation.zig");
+const floats = @import("floats.zig");
 const intrinsic = @import("intrinsic.zig");
 const types = @import("types.zig");
 
@@ -23,6 +24,11 @@ const CellLayout = struct {
     row_span: usize = 1,
 };
 
+const PassResult = struct {
+    height: f32,
+    footer_height: f32 = 0,
+};
+
 pub fn layout(
     state: anytype,
     table_id: box.BoxId,
@@ -30,9 +36,52 @@ pub fn layout(
     start_y: f32,
     width: f32,
 ) !f32 {
+    if (!state.web_sizing or !tableHasFooterRows(state, table_id)) {
+        return (try layoutPass(state, table_id, start_x, start_y, width, 0, true)).height;
+    }
+
+    // Footer groups need their natural height before body rows can reserve the
+    // page-end area. The measurement pass is rollback-only: fragments,
+    // deferred positioned descendants, and line identifiers are restored
+    // before the definitive fragmented layout.
+    const fragment_start = state.fragments.items.len;
+    const pending_start = state.pending_positioned.items.len;
+    const next_line_id = state.next_line_id;
+    const measured = try layoutPass(state, table_id, start_x, start_y, width, 0, false);
+    state.fragments.items.len = fragment_start;
+    state.pending_positioned.items.len = pending_start;
+    state.next_line_id = next_line_id;
+
+    const footer_reservation = if (state.fragmentainer()) |context|
+        if (measured.footer_height > 0 and measured.footer_height < context.extent)
+            measured.footer_height
+        else
+            0
+    else
+        0;
+    return (try layoutPass(state, table_id, start_x, start_y, width, footer_reservation, true)).height;
+}
+
+fn layoutPass(
+    state: anytype,
+    table_id: box.BoxId,
+    start_x: f32,
+    start_y: f32,
+    width: f32,
+    footer_reservation: f32,
+    commit_root_width: bool,
+) !PassResult {
     var rows = try std.ArrayList(box.BoxId).initCapacity(state.allocator, 0);
     defer rows.deinit(state.allocator);
     try collectTableRows(state, table_id, &rows);
+    var ordered_rows = try std.ArrayList(box.BoxId).initCapacity(state.allocator, rows.items.len);
+    defer ordered_rows.deinit(state.allocator);
+    if (state.web_sizing) {
+        for (rows.items) |row_id| if (isTableHeaderRow(state, row_id)) try ordered_rows.append(state.allocator, row_id);
+        for (rows.items) |row_id| if (!isTableHeaderRow(state, row_id) and !isTableFooterRow(state, row_id)) try ordered_rows.append(state.allocator, row_id);
+        for (rows.items) |row_id| if (isTableFooterRow(state, row_id)) try ordered_rows.append(state.allocator, row_id);
+    }
+    const flow_rows = if (state.web_sizing) ordered_rows.items else rows.items;
 
     var top_captions = try std.ArrayList(box.BoxId).initCapacity(state.allocator, 0);
     defer top_captions.deinit(state.allocator);
@@ -40,12 +89,12 @@ pub fn layout(
     defer bottom_captions.deinit(state.allocator);
     try collectTableCaptions(state, table_id, &top_captions, &bottom_captions);
 
-    const column_count = @max(try tableGridColumnCount(state, rows.items), tableDefinedColumnCount(state, table_id));
-    const column_widths = try tableColumnWidths(state, table_id, rows.items, column_count, width);
+    const column_count = @max(try tableGridColumnCount(state, flow_rows), tableDefinedColumnCount(state, table_id));
+    const column_widths = try tableColumnWidths(state, table_id, flow_rows, column_count, width);
     defer state.allocator.free(column_widths);
     var table_width: f32 = 0;
     for (column_widths) |track_width| table_width += track_width;
-    expandTableRootWidth(state, table_id, table_width - width);
+    if (commit_root_width) expandTableRootWidth(state, table_id, table_width - width);
 
     var row_y = start_y;
     try layoutCaptions(state, table_id, top_captions.items, start_x, &row_y, table_width);
@@ -54,6 +103,12 @@ pub fn layout(
     var header_start_y: f32 = 0;
     var header_height: f32 = 0;
     var last_repeated_page: ?usize = null;
+    var footer_template_start: ?usize = null;
+    var footer_template_end: usize = 0;
+    var footer_start_y: f32 = 0;
+    var footer_height: f32 = 0;
+    var content_pages = try std.ArrayList(usize).initCapacity(state.allocator, 2);
+    defer content_pages.deinit(state.allocator);
     var previous_break_after = box.PageBreak.auto;
     var sibling_group_fragment_start: ?usize = null;
     var sibling_group_y: f32 = 0;
@@ -66,8 +121,18 @@ pub fn layout(
     defer state.allocator.free(occupied);
 
     const collapse_borders = state.tree.boxes.items[table_id].style.border_collapse == .collapse;
-    for (rows.items, 0..) |row_id, row_index| {
+    for (flow_rows, 0..) |row_id, row_index| {
         const is_header_row = isTableHeaderRow(state, row_id);
+        const is_footer_row = isTableFooterRow(state, row_id);
+        if (is_footer_row and footer_template_start == null and footer_reservation > 0) {
+            if (state.fragmentainer()) |context| {
+                const first_page = context.pageIndex(start_y);
+                const current_page = context.pageIndex(row_y);
+                if (current_page > first_page) {
+                    row_y = context.pageStart(row_y) + context.extent - footer_reservation;
+                }
+            }
+        }
         const row_source = state.tree.boxes.items[row_id];
         const boundary_break = fragmentation.resolveBoundary(previous_break_after, row_source.style.page_break_before);
         if (state.web_sizing and boundary_break.isForced()) {
@@ -81,7 +146,7 @@ pub fn layout(
                         last_repeated_page != target_page;
                     row_y = target_page_start + (if (should_repeat_header) header_height else 0);
                     if (should_repeat_header) {
-                        try cloneTableHeader(
+                        try cloneTableSection(
                             state,
                             header_template_start.?,
                             header_template_end,
@@ -188,6 +253,7 @@ pub fn layout(
         for (state.fragments.items[row_start_fragment..]) |*fragment| {
             fragment.table_id = table_id;
             fragment.is_table_header = is_header_row;
+            fragment.is_table_footer = is_footer_row;
         }
 
         if (!state.web_sizing and state.page_height != null) {
@@ -204,7 +270,7 @@ pub fn layout(
                 for (state.fragments.items[row_start_fragment..]) |*fragment| fragment.rect.y += shift;
                 row_y += shift;
                 if (should_repeat_header) {
-                    try cloneTableHeader(
+                    try cloneTableSection(
                         state,
                         header_template_start.?,
                         header_template_end,
@@ -214,7 +280,8 @@ pub fn layout(
                     last_repeated_page = target_page;
                 }
             }
-        } else if (state.fragmentainer()) |context| {
+        } else if (state.fragmentainer()) |context| fragmented: {
+            if (is_footer_row) break :fragmented;
             var kept_group = false;
             var retain_group = false;
             if (boundary_break.isAvoid() and sibling_group_fragment_start != null) {
@@ -222,9 +289,9 @@ pub fn layout(
                 const group_size = group_end - sibling_group_y;
                 const can_repeat_for_group = !is_header_row and
                     header_template_start != null and
-                    header_height + group_size <= context.extent;
-                retain_group = group_size <= context.extent + 0.0001;
-                const group_shift = context.atomicShift(sibling_group_y, group_size);
+                    header_height + group_size + footer_reservation <= context.extent;
+                retain_group = group_size + footer_reservation <= context.extent + 0.0001;
+                const group_shift = context.atomicShiftBeforeEndInset(sibling_group_y, group_size, footer_reservation);
                 if (group_shift > 0) {
                     const target_page_start = context.boundaryAtOrAfter(sibling_group_y);
                     const target_page = context.pageIndex(target_page_start);
@@ -235,7 +302,7 @@ pub fn layout(
                     sibling_group_y += shift;
                     kept_group = true;
                     if (should_repeat_header) {
-                        try cloneTableHeader(
+                        try cloneTableSection(
                             state,
                             header_template_start.?,
                             header_template_end,
@@ -247,19 +314,19 @@ pub fn layout(
                 }
             }
 
-            const automatic_shift = if (kept_group) 0 else context.atomicShift(row_y, row_height);
+            const automatic_shift = if (kept_group) 0 else context.atomicShiftBeforeEndInset(row_y, row_height, footer_reservation);
             if (automatic_shift > 0) {
                 const target_page_start = row_y + automatic_shift;
                 const target_page = context.pageIndex(target_page_start);
                 const should_repeat_header = !is_header_row and
                     header_template_start != null and
-                    header_height + row_height <= context.extent and
+                    header_height + row_height + footer_reservation <= context.extent and
                     last_repeated_page != target_page;
                 const shift = automatic_shift + (if (should_repeat_header) header_height else 0);
                 for (state.fragments.items[row_start_fragment..]) |*fragment| shiftFragmentY(fragment, shift);
                 row_y += shift;
                 if (should_repeat_header) {
-                    try cloneTableHeader(
+                    try cloneTableSection(
                         state,
                         header_template_start.?,
                         header_template_end,
@@ -275,6 +342,10 @@ pub fn layout(
             }
         }
 
+        if (!is_footer_row) {
+            if (state.fragmentainer()) |context| try appendUniquePage(state.allocator, &content_pages, context.pageIndex(row_y));
+        }
+
         if (is_header_row) {
             if (header_template_start == null) {
                 header_template_start = row_start_fragment;
@@ -282,6 +353,14 @@ pub fn layout(
             }
             header_template_end = state.fragments.items.len;
             header_height = row_y + row_height - header_start_y;
+        }
+        if (is_footer_row) {
+            if (footer_template_start == null) {
+                footer_template_start = row_start_fragment;
+                footer_start_y = row_y;
+            }
+            footer_template_end = state.fragments.items.len;
+            footer_height = row_y + row_height - footer_start_y;
         }
 
         for (old_span_cells.items) |spanning_cell| {
@@ -320,9 +399,26 @@ pub fn layout(
 
     if (state.web_sizing and previous_break_after.isForced()) state.applyForcedBreak(&row_y, previous_break_after);
 
+    if (footer_reservation > 0 and footer_template_start != null and content_pages.items.len > 1) {
+        if (state.fragmentainer()) |context| {
+            const final_page = context.pageIndex(footer_start_y);
+            for (content_pages.items) |page_index| {
+                if (page_index == final_page) continue;
+                const target_y = @as(f32, @floatFromInt(page_index + 1)) * context.extent - footer_height;
+                try cloneTableSection(
+                    state,
+                    footer_template_start.?,
+                    footer_template_end,
+                    footer_start_y,
+                    target_y,
+                );
+            }
+        }
+    }
+
     try layoutCaptions(state, table_id, bottom_captions.items, start_x, &row_y, table_width);
 
-    return row_y - start_y;
+    return .{ .height = row_y - start_y, .footer_height = footer_height };
 }
 
 fn collectTableCaptions(
@@ -423,7 +519,7 @@ fn shiftFragmentY(fragment: *Fragment, shift: f32) void {
     if (fragment.image_content_rect) |*content| content.y += shift;
 }
 
-fn cloneTableHeader(
+fn cloneTableSection(
     state: anytype,
     start: usize,
     end: usize,
@@ -434,8 +530,14 @@ fn cloneTableHeader(
     const copies = try state.allocator.alloc(Fragment, count);
     defer state.allocator.free(copies);
     @memcpy(copies, state.fragments.items[start..end]);
-    for (copies) |*fragment| fragment.rect.y = target_y + fragment.rect.y - source_y;
+    const shift = target_y - source_y;
+    floats.shiftFragments(copies, 0, shift);
     try state.fragments.appendSlice(state.allocator, copies);
+}
+
+fn appendUniquePage(allocator: std.mem.Allocator, pages: *std.ArrayList(usize), page_index: usize) !void {
+    for (pages.items) |existing| if (existing == page_index) return;
+    try pages.append(allocator, page_index);
 }
 
 fn isTableHeaderRow(state: anytype, row_id: box.BoxId) bool {
@@ -445,6 +547,28 @@ fn isTableHeaderRow(state: anytype, row_id: box.BoxId) bool {
     const node_id = parent.node orelse return false;
     const node = state.document.nodes.items[node_id];
     return node.kind == .element and std.ascii.eqlIgnoreCase(node.kind.element.name, "thead");
+}
+
+fn isTableFooterRow(state: anytype, row_id: box.BoxId) bool {
+    const parent_id = state.tree.boxes.items[row_id].parent orelse return false;
+    const parent = state.tree.boxes.items[parent_id];
+    if (parent.kind != .tableRowGroup) return false;
+    const node_id = parent.node orelse return false;
+    const node = state.document.nodes.items[node_id];
+    return node.kind == .element and std.ascii.eqlIgnoreCase(node.kind.element.name, "tfoot");
+}
+
+fn tableHasFooterRows(state: anytype, table_id: box.BoxId) bool {
+    var child = state.tree.boxes.items[table_id].first_child;
+    while (child) |child_id| {
+        const source = state.tree.boxes.items[child_id];
+        if (source.kind == .tableRowGroup and source.node != null) {
+            const node = state.document.nodes.items[source.node.?];
+            if (node.kind == .element and std.ascii.eqlIgnoreCase(node.kind.element.name, "tfoot")) return true;
+        }
+        child = source.next_sibling;
+    }
+    return false;
 }
 
 fn collectTableRows(state: anytype, parent_id: box.BoxId, rows: *std.ArrayList(box.BoxId)) !void {

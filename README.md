@@ -15,13 +15,14 @@ The browser package is published as `@imggion/html2realpdf`.
 - block and inline layout, wrapping, whitespace modes, alignment, margin
   collapse, padding, borders, and `border-box` sizing;
 - tables with `colspan`, `rowspan`, collapsed borders, and repeated `<thead>`
-  rows;
+  and page-end `<tfoot>` rows;
 - Web/strict Flexbox with row/column/reverse flow, wrapping, grow/shrink,
   min/max constraints, gaps, alignment, auto margins, nested containers,
   replaced elements, and page-aware line/item placement;
 - Web/strict relative, absolute, fixed, and sticky positioning with physical
   and logical insets, positioned containing blocks, `z-index` paint phases,
-  overflow clipping, native opacity, and repeated fixed page furniture;
+  overflow clipping, native opacity, and repeated fixed headers/footers anchored
+  from either page edge;
 - Web/strict CSS Grid with explicit and implicit tracks, `fr`, `repeat()`,
   `minmax()`, auto-placement, spans, named lines/areas, Box Alignment, nested
   grids, intrinsic sizing, replaced elements, and page-aware row placement;
