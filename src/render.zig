@@ -22,6 +22,8 @@ pub const serializeDiagnostics = diagnostics.serialize;
 pub const CssProfile = enum { document, web, strict };
 pub const MarginBoxName = paged_media.MarginBoxName;
 pub const MarginBox = paged_media.MarginBox;
+pub const PageRule = pagination.PageRule;
+pub const PageSelector = pagination.PageSelector;
 
 pub const Options = struct {
     page_format: pagination.PageFormat = .a4,
@@ -33,6 +35,7 @@ pub const Options = struct {
     font_registry: ?*const font.Registry = null,
     css_profile: CssProfile = .document,
     margin_boxes: []const MarginBox = &.{},
+    page_rules: []const PageRule = &.{},
 };
 
 pub const Error = error{
@@ -116,7 +119,7 @@ pub fn renderHtml(
     });
     defer laid_out.deinit(arena);
 
-    var pages = try pagination.paginate(arena, &laid_out, page_spec);
+    var pages = try pagination.paginateWithRules(arena, &laid_out, page_spec, options.page_rules);
     defer pages.deinit(arena);
 
     var display = try display_list.build(arena, &pages);
@@ -472,4 +475,26 @@ test "render supported SVG data URLs as vector PDF forms" {
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Form") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/ToUnicode") != null);
+}
+
+test "render named pages with distinct PDF media boxes" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<div style='height:20px;page:Report'>REPORT</div><div style='height:20px;page:Summary'>SUMMARY</div>",
+        .{
+            .css_profile = .web,
+            .custom_page_width_points = 150,
+            .custom_page_height_points = 75,
+            .page_rules = &.{
+                .{ .selector = .{ .name = "Report" }, .width_points = 150, .height_points = 75 },
+                .{ .selector = .{ .name = "Summary" }, .width_points = 225, .height_points = 90 },
+            },
+        },
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), result.page_count);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/MediaBox [0 0 150.000 75.000]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/MediaBox [0 0 225.000 90.000]") != null);
 }

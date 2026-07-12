@@ -55,7 +55,7 @@ pub fn appendMarginBoxes(
 ) !void {
     for (0..list.page_count) |page_index| {
         for (boxes) |margin_box| {
-            const slot = slotFor(list.page_spec, margin_box.name);
+            const slot = slotFor(list.pageSpec(page_index), margin_box.name);
             if (slot.rect.width <= 0 or slot.rect.height <= 0) continue;
             const text = try expandCounters(allocator, margin_box.content, page_index + 1, list.page_count);
             if (text.len == 0) continue;

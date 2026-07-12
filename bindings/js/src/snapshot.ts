@@ -21,6 +21,26 @@ export interface SnapshotResult {
   diagnostics: Diagnostic[];
   page?: NormalizedPage;
   pageMarginBoxes?: readonly SnapshotPageMarginBox[];
+  pageRules?: readonly SnapshotPageRule[];
+}
+
+export interface SnapshotPageRule {
+  name?: string;
+  first?: boolean;
+  left?: boolean;
+  right?: boolean;
+  blank?: boolean;
+  widthPoints?: number;
+  heightPoints?: number;
+  marginTopPoints?: number;
+  marginRightPoints?: number;
+  marginBottomPoints?: number;
+  marginLeftPoints?: number;
+  sizeImportant?: boolean;
+  marginTopImportant?: boolean;
+  marginRightImportant?: boolean;
+  marginBottomImportant?: boolean;
+  marginLeftImportant?: boolean;
 }
 
 export type SnapshotPageMarginBoxName =
@@ -229,8 +249,8 @@ export async function snapshotSource(source: HtmlSource, options: SnapshotOption
   if (!(element instanceof Element)) throw new InvalidSourceError("Expected an HTML string, Element, or ref-like object");
   if (options.viewport !== undefined || options.mediaType === "print") return snapshotElementInEnvironment(element, options);
 
-  const { clone, diagnostics, page, pageMarginBoxes } = await snapshotElement(element, options);
-  return { html: clone.outerHTML, diagnostics, ...(page ? { page } : {}), ...(pageMarginBoxes ? { pageMarginBoxes } : {}) };
+  const { clone, diagnostics, page, pageMarginBoxes, pageRules } = await snapshotElement(element, options);
+  return { html: clone.outerHTML, diagnostics, ...(page ? { page } : {}), ...(pageMarginBoxes ? { pageMarginBoxes } : {}), ...(pageRules ? { pageRules } : {}) };
 }
 
 async function snapshotElementInEnvironment(element: Element, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -272,6 +292,7 @@ async function snapshotElementInEnvironment(element: Element, options: SnapshotO
       diagnostics: snapshot.diagnostics,
       ...(snapshot.page ? { page: snapshot.page } : {}),
       ...(snapshot.pageMarginBoxes ? { pageMarginBoxes: snapshot.pageMarginBoxes } : {}),
+      ...(snapshot.pageRules ? { pageRules: snapshot.pageRules } : {}),
     };
   } finally {
     iframe.remove();
@@ -317,6 +338,21 @@ type MarginBoxCascade = Partial<Record<MarginBoxProperty, CascadedPageValue>>;
 interface PageStyleResult {
   page?: NormalizedPage;
   marginBoxes: SnapshotPageMarginBox[];
+  rules: SnapshotPageRule[];
+}
+
+interface ParsedPageSelector {
+  name?: string;
+  first?: boolean;
+  left?: boolean;
+  right?: boolean;
+  blank?: boolean;
+}
+
+interface RawPageRule {
+  selector: ParsedPageSelector;
+  cascade: PageCascade;
+  marginCascades: Map<SnapshotPageMarginBoxName, MarginBoxCascade>;
 }
 
 const CSS_PAGE_RULE = 6;
@@ -346,12 +382,13 @@ const PAGE_MARGIN_BOX_NAMES = new Map<string, SnapshotPageMarginBoxName>([
 function readDefaultPageStyle(document: Document, options: SnapshotOptions, diagnostics: Diagnostic[]): PageStyleResult {
   const cascade: PageCascade = {};
   const marginCascades = new Map<SnapshotPageMarginBoxName, MarginBoxCascade>();
+  const rawRules: RawPageRule[] = [];
   let found = false;
   const view = document.defaultView ?? window;
   const stylesheets = [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])];
   for (const stylesheet of stylesheets) {
     try {
-      found = collectDefaultPageRules(stylesheet.cssRules, view, document, cascade, marginCascades, options, diagnostics) || found;
+      found = collectDefaultPageRules(stylesheet.cssRules, view, document, cascade, marginCascades, rawRules, options, diagnostics) || found;
     } catch (error) {
       if (error instanceof UnsupportedCssError) throw error;
       // Cross-origin stylesheets cannot expose cssRules. Their normal computed
@@ -364,12 +401,13 @@ function readDefaultPageStyle(document: Document, options: SnapshotOptions, diag
     }
   }
   const marginBoxes = materializePageMarginBoxes(marginCascades, options, diagnostics);
-  if (!found) return { marginBoxes };
+  const rules = materializePageRules(rawRules, cascade, options, diagnostics);
+  if (!found) return { marginBoxes, rules };
 
   const size = parseCssPageSize(cascade.size?.value ?? "auto");
   if (!size) {
     reportUnsupportedPageValue("size", cascade.size?.value ?? "", options, diagnostics);
-    return { marginBoxes };
+    return { marginBoxes, rules };
   }
   const margins = ["margin-top", "margin-right", "margin-bottom", "margin-left"].map((property) => {
     const raw = cascade[property as keyof PageCascade]?.value ?? "0";
@@ -379,7 +417,7 @@ function readDefaultPageStyle(document: Document, options: SnapshotOptions, diag
   }) as [number, number, number, number];
   if (margins[0] + margins[2] >= size[1] || margins[1] + margins[3] >= size[0]) {
     reportUnsupportedPageValue("margin", "page margins leave no content area", options, diagnostics);
-    return { marginBoxes };
+    return { marginBoxes, rules };
   }
   return {
     page: {
@@ -391,6 +429,7 @@ function readDefaultPageStyle(document: Document, options: SnapshotOptions, diag
       marginLeftPoints: margins[3],
     },
     marginBoxes,
+    rules,
   };
 }
 
@@ -400,6 +439,7 @@ function collectDefaultPageRules(
   document: Document,
   cascade: PageCascade,
   marginCascades: Map<SnapshotPageMarginBoxName, MarginBoxCascade>,
+  rawRules: RawPageRule[],
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
 ): boolean {
@@ -409,7 +449,21 @@ function collectDefaultPageRules(
       const pageRule = rule as CSSPageRule;
       const selector = pageRule.selectorText.trim();
       if (selector) {
-        reportUnsupportedPageValue("@page selector", selector, options, diagnostics);
+        const parsedSelector = parsePageSelector(selector);
+        if (!parsedSelector) {
+          reportUnsupportedPageValue("@page selector", selector, options, diagnostics);
+          continue;
+        }
+        const ruleCascade: PageCascade = {};
+        const ruleMarginCascades = new Map<SnapshotPageMarginBoxName, MarginBoxCascade>();
+        const pageStyle = pageRule.style as unknown as CSSStyleDeclaration;
+        cascadePageDeclaration(ruleCascade, pageStyle, "size");
+        cascadePageDeclaration(ruleCascade, pageStyle, "margin-top");
+        cascadePageDeclaration(ruleCascade, pageStyle, "margin-right");
+        cascadePageDeclaration(ruleCascade, pageStyle, "margin-bottom");
+        cascadePageDeclaration(ruleCascade, pageStyle, "margin-left");
+        collectPageMarginRules(pageRule.cssText, document, ruleMarginCascades, options, diagnostics);
+        rawRules.push({ selector: parsedSelector, cascade: ruleCascade, marginCascades: ruleMarginCascades });
         continue;
       }
       found = true;
@@ -425,9 +479,87 @@ function collectDefaultPageRules(
     if (!("cssRules" in rule) || !(rule as CSSGroupingRule).cssRules) continue;
     if (rule.type === CSS_MEDIA_RULE && "conditionText" in rule && !view.matchMedia(String(rule.conditionText)).matches) continue;
     if (rule.type === CSS_SUPPORTS_RULE && "conditionText" in rule && !CSS.supports(String(rule.conditionText))) continue;
-    found = collectDefaultPageRules((rule as CSSGroupingRule).cssRules, view, document, cascade, marginCascades, options, diagnostics) || found;
+    found = collectDefaultPageRules((rule as CSSGroupingRule).cssRules, view, document, cascade, marginCascades, rawRules, options, diagnostics) || found;
   }
   return found;
+}
+
+function parsePageSelector(value: string): ParsedPageSelector | null {
+  const selector = value.trim();
+  if (!selector || selector.includes(",") || /\s/.test(selector)) return null;
+  const firstColon = selector.indexOf(":");
+  const rawName = firstColon < 0 ? selector : selector.slice(0, firstColon);
+  if (rawName && (!/^[-_A-Za-z\u0080-\uFFFF][-_A-Za-z0-9\u0080-\uFFFF]*$/.test(rawName) || /^(?:auto|initial|inherit|unset|revert|revert-layer|default)$/i.test(rawName))) return null;
+  const result: ParsedPageSelector = {};
+  if (rawName) result.name = rawName;
+  const pseudos = firstColon < 0 ? "" : selector.slice(firstColon);
+  if (!pseudos && !rawName) return null;
+  let cursor = 0;
+  while (cursor < pseudos.length) {
+    const match = pseudos.slice(cursor).match(/^:([A-Za-z-]+)/);
+    if (!match) return null;
+    const pseudo = match[1]!.toLowerCase();
+    if (pseudo === "first") {
+      if (result.first) return null;
+      result.first = true;
+    } else if (pseudo === "left") {
+      if (result.left || result.right) return null;
+      result.left = true;
+    } else if (pseudo === "right") {
+      if (result.right || result.left) return null;
+      result.right = true;
+    } else if (pseudo === "blank") {
+      if (result.blank) return null;
+      result.blank = true;
+    } else return null;
+    cursor += match[0].length;
+  }
+  return result;
+}
+
+function materializePageRules(
+  rawRules: readonly RawPageRule[],
+  defaultCascade: PageCascade,
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+): SnapshotPageRule[] {
+  const result: SnapshotPageRule[] = [];
+  for (const raw of rawRules) {
+    const rule: SnapshotPageRule = { ...raw.selector };
+    const size = raw.cascade.size;
+    if (size && beatsDefaultPageDeclaration(size, defaultCascade.size)) {
+      const parsed = parseCssPageSize(size.value);
+      if (!parsed) {
+        reportUnsupportedPageValue("size", size.value, options, diagnostics);
+      } else {
+        rule.widthPoints = parsed[0];
+        rule.heightPoints = parsed[1];
+        if (size.important) rule.sizeImportant = true;
+      }
+    }
+    for (const [property, output, importantOutput] of [
+      ["margin-top", "marginTopPoints", "marginTopImportant"],
+      ["margin-right", "marginRightPoints", "marginRightImportant"],
+      ["margin-bottom", "marginBottomPoints", "marginBottomImportant"],
+      ["margin-left", "marginLeftPoints", "marginLeftImportant"],
+    ] as const) {
+      const declaration = raw.cascade[property];
+      if (!declaration || !beatsDefaultPageDeclaration(declaration, defaultCascade[property])) continue;
+      const parsed = parseCssPageLength(declaration.value, true);
+      if (parsed === null) {
+        reportUnsupportedPageValue(property, declaration.value, options, diagnostics);
+        continue;
+      }
+      rule[output] = parsed;
+      if (declaration.important) rule[importantOutput] = true;
+    }
+    result.push(rule);
+  }
+  return result;
+}
+
+function beatsDefaultPageDeclaration(candidate: CascadedPageValue, defaultValue: CascadedPageValue | undefined): boolean {
+  return !defaultValue?.important || candidate.important;
 }
 
 function cascadePageDeclaration(cascade: PageCascade, style: CSSStyleDeclaration, property: keyof PageCascade): void {
@@ -850,6 +982,7 @@ async function snapshotElement(element: Element, options: SnapshotOptions): Prom
   diagnostics: Diagnostic[];
   page?: NormalizedPage;
   pageMarginBoxes?: readonly SnapshotPageMarginBox[];
+  pageRules?: readonly SnapshotPageRule[];
 }> {
   const diagnostics: Diagnostic[] = [];
   const counters = CounterState.forSnapshotRoot(element, options.includeShadowDom === true);
@@ -870,6 +1003,7 @@ async function snapshotElement(element: Element, options: SnapshotOptions): Prom
     diagnostics,
     ...(pageStyle.page ? { page: pageStyle.page } : {}),
     ...(pageStyle.marginBoxes.length > 0 ? { pageMarginBoxes: pageStyle.marginBoxes } : {}),
+    ...(pageStyle.rules.length > 0 ? { pageRules: pageStyle.rules } : {}),
   };
 }
 
@@ -912,6 +1046,7 @@ async function snapshotHtmlString(source: string, options: SnapshotOptions): Pro
       diagnostics: [...diagnostics, ...snapshot.diagnostics],
       ...(snapshot.page ? { page: snapshot.page } : {}),
       ...(snapshot.pageMarginBoxes ? { pageMarginBoxes: snapshot.pageMarginBoxes } : {}),
+      ...(snapshot.pageRules ? { pageRules: snapshot.pageRules } : {}),
     };
   } finally {
     iframe.remove();

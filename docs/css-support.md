@@ -59,7 +59,9 @@ coverage. A dash means the stage is not applicable or not implemented.
 | table formatting | Y | Y | Y | Y | Y | Y | Y | intrinsic auto-layout tracks, percentage/column hints, rowspan/colspan, captions and column groups, repeated headers plus page-end footers with reserved body extent, avoid-linked row groups, and top/middle/bottom/baseline cell alignment including row spans |
 | break before/after/inside | Y | Y | Y | Y | - | Y | Y | `always` alias plus `page`, `left`, `right`, `recto`, `verso`, `avoid`, and `avoid-page`; adjacent values arbitrate together, first/last block-child values propagate, forced values override avoid, and block/table/Flex/Grid page opportunities share one fragmentainer model |
 | `orphans` / `widows` | Y | Y | Y | Y | - | Y | Y | paragraph line constraints |
+| `page` | Y | Y | Y | Y | - | Y | Y | `auto` plus case-sensitive custom identifiers; used values resolve through the nearest named ancestor, first/last eligible children propagate page names, and name changes force class A page breaks in block/table/Flex/Grid flows |
 | default `@page` size/margins | Y | Y | Y | Y | - | Y | Y | browser CSSOM cascade including `!important`; A3/A4/A5, Letter/Legal/Ledger/Tabloid, portrait/landscape, one/two absolute lengths, and physical margin longhands; explicit API page options override CSS |
+| named and pseudo `@page` geometry | Y | Y | Y | Y | - | Y | Y | case-sensitive page names plus `:first`, `:left`, `:right`, and `:blank`; importance, page-selector specificity, and source order resolve a per-page PDF `MediaBox` and physical margins; long-content reflow against variable page heights remains staged |
 | default `@page` margin boxes | Y | Y | Y | Y | Y | Y | Y | all 16 standard positions; concatenated CSS strings plus decimal `counter(page)`/`counter(pages)`; font family/size/weight/style, color, and text alignment remain selectable native PDF text |
 | `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; authored top/right/bottom/left anchors survive browser used-value capture, fixed headers/footers repeat at page-relative coordinates, and sticky resolves as relative in paged media |
 | physical/logical inset | Y | Y | Y | Y | - | Y | Y | top/right/bottom/left plus block/inline logical forms; auto sizing, opposing-inset stretch, auto margins, and nearest positioned padding containing block |
@@ -100,10 +102,10 @@ Playwright E2E make the matrix verifiable.
   Arabic and Hebrew have built-in shaped fallbacks, while emoji and other
   scripts require a registered embeddable TTF fallback;
   the package test suite registers a deterministic monochrome emoji fixture;
-- multi-column fragmentation, named pages, page pseudo-classes, non-text margin-box painting,
-  and per-page geometry changes; page fragmentainers already coordinate block,
-  inline, table, Flex, and Grid placement, while the default `@page` rule
-  controls uniform page size/orientation and margins in browser rendering.
+- multi-column fragmentation, named/pseudo-specific margin boxes, non-text
+  margin-box painting, and reflow against variable per-page widths/heights;
+  page fragmentainers already coordinate block, inline, table, Flex, and Grid
+  placement, and named/pseudo rules already produce per-page PDF geometry.
 
 These features are not silently represented as whole-page screenshots. Canvas
 and unsupported SVG subtrees remain scoped image resources; supported SVG is a

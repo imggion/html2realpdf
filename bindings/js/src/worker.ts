@@ -3,7 +3,7 @@
 import { WasmBridge } from "./wasm.js";
 import type { NormalizedPage } from "./page.js";
 import type { CssProfile, FontRegistration, PdfMetadata } from "./types.js";
-import type { SnapshotPageMarginBox } from "./snapshot.js";
+import type { SnapshotPageMarginBox, SnapshotPageRule } from "./snapshot.js";
 
 interface InitMessage {
   type: "init";
@@ -19,6 +19,7 @@ interface RenderMessage {
   metadata?: PdfMetadata;
   cssProfile?: CssProfile;
   marginBoxes?: readonly SnapshotPageMarginBox[];
+  pageRules?: readonly SnapshotPageRule[];
 }
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
@@ -40,7 +41,7 @@ scope.addEventListener("message", (event: MessageEvent<InitMessage | RenderMessa
     return;
   }
 
-  bridgePromise.then((bridge) => bridge.render(message.html, message.page, message.metadata, message.cssProfile, message.marginBoxes)).then(
+  bridgePromise.then((bridge) => bridge.render(message.html, message.page, message.metadata, message.cssProfile, message.marginBoxes, message.pageRules)).then(
     (result) => {
       scope.postMessage(
         { type: "render-result", id: message.id, bytes: result.bytes, pageCount: result.pageCount, diagnostics: result.diagnostics },

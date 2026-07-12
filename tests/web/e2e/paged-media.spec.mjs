@@ -149,34 +149,52 @@ test("unsupported margin-box content follows warn and strict policy", async ({ p
   expect(result.strictError).toContain("@top-center content:attr(data-title)");
 });
 
-test("unsupported named @page selectors are diagnostic and strict-safe", async ({ page }) => {
+test("named @page selectors drive per-page PDF geometry and margins", async ({ page }) => {
   await page.goto("/tests/web/index.html");
   const result = await page.evaluate(async () => {
     const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
       .then((response) => response.json());
     const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
     const renderer = await pkg.createRenderer({ execution: "main" });
-    const html = `<style>@page report { size: A4; }</style><p>Named page pending</p>`;
-    const pdf = await renderer.render(html, { cssProfile: "web", mediaType: "print", unsupportedCss: "warn" });
+    const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+    pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+    const html = `<style>
+      @page { size: 200px 100px; margin: 0; }
+      @page Report { size: 200px 100px; margin-left: 10px; }
+      @page Summary { size: 300px 120px; margin-left: 20px; }
+      html, body { margin: 0; }
+      .report { page: Report; height: 20px; }
+      .summary { page: Summary; height: 20px; }
+    </style><div class="report">REPORT</div><div class="summary">SUMMARY</div>`;
+    const pdf = await renderer.render(html, { cssProfile: "web", mediaType: "print", unsupportedCss: "error" });
     const diagnostics = pdf.diagnostics;
-    pdf.dispose();
-    let strictError = "";
-    try {
-      await renderer.render(html, { cssProfile: "strict", mediaType: "print" });
-    } catch (error) {
-      strictError = error instanceof Error ? error.message : String(error);
+    const documentHandle = await pdfjs.getDocument({ data: pdf.toUint8Array() }).promise;
+    const pages = [];
+    for (let pageNumber = 1; pageNumber <= documentHandle.numPages; pageNumber += 1) {
+      const current = await documentHandle.getPage(pageNumber);
+      const viewport = current.getViewport({ scale: 1 });
+      const text = await current.getTextContent();
+      const item = text.items.find((candidate) => "str" in candidate && (candidate.str.includes("REPORT") || candidate.str.includes("SUMMARY")));
+      pages.push({
+        viewport: [viewport.width, viewport.height],
+        text: item && "str" in item ? item.str : "",
+        x: item && "transform" in item ? item.transform[4] : null,
+      });
     }
+    await documentHandle.destroy();
+    pdf.dispose();
     renderer.dispose();
-    return { diagnostics, strictError };
+    return { diagnostics, pages };
   });
 
-  expect(result.diagnostics).toEqual([
-    expect.objectContaining({
-      code: "UNSUPPORTED_PAGED_MEDIA",
-      property: "@page selector",
-      phase: "fragmentation",
-      severity: "warning",
-    }),
-  ]);
-  expect(result.strictError).toContain("@page selector:report");
+  expect(result.diagnostics).toEqual([]);
+  expect(result.pages).toHaveLength(2);
+  expect(result.pages[0].viewport[0]).toBeCloseTo(150, 2);
+  expect(result.pages[0].viewport[1]).toBeCloseTo(75, 2);
+  expect(result.pages[0].text).toContain("REPORT");
+  expect(result.pages[0].x).toBeCloseTo(7.5, 2);
+  expect(result.pages[1].viewport[0]).toBeCloseTo(225, 2);
+  expect(result.pages[1].viewport[1]).toBeCloseTo(90, 2);
+  expect(result.pages[1].text).toContain("SUMMARY");
+  expect(result.pages[1].x).toBeCloseTo(15, 2);
 });

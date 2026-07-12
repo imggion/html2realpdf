@@ -1,7 +1,7 @@
 import { WasmRenderError } from "./errors.js";
 import type { NormalizedPage } from "./page.js";
 import type { CssProfile, Diagnostic, FontRegistration, PdfMetadata } from "./types.js";
-import type { SnapshotPageMarginBox } from "./snapshot.js";
+import type { SnapshotPageMarginBox, SnapshotPageRule } from "./snapshot.js";
 
 const EXPECTED_ABI_VERSION = 1;
 
@@ -90,7 +90,7 @@ export class WasmBridge {
     }
   }
 
-  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile: CssProfile = "document", marginBoxes?: readonly SnapshotPageMarginBox[]): WasmRenderResult {
+  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile: CssProfile = "document", marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[]): WasmRenderResult {
     if (this.disposed) throw new WasmRenderError("WASM bridge has been disposed", -15);
     const input = this.encoder.encode(html);
     const renderOptions = this.encoder.encode(JSON.stringify({
@@ -102,6 +102,7 @@ export class WasmBridge {
       marginLeftPoints: page.marginLeftPoints,
       cssProfile,
       marginBoxes,
+      pageRules,
       metadata: metadata ? {
         ...metadata,
         keywords: Array.isArray(metadata.keywords) ? metadata.keywords.join(", ") : metadata.keywords,

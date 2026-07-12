@@ -41,6 +41,25 @@ const JsonMarginBox = struct {
     textAlign: ?box.TextAlign = null,
 };
 
+const JsonPageRule = struct {
+    name: []const u8 = "",
+    first: bool = false,
+    left: bool = false,
+    right: bool = false,
+    blank: bool = false,
+    widthPoints: ?f32 = null,
+    heightPoints: ?f32 = null,
+    marginTopPoints: ?f32 = null,
+    marginRightPoints: ?f32 = null,
+    marginBottomPoints: ?f32 = null,
+    marginLeftPoints: ?f32 = null,
+    sizeImportant: bool = false,
+    marginTopImportant: bool = false,
+    marginRightImportant: bool = false,
+    marginBottomImportant: bool = false,
+    marginLeftImportant: bool = false,
+};
+
 const JsonRenderOptions = struct {
     pageWidthPoints: f32,
     pageHeightPoints: f32,
@@ -51,6 +70,7 @@ const JsonRenderOptions = struct {
     metadata: ?JsonMetadata = null,
     cssProfile: renderer.CssProfile = .document,
     marginBoxes: []const JsonMarginBox = &.{},
+    pageRules: []const JsonPageRule = &.{},
 };
 
 const PdfContext = struct {
@@ -360,6 +380,28 @@ fn renderPdfWithJson(
         .color = geometry.parseColor(input.color) orelse geometry.Color.black,
         .text_align = input.textAlign,
     };
+    const page_rules = std.heap.wasm_allocator.alloc(renderer.PageRule, value.pageRules.len) catch return createErrorResult(-2, "Page rule allocation failed");
+    defer std.heap.wasm_allocator.free(page_rules);
+    for (value.pageRules, page_rules) |input, *output| output.* = .{
+        .selector = .{
+            .name = input.name,
+            .first = input.first,
+            .left = input.left,
+            .right = input.right,
+            .blank = input.blank,
+        },
+        .width_points = input.widthPoints,
+        .height_points = input.heightPoints,
+        .margin_top_points = input.marginTopPoints,
+        .margin_right_points = input.marginRightPoints,
+        .margin_bottom_points = input.marginBottomPoints,
+        .margin_left_points = input.marginLeftPoints,
+        .size_important = input.sizeImportant,
+        .margin_top_important = input.marginTopImportant,
+        .margin_right_important = input.marginRightImportant,
+        .margin_bottom_important = input.marginBottomImportant,
+        .margin_left_important = input.marginLeftImportant,
+    };
     var registry = if (context) |available| available.registry() else font.Registry{};
     return renderPdf(ptr, len, .{
         .custom_page_width_points = value.pageWidthPoints,
@@ -374,6 +416,7 @@ fn renderPdfWithJson(
         .font_registry = if (context != null) &registry else null,
         .css_profile = value.cssProfile,
         .margin_boxes = margin_boxes,
+        .page_rules = page_rules,
     });
 }
 

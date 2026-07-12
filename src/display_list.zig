@@ -103,6 +103,7 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
         .commands = commands,
         .page_count = document.page_count,
         .page_spec = document.page_spec,
+        .page_specs = document.page_specs.items,
     };
 }
 

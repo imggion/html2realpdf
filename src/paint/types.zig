@@ -147,6 +147,11 @@ pub const DisplayList = struct {
     commands: std.ArrayList(PageCommand),
     page_count: usize,
     page_spec: pagination.PageSpec,
+    page_specs: []const pagination.PageSpec = &.{},
+
+    pub fn pageSpec(self: *const DisplayList, page_index: usize) pagination.PageSpec {
+        return if (page_index < self.page_specs.len) self.page_specs[page_index] else self.page_spec;
+    }
 
     pub fn deinit(self: *DisplayList, allocator: std.mem.Allocator) void {
         self.commands.deinit(allocator);

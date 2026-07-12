@@ -54,6 +54,92 @@ pub const PageSpec = struct {
     }
 };
 
+pub const PageSelector = struct {
+    name: []const u8 = "",
+    first: bool = false,
+    left: bool = false,
+    right: bool = false,
+    blank: bool = false,
+
+    fn matches(self: PageSelector, page_name: []const u8, page_index: usize, is_blank: bool) bool {
+        if (self.name.len > 0 and !std.mem.eql(u8, self.name, page_name)) return false;
+        if (self.first and page_index != 0) return false;
+        if (self.left and page_index % 2 == 0) return false;
+        if (self.right and page_index % 2 != 0) return false;
+        if (self.blank and !is_blank) return false;
+        return true;
+    }
+
+    fn specificity(self: PageSelector) [3]u8 {
+        return .{
+            @intFromBool(self.name.len > 0),
+            @intFromBool(self.first) + @intFromBool(self.blank),
+            @intFromBool(self.left) + @intFromBool(self.right),
+        };
+    }
+};
+
+pub const PageRule = struct {
+    selector: PageSelector = .{},
+    width_points: ?f32 = null,
+    height_points: ?f32 = null,
+    margin_top_points: ?f32 = null,
+    margin_right_points: ?f32 = null,
+    margin_bottom_points: ?f32 = null,
+    margin_left_points: ?f32 = null,
+    size_important: bool = false,
+    margin_top_important: bool = false,
+    margin_right_important: bool = false,
+    margin_bottom_important: bool = false,
+    margin_left_important: bool = false,
+};
+
+const Winner = struct {
+    set: bool = false,
+    important: bool = false,
+    specificity: [3]u8 = .{ 0, 0, 0 },
+    order: usize = 0,
+
+    fn accepts(self: Winner, important: bool, specificity: [3]u8, order: usize) bool {
+        if (!self.set) return true;
+        if (self.important != important) return important;
+        const comparison = std.mem.order(u8, &specificity, &self.specificity);
+        return comparison == .gt or (comparison == .eq and order >= self.order);
+    }
+};
+
+pub fn resolvePageSpec(base: PageSpec, rules: []const PageRule, page_name: []const u8, page_index: usize, is_blank: bool) PageSpec {
+    var result = base;
+    var size_winner = Winner{};
+    var margin_winners = [_]Winner{.{}} ** 4;
+    for (rules, 0..) |rule, order| {
+        if (!rule.selector.matches(page_name, page_index, is_blank)) continue;
+        const specificity = rule.selector.specificity();
+        if (rule.width_points != null and rule.height_points != null and size_winner.accepts(rule.size_important, specificity, order)) {
+            result.width_points = @max(rule.width_points.?, 1);
+            result.height_points = @max(rule.height_points.?, 1);
+            size_winner = .{ .set = true, .important = rule.size_important, .specificity = specificity, .order = order };
+        }
+        applyMarginWinner(&result.margins_points.top, &margin_winners[0], rule.margin_top_points, rule.margin_top_important, specificity, order);
+        applyMarginWinner(&result.margins_points.right, &margin_winners[1], rule.margin_right_points, rule.margin_right_important, specificity, order);
+        applyMarginWinner(&result.margins_points.bottom, &margin_winners[2], rule.margin_bottom_points, rule.margin_bottom_important, specificity, order);
+        applyMarginWinner(&result.margins_points.left, &margin_winners[3], rule.margin_left_points, rule.margin_left_important, specificity, order);
+    }
+    if (result.margins_points.top + result.margins_points.bottom >= result.height_points or
+        result.margins_points.left + result.margins_points.right >= result.width_points)
+    {
+        return base;
+    }
+    return result;
+}
+
+fn applyMarginWinner(target: *f32, winner: *Winner, candidate: ?f32, important: bool, specificity: [3]u8, order: usize) void {
+    const value = candidate orelse return;
+    if (!winner.accepts(important, specificity, order)) return;
+    target.* = @max(value, 0);
+    winner.* = .{ .set = true, .important = important, .specificity = specificity, .order = order };
+}
+
 pub const PagedFragment = struct {
     page_index: usize,
     fragment: layout.Fragment,
@@ -61,11 +147,13 @@ pub const PagedFragment = struct {
 
 pub const PagedDocument = struct {
     fragments: std.ArrayList(PagedFragment),
+    page_specs: std.ArrayList(PageSpec) = .empty,
     page_count: usize,
     page_spec: PageSpec,
 
     pub fn deinit(self: *PagedDocument, allocator: std.mem.Allocator) void {
         self.fragments.deinit(allocator);
+        self.page_specs.deinit(allocator);
     }
 };
 
@@ -75,6 +163,15 @@ pub fn paginate(
     allocator: std.mem.Allocator,
     document: *const layout.LayoutDocument,
     page_spec: PageSpec,
+) !PagedDocument {
+    return paginateWithRules(allocator, document, page_spec, &.{});
+}
+
+pub fn paginateWithRules(
+    allocator: std.mem.Allocator,
+    document: *const layout.LayoutDocument,
+    page_spec: PageSpec,
+    page_rules: []const PageRule,
 ) !PagedDocument {
     var fragments = try std.ArrayList(PagedFragment).initCapacity(allocator, document.fragments.items.len);
     errdefer fragments.deinit(allocator);
@@ -124,11 +221,42 @@ pub fn paginate(
         }
     }
 
+    var page_specs = try std.ArrayList(PageSpec).initCapacity(allocator, page_count);
+    errdefer page_specs.deinit(allocator);
+    for (0..page_count) |page_index| {
+        const page_name = if (page_index < document.page_names.items.len)
+            document.page_names.items[page_index]
+        else if (document.page_names.items.len > 0)
+            document.page_names.items[document.page_names.items.len - 1]
+        else
+            "";
+        try page_specs.append(allocator, resolvePageSpec(page_spec, page_rules, page_name, page_index, false));
+    }
+
     return .{
         .fragments = fragments,
+        .page_specs = page_specs,
         .page_count = page_count,
         .page_spec = page_spec,
     };
+}
+
+test "named and pseudo page rules cascade by importance specificity and order" {
+    const base = PageSpec{ .width_points = 600, .height_points = 800, .margins_points = .{ .top = 10 } };
+    const rules = [_]PageRule{
+        .{ .selector = .{ .left = true }, .margin_top_points = 20 },
+        .{ .selector = .{ .name = "Report" }, .width_points = 800, .height_points = 600, .margin_top_points = 30 },
+        .{ .selector = .{ .name = "report" }, .margin_top_points = 90 },
+        .{ .selector = .{ .name = "Report", .left = true }, .margin_top_points = 40 },
+        .{ .selector = .{ .name = "Report" }, .margin_top_points = 50, .margin_top_important = true },
+    };
+
+    const report_left = resolvePageSpec(base, &rules, "Report", 1, false);
+    try std.testing.expectEqual(@as(f32, 800), report_left.width_points);
+    try std.testing.expectEqual(@as(f32, 600), report_left.height_points);
+    try std.testing.expectEqual(@as(f32, 50), report_left.margins_points.top);
+    const lower_case = resolvePageSpec(base, &rules, "report", 0, false);
+    try std.testing.expectEqual(@as(f32, 90), lower_case.margins_points.top);
 }
 
 test "fixed fragments repeat at page-relative coordinates" {

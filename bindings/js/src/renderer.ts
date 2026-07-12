@@ -1,21 +1,21 @@
 import { UnsupportedEnvironmentError, WasmRenderError } from "./errors.js";
 import { normalizePage, type NormalizedPage } from "./page.js";
 import { PdfDocument } from "./pdf-document.js";
-import { snapshotSource, type SnapshotOptions, type SnapshotPageMarginBox } from "./snapshot.js";
+import { snapshotSource, type SnapshotOptions, type SnapshotPageMarginBox, type SnapshotPageRule } from "./snapshot.js";
 import type { CssProfile, FontRegistration, HtmlSource, PageBreakRules, PdfMetadata, RendererInit, RenderOptions } from "./types.js";
 import { WasmBridge, type WasmRenderResult } from "./wasm.js";
 
 interface Backend {
-  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], signal?: AbortSignal): Promise<WasmRenderResult>;
+  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult>;
   dispose(): void;
 }
 
 class MainThreadBackend implements Backend {
   constructor(private readonly bridge: WasmBridge) {}
 
-  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], signal?: AbortSignal): Promise<WasmRenderResult> {
+  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    return Promise.resolve(this.bridge.render(html, page, metadata, cssProfile, marginBoxes));
+    return Promise.resolve(this.bridge.render(html, page, metadata, cssProfile, marginBoxes, pageRules));
   }
 
   dispose(): void {
@@ -69,7 +69,7 @@ class WorkerBackend implements Backend {
     this.worker.postMessage({ type: "init", wasmUrl, fonts });
   }
 
-  async render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], signal?: AbortSignal): Promise<WasmRenderResult> {
+  async render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult> {
     if (this.disposed) throw new Error("Renderer has been disposed");
     if (signal?.aborted) throw signal.reason;
     await this.ready;
@@ -86,7 +86,7 @@ class WorkerBackend implements Backend {
         pending.removeAbort = () => signal.removeEventListener("abort", onAbort);
       }
       this.pending.set(id, pending);
-      this.worker.postMessage({ type: "render", id, html, page, metadata, cssProfile, marginBoxes });
+      this.worker.postMessage({ type: "render", id, html, page, metadata, cssProfile, marginBoxes, pageRules });
     });
   }
 
@@ -156,6 +156,7 @@ export class Html2RealPdf {
       options.metadata,
       options.cssProfile ?? "document",
       snapshot.pageMarginBoxes,
+      options.page === undefined ? snapshot.pageRules : undefined,
       options.signal,
     );
     options.onProgress?.({ phase: "wasm", completed: 1, total: 1 });

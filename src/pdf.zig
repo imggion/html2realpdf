@@ -9,6 +9,7 @@ const display_list = @import("display_list.zig");
 const font = @import("font.zig");
 const geometry = @import("geometry.zig");
 const image_decoder = @import("image.zig");
+const pagination = @import("pagination.zig");
 const svg = @import("svg.zig");
 
 const font_object_span = 5;
@@ -293,11 +294,12 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     for (0..list.page_count) |page_index| {
         const page_id = pageObjectId(first_page_id, page_index);
         const content_id = contentObjectId(first_page_id, page_index);
+        const page_spec = list.pageSpec(page_index);
 
         try beginObject(&output, offsets, page_id);
         try writer.print(
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {d:.3} {d:.3}] /Resources << /Font <<",
-            .{ list.page_spec.width_points, list.page_spec.height_points },
+            .{ page_spec.width_points, page_spec.height_points },
         );
         for (font_usage.fonts.items, 0..) |_, used_index| {
             try writer.print(" /F{d} {d} 0 R", .{ used_index + 1, type0FontObjectId(used_index) });
@@ -380,7 +382,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     for (list.commands.items) |page_command| {
         if (page_command.command != .link) continue;
         try beginObject(&output, offsets, first_annotation_id + annotation_index);
-        try writeLinkAnnotation(writer, list, page_command.command.link, page_command.transform);
+        try writeLinkAnnotation(writer, list.pageSpec(page_command.page_index), page_command.command.link, page_command.transform);
         try writer.writeAll("\nendobj\n");
         annotation_index += 1;
     }
@@ -406,7 +408,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
                     &output,
                     offsets,
                     first_gradient_id + gradient_index,
-                    list,
+                    list.pageSpec(page_command.page_index),
                     page_command.command,
                 );
                 gradient_index += 1;
@@ -416,6 +418,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     }
 
     for (opacity_groups.items, 0..) |group, group_index| {
+        const page_spec = list.pageSpec(group.page_index);
         const content = try pageContent(
             allocator,
             list,
@@ -431,7 +434,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
         try beginObject(&output, offsets, first_opacity_group_id + group_index);
         try writer.print(
             "<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 {d:.3} {d:.3}] /Group << /S /Transparency /I true /K false >> /Length {d} /Filter /FlateDecode >>\nstream\n",
-            .{ list.page_spec.width_points, list.page_spec.height_points, compressed.len },
+            .{ page_spec.width_points, page_spec.height_points, compressed.len },
         );
         try writer.writeAll(compressed);
         try writer.writeAll("\nendstream\nendobj\n");
@@ -468,8 +471,9 @@ fn pageContent(
     errdefer content.deinit();
     const writer = &content.writer;
     const scale = geometry.css_px_to_pdf_points;
-    const margins = list.page_spec.margins_points;
-    const page_height = list.page_spec.height_points;
+    const page_spec = list.pageSpec(page_index);
+    const margins = page_spec.margins_points;
+    const page_height = page_spec.height_points;
 
     try writer.writeAll("q\n");
     var command_index: usize = 0;
@@ -496,8 +500,8 @@ fn pageContent(
             continue;
         }
         const has_transform = !page_command.transform.isIdentity();
-        if (page_command.clip_rect) |clip| try writeClipRect(writer, list, clip, page_command.clip_radii, page_command.clip_transform);
-        if (has_transform) try writeTransformState(writer, list, page_command.transform);
+        if (page_command.clip_rect) |clip| try writeClipRect(writer, page_spec, clip, page_command.clip_radii, page_command.clip_transform);
+        if (has_transform) try writeTransformState(writer, page_spec, page_command.transform);
 
         switch (page_command.command) {
             .fill_rect => |fill| {
@@ -633,7 +637,7 @@ fn pageContent(
                 try writeAlphaState(writer, alpha_usage, page_command.opacity);
                 try writer.writeAll("q ");
                 if (image_command.paint_clip) |paint_clip| {
-                    try writePaintClipPath(writer, list, paint_clip, image_command.paint_clip_radii);
+                    try writePaintClipPath(writer, page_spec, paint_clip, image_command.paint_clip_radii);
                     try writer.writeAll("W n ");
                 }
                 try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} re W n {d:.3} 0 0 {d:.3} {d:.3} {d:.3} cm /Im{d} Do Q\n", .{
@@ -650,25 +654,25 @@ fn pageContent(
             },
             .linear_gradient => |gradient| linear: {
                 if (gradientHasVariableAlpha(gradient.stops)) {
-                    try writeLinearAlphaGradient(writer, list, gradient, page_command.opacity, alpha_usage);
+                    try writeLinearAlphaGradient(writer, page_spec, gradient, page_command.opacity, alpha_usage);
                     break :linear;
                 }
                 const gradient_index = gradientIndexAt(list, command_index);
                 try writeAlphaState(writer, alpha_usage, uniformGradientAlpha(gradient.stops) * page_command.opacity);
                 try writer.writeAll("q ");
-                try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+                try writePaintClipPath(writer, page_spec, gradient.paint_rect, gradient.paint_radii);
                 try writer.print("W n /Sh{d} sh Q\n", .{gradient_index + 1});
             },
             .radial_gradient => |gradient| radial: {
                 if (gradientHasVariableAlpha(gradient.stops)) {
-                    try writeRadialAlphaGradient(writer, list, gradient, page_command.opacity, alpha_usage);
+                    try writeRadialAlphaGradient(writer, page_spec, gradient, page_command.opacity, alpha_usage);
                     break :radial;
                 }
                 const gradient_index = gradientIndexAt(list, command_index);
-                const center = cssPointToPdf(list, gradient.center);
+                const center = cssPointToPdf(page_spec, gradient.center);
                 try writeAlphaState(writer, alpha_usage, uniformGradientAlpha(gradient.stops) * page_command.opacity);
                 try writer.writeAll("q ");
-                try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+                try writePaintClipPath(writer, page_spec, gradient.paint_rect, gradient.paint_radii);
                 try writer.print("W n {d:.6} 0 0 {d:.6} {d:.3} {d:.3} cm /Sh{d} sh Q\n", .{
                     @max(gradient.radius_x * scale, 0.001),
                     @max(gradient.radius_y * scale, 0.001),
@@ -682,13 +686,13 @@ fn pageContent(
                     const gradient_index = gradientIndexAt(list, command_index);
                     try writeAlphaState(writer, alpha_usage, uniformGradientAlpha(gradient.stops) * page_command.opacity);
                     try writer.writeAll("q ");
-                    try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+                    try writePaintClipPath(writer, page_spec, gradient.paint_rect, gradient.paint_radii);
                     try writer.print("W n /Sh{d} sh Q\n", .{gradient_index + 1});
                     break :conic;
                 }
-                try writeConicGradient(writer, list, gradient, page_command.opacity, alpha_usage);
+                try writeConicGradient(writer, page_spec, gradient, page_command.opacity, alpha_usage);
             },
-            .box_shadow => |shadow| try writeBoxShadow(writer, list, shadow, page_command.opacity, alpha_usage),
+            .box_shadow => |shadow| try writeBoxShadow(writer, page_spec, shadow, page_command.opacity, alpha_usage),
         }
         if (has_transform) try writer.writeAll("Q\n");
         if (page_command.clip_rect != null) try writer.writeAll("Q\n");
@@ -700,7 +704,7 @@ fn pageContent(
 
 fn writeBoxShadow(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     shadow: display_list.BoxShadow,
     opacity: f32,
     alpha_usage: *const AlphaUsage,
@@ -713,7 +717,7 @@ fn writeBoxShadow(
         const reverse_step = steps - index;
         const blur_expansion = shadow.blur * @as(f32, @floatFromInt(reverse_step)) / @as(f32, @floatFromInt(steps));
         if (shadow.inset) {
-            try writePaintClipPath(writer, list, shadow.rect, shadow.radii);
+            try writePaintClipPath(writer, page_spec, shadow.rect, shadow.radii);
             const inset = @max(shadow.spread + blur_expansion, 0);
             const inner = geometry.Rect{
                 .x = shadow.rect.x + inset + shadow.offset_x,
@@ -721,7 +725,7 @@ fn writeBoxShadow(
                 .width = @max(shadow.rect.width - inset * 2, 0),
                 .height = @max(shadow.rect.height - inset * 2, 0),
             };
-            try writePaintClipPath(writer, list, inner, insetRadii(shadow.radii, inset));
+            try writePaintClipPath(writer, page_spec, inner, insetRadii(shadow.radii, inset));
             try writer.writeAll("f*\n");
         } else {
             const expansion = shadow.spread + blur_expansion;
@@ -731,8 +735,8 @@ fn writeBoxShadow(
                 .width = @max(shadow.rect.width + expansion * 2, 0),
                 .height = @max(shadow.rect.height + expansion * 2, 0),
             };
-            try writePaintClipPath(writer, list, outer, expandRadii(shadow.radii, expansion));
-            try writePaintClipPath(writer, list, shadow.rect, shadow.radii);
+            try writePaintClipPath(writer, page_spec, outer, expandRadii(shadow.radii, expansion));
+            try writePaintClipPath(writer, page_spec, shadow.rect, shadow.radii);
             try writer.writeAll("f*\n");
         }
     }
@@ -764,12 +768,12 @@ fn insetRadii(radii: @import("box.zig").ResolvedBorderRadii, amount: f32) @impor
 
 fn writePaintClipPath(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     rect: geometry.Rect,
     radii: @import("box.zig").ResolvedBorderRadii,
 ) !void {
     const scale = geometry.css_px_to_pdf_points;
-    const point = cssPointToPdf(list, .{ .x = rect.x, .y = rect.y + rect.height });
+    const point = cssPointToPdf(page_spec, .{ .x = rect.x, .y = rect.y + rect.height });
     try writeRoundedRectPathRadii(
         writer,
         point.x,
@@ -782,7 +786,7 @@ fn writePaintClipPath(
 
 fn writeConicGradient(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     gradient: display_list.ConicGradient,
     opacity: f32,
     alpha_usage: *const AlphaUsage,
@@ -793,10 +797,10 @@ fn writeConicGradient(
     const top = gradient.center.y - rect.y;
     const bottom = rect.y + rect.height - gradient.center.y;
     const radius = @sqrt(@max(left, right) * @max(left, right) + @max(top, bottom) * @max(top, bottom)) * 1.01;
-    const center = cssPointToPdf(list, gradient.center);
+    const center = cssPointToPdf(page_spec, gradient.center);
     const segments: usize = 180;
     try writer.writeAll("q ");
-    try writePaintClipPath(writer, list, rect, gradient.paint_radii);
+    try writePaintClipPath(writer, page_spec, rect, gradient.paint_radii);
     try writer.writeAll("W n\n");
     for (0..segments) |index| {
         const start_t = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(segments));
@@ -805,11 +809,11 @@ fn writeConicGradient(
         const color = gradientColorAt(gradient.stops, midpoint);
         const start_angle = gradient.start_angle + start_t * @as(f32, std.math.pi) * 2;
         const end_angle = gradient.start_angle + end_t * @as(f32, std.math.pi) * 2;
-        const first = cssPointToPdf(list, .{
+        const first = cssPointToPdf(page_spec, .{
             .x = gradient.center.x + @sin(start_angle) * radius,
             .y = gradient.center.y - @cos(start_angle) * radius,
         });
-        const second = cssPointToPdf(list, .{
+        const second = cssPointToPdf(page_spec, .{
             .x = gradient.center.x + @sin(end_angle) * radius,
             .y = gradient.center.y - @cos(end_angle) * radius,
         });
@@ -824,7 +828,7 @@ fn writeConicGradient(
 
 fn writeLinearAlphaGradient(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     gradient: display_list.LinearGradient,
     opacity: f32,
     alpha_usage: *const AlphaUsage,
@@ -837,7 +841,7 @@ fn writeLinearAlphaGradient(
     const normal_x = -dy / length * extent;
     const normal_y = dx / length * extent;
     try writer.writeAll("q ");
-    try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+    try writePaintClipPath(writer, page_spec, gradient.paint_rect, gradient.paint_radii);
     try writer.writeAll("W n\n");
     for (0..segments) |segment| {
         const start_t = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(segments));
@@ -855,7 +859,7 @@ fn writeLinearAlphaGradient(
         try writeAlphaState(writer, alpha_usage, quantizeAlpha(color.alpha * opacity));
         try writeFillColor(writer, color);
         for (points, 0..) |point, index| {
-            const pdf_point = cssPointToPdf(list, point);
+            const pdf_point = cssPointToPdf(page_spec, point);
             try writer.print("{d:.3} {d:.3} {s}\n", .{ pdf_point.x, pdf_point.y, if (index == 0) "m" else "l" });
         }
         try writer.writeAll("h f\n");
@@ -865,22 +869,22 @@ fn writeLinearAlphaGradient(
 
 fn writeRadialAlphaGradient(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     gradient: display_list.RadialGradient,
     opacity: f32,
     alpha_usage: *const AlphaUsage,
 ) !void {
     const segments: usize = 96;
-    const center = cssPointToPdf(list, gradient.center);
+    const center = cssPointToPdf(page_spec, gradient.center);
     const scale = geometry.css_px_to_pdf_points;
     try writer.writeAll("q ");
-    try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+    try writePaintClipPath(writer, page_spec, gradient.paint_rect, gradient.paint_radii);
     try writer.writeAll("W n\n");
 
     const outside = gradientColorAt(gradient.stops, 1);
     try writeAlphaState(writer, alpha_usage, quantizeAlpha(outside.alpha * opacity));
     try writeFillColor(writer, outside);
-    try writePaintClipPath(writer, list, gradient.paint_rect, gradient.paint_radii);
+    try writePaintClipPath(writer, page_spec, gradient.paint_rect, gradient.paint_radii);
     try writeEllipsePath(writer, center, gradient.radius_x * scale, gradient.radius_y * scale);
     try writer.writeAll("f*\n");
 
@@ -909,10 +913,10 @@ fn writeEllipsePath(writer: *std.Io.Writer, center: geometry.Point, radius_x: f3
     try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c h\n", .{ center.x + rx * control, center.y - ry, center.x + rx, center.y - ry * control, center.x + rx, center.y });
 }
 
-fn writeTransformState(writer: *std.Io.Writer, list: *const display_list.DisplayList, transform: geometry.AffineTransform) !void {
+fn writeTransformState(writer: *std.Io.Writer, page_spec: pagination.PageSpec, transform: geometry.AffineTransform) !void {
     const scale = geometry.css_px_to_pdf_points;
-    const margins = list.page_spec.margins_points;
-    const top = list.page_spec.height_points - margins.top;
+    const margins = page_spec.margins_points;
+    const top = page_spec.height_points - margins.top;
     const pdf_transform = geometry.AffineTransform{
         .a = transform.a,
         .b = -transform.b,
@@ -961,21 +965,21 @@ fn fittedImageRect(command: display_list.Image) geometry.Rect {
 
 fn writeClipRect(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     clip: geometry.Rect,
     radii: ?@import("box.zig").ResolvedBorderRadii,
     transform: geometry.AffineTransform,
 ) !void {
     if (!transform.isIdentity()) {
         try writer.writeAll("q ");
-        try writeTransformedClipPath(writer, list, clip, radii orelse .{}, transform);
+        try writeTransformedClipPath(writer, page_spec, clip, radii orelse .{}, transform);
         try writer.writeAll("W n\n");
         return;
     }
     const scale = geometry.css_px_to_pdf_points;
-    const margins = list.page_spec.margins_points;
+    const margins = page_spec.margins_points;
     const x = margins.left + clip.x * scale;
-    const y = list.page_spec.height_points - margins.top - (clip.y + clip.height) * scale;
+    const y = page_spec.height_points - margins.top - (clip.y + clip.height) * scale;
     try writer.writeAll("q ");
     if (radii) |resolved| {
         try writeRoundedRectPathRadii(writer, x, y, @max(clip.width * scale, 0), @max(clip.height * scale, 0), resolvedCommandRadii(resolved, 0, scale));
@@ -992,7 +996,7 @@ fn writeClipRect(
 
 fn writeTransformedClipPath(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     rect: geometry.Rect,
     radii: @import("box.zig").ResolvedBorderRadii,
     transform: geometry.AffineTransform,
@@ -1000,10 +1004,10 @@ fn writeTransformedClipPath(
     const right = rect.x + rect.width;
     const bottom = rect.y + rect.height;
     if (!radii.hasRadius()) {
-        try writeTransformedPoint(writer, list, transform, .{ .x = rect.x, .y = rect.y }, "m");
-        try writeTransformedPoint(writer, list, transform, .{ .x = right, .y = rect.y }, "l");
-        try writeTransformedPoint(writer, list, transform, .{ .x = right, .y = bottom }, "l");
-        try writeTransformedPoint(writer, list, transform, .{ .x = rect.x, .y = bottom }, "l");
+        try writeTransformedPoint(writer, page_spec, transform, .{ .x = rect.x, .y = rect.y }, "m");
+        try writeTransformedPoint(writer, page_spec, transform, .{ .x = right, .y = rect.y }, "l");
+        try writeTransformedPoint(writer, page_spec, transform, .{ .x = right, .y = bottom }, "l");
+        try writeTransformedPoint(writer, page_spec, transform, .{ .x = rect.x, .y = bottom }, "l");
         try writer.writeAll("h\n");
         return;
     }
@@ -1013,49 +1017,49 @@ fn writeTransformedClipPath(
     const top_right = radii.top_right;
     const bottom_right = radii.bottom_right;
     const bottom_left = radii.bottom_left;
-    try writeTransformedPoint(writer, list, transform, .{ .x = rect.x + top_left.x, .y = rect.y }, "m");
-    try writeTransformedPoint(writer, list, transform, .{ .x = right - top_right.x, .y = rect.y }, "l");
-    try writeTransformedCurve(writer, list, transform, .{ .x = right - top_right.x + top_right.x * control, .y = rect.y }, .{ .x = right, .y = rect.y + top_right.y - top_right.y * control }, .{ .x = right, .y = rect.y + top_right.y });
-    try writeTransformedPoint(writer, list, transform, .{ .x = right, .y = bottom - bottom_right.y }, "l");
-    try writeTransformedCurve(writer, list, transform, .{ .x = right, .y = bottom - bottom_right.y + bottom_right.y * control }, .{ .x = right - bottom_right.x + bottom_right.x * control, .y = bottom }, .{ .x = right - bottom_right.x, .y = bottom });
-    try writeTransformedPoint(writer, list, transform, .{ .x = rect.x + bottom_left.x, .y = bottom }, "l");
-    try writeTransformedCurve(writer, list, transform, .{ .x = rect.x + bottom_left.x - bottom_left.x * control, .y = bottom }, .{ .x = rect.x, .y = bottom - bottom_left.y + bottom_left.y * control }, .{ .x = rect.x, .y = bottom - bottom_left.y });
-    try writeTransformedPoint(writer, list, transform, .{ .x = rect.x, .y = rect.y + top_left.y }, "l");
-    try writeTransformedCurve(writer, list, transform, .{ .x = rect.x, .y = rect.y + top_left.y - top_left.y * control }, .{ .x = rect.x + top_left.x - top_left.x * control, .y = rect.y }, .{ .x = rect.x + top_left.x, .y = rect.y });
+    try writeTransformedPoint(writer, page_spec, transform, .{ .x = rect.x + top_left.x, .y = rect.y }, "m");
+    try writeTransformedPoint(writer, page_spec, transform, .{ .x = right - top_right.x, .y = rect.y }, "l");
+    try writeTransformedCurve(writer, page_spec, transform, .{ .x = right - top_right.x + top_right.x * control, .y = rect.y }, .{ .x = right, .y = rect.y + top_right.y - top_right.y * control }, .{ .x = right, .y = rect.y + top_right.y });
+    try writeTransformedPoint(writer, page_spec, transform, .{ .x = right, .y = bottom - bottom_right.y }, "l");
+    try writeTransformedCurve(writer, page_spec, transform, .{ .x = right, .y = bottom - bottom_right.y + bottom_right.y * control }, .{ .x = right - bottom_right.x + bottom_right.x * control, .y = bottom }, .{ .x = right - bottom_right.x, .y = bottom });
+    try writeTransformedPoint(writer, page_spec, transform, .{ .x = rect.x + bottom_left.x, .y = bottom }, "l");
+    try writeTransformedCurve(writer, page_spec, transform, .{ .x = rect.x + bottom_left.x - bottom_left.x * control, .y = bottom }, .{ .x = rect.x, .y = bottom - bottom_left.y + bottom_left.y * control }, .{ .x = rect.x, .y = bottom - bottom_left.y });
+    try writeTransformedPoint(writer, page_spec, transform, .{ .x = rect.x, .y = rect.y + top_left.y }, "l");
+    try writeTransformedCurve(writer, page_spec, transform, .{ .x = rect.x, .y = rect.y + top_left.y - top_left.y * control }, .{ .x = rect.x + top_left.x - top_left.x * control, .y = rect.y }, .{ .x = rect.x + top_left.x, .y = rect.y });
     try writer.writeAll("h\n");
 }
 
 fn writeTransformedPoint(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     transform: geometry.AffineTransform,
     point: geometry.Point,
     operator: []const u8,
 ) !void {
-    const mapped = cssPointToPdf(list, transform.applyPoint(point));
+    const mapped = cssPointToPdf(page_spec, transform.applyPoint(point));
     try writer.print("{d:.3} {d:.3} {s}\n", .{ mapped.x, mapped.y, operator });
 }
 
 fn writeTransformedCurve(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     transform: geometry.AffineTransform,
     first: geometry.Point,
     second: geometry.Point,
     end: geometry.Point,
 ) !void {
-    const first_pdf = cssPointToPdf(list, transform.applyPoint(first));
-    const second_pdf = cssPointToPdf(list, transform.applyPoint(second));
-    const end_pdf = cssPointToPdf(list, transform.applyPoint(end));
+    const first_pdf = cssPointToPdf(page_spec, transform.applyPoint(first));
+    const second_pdf = cssPointToPdf(page_spec, transform.applyPoint(second));
+    const end_pdf = cssPointToPdf(page_spec, transform.applyPoint(end));
     try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c\n", .{
         first_pdf.x, first_pdf.y, second_pdf.x, second_pdf.y, end_pdf.x, end_pdf.y,
     });
 }
 
-fn cssPointToPdf(list: *const display_list.DisplayList, point: geometry.Point) geometry.Point {
+fn cssPointToPdf(page_spec: pagination.PageSpec, point: geometry.Point) geometry.Point {
     return .{
-        .x = list.page_spec.margins_points.left + point.x * geometry.css_px_to_pdf_points,
-        .y = list.page_spec.height_points - list.page_spec.margins_points.top - point.y * geometry.css_px_to_pdf_points,
+        .x = page_spec.margins_points.left + point.x * geometry.css_px_to_pdf_points,
+        .y = page_spec.height_points - page_spec.margins_points.top - point.y * geometry.css_px_to_pdf_points,
     };
 }
 
@@ -1312,15 +1316,15 @@ fn writeGradientObject(
     output: *std.Io.Writer.Allocating,
     offsets: []usize,
     object_id: usize,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     command: display_list.Command,
 ) !void {
     const writer = &output.writer;
     try beginObject(output, offsets, object_id);
     switch (command) {
         .linear_gradient => |gradient| {
-            const start = cssPointToPdf(list, gradient.start);
-            const end = cssPointToPdf(list, gradient.end);
+            const start = cssPointToPdf(page_spec, gradient.start);
+            const end = cssPointToPdf(page_spec, gradient.end);
             try writer.print("<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [{d:.4} {d:.4} {d:.4} {d:.4}] /Domain [0 1] /Extend [true true] /Function ", .{
                 start.x, start.y, end.x, end.y,
             });
@@ -1337,7 +1341,7 @@ fn writeGradientObject(
             const stream_length = segments * 3 * 16 + 1;
             try writer.print(
                 "<< /ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 16 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 {d:.4} 0 {d:.4} 0 1 0 1 0 1] /AntiAlias true /Filter /ASCIIHexDecode /Length {d} >>\nstream\n",
-                .{ list.page_spec.width_points, list.page_spec.height_points, stream_length },
+                .{ page_spec.width_points, page_spec.height_points, stream_length },
             );
             const rect = gradient.paint_rect;
             const left = gradient.center.x - rect.x;
@@ -1350,12 +1354,12 @@ fn writeGradientObject(
                 const end_t = @as(f32, @floatFromInt(segment + 1)) / @as(f32, @floatFromInt(segments));
                 const start_angle = gradient.start_angle + start_t * @as(f32, std.math.pi) * 2;
                 const end_angle = gradient.start_angle + end_t * @as(f32, std.math.pi) * 2;
-                try writeMeshVertex(writer, list, gradient.center, gradientColorAt(gradient.stops, (start_t + end_t) / 2));
-                try writeMeshVertex(writer, list, .{
+                try writeMeshVertex(writer, page_spec, gradient.center, gradientColorAt(gradient.stops, (start_t + end_t) / 2));
+                try writeMeshVertex(writer, page_spec, .{
                     .x = gradient.center.x + @sin(start_angle) * radius,
                     .y = gradient.center.y - @cos(start_angle) * radius,
                 }, gradientColorAt(gradient.stops, start_t));
-                try writeMeshVertex(writer, list, .{
+                try writeMeshVertex(writer, page_spec, .{
                     .x = gradient.center.x + @sin(end_angle) * radius,
                     .y = gradient.center.y - @cos(end_angle) * radius,
                 }, gradientColorAt(gradient.stops, end_t));
@@ -1366,10 +1370,10 @@ fn writeGradientObject(
     }
 }
 
-fn writeMeshVertex(writer: *std.Io.Writer, list: *const display_list.DisplayList, point: geometry.Point, color: geometry.Color) !void {
-    const pdf_point = cssPointToPdf(list, point);
-    const x: u16 = @intFromFloat(@round(std.math.clamp(pdf_point.x / list.page_spec.width_points, 0, 1) * 65535));
-    const y: u16 = @intFromFloat(@round(std.math.clamp(pdf_point.y / list.page_spec.height_points, 0, 1) * 65535));
+fn writeMeshVertex(writer: *std.Io.Writer, page_spec: pagination.PageSpec, point: geometry.Point, color: geometry.Color) !void {
+    const pdf_point = cssPointToPdf(page_spec, point);
+    const x: u16 = @intFromFloat(@round(std.math.clamp(pdf_point.x / page_spec.width_points, 0, 1) * 65535));
+    const y: u16 = @intFromFloat(@round(std.math.clamp(pdf_point.y / page_spec.height_points, 0, 1) * 65535));
     const red: u8 = @intFromFloat(@round(std.math.clamp(color.red, 0, 1) * 255));
     const green: u8 = @intFromFloat(@round(std.math.clamp(color.green, 0, 1) * 255));
     const blue: u8 = @intFromFloat(@round(std.math.clamp(color.blue, 0, 1) * 255));
@@ -1548,16 +1552,16 @@ fn writeSvgPath(writer: *std.Io.Writer, ops: []const svg.PathOp) !void {
 
 fn writeLinkAnnotation(
     writer: *std.Io.Writer,
-    list: *const display_list.DisplayList,
+    page_spec: pagination.PageSpec,
     annotation: display_list.LinkAnnotation,
     transform: geometry.AffineTransform,
 ) !void {
     const scale = geometry.css_px_to_pdf_points;
-    const margins = list.page_spec.margins_points;
+    const margins = page_spec.margins_points;
     const rect = transform.bounds(annotation.rect);
     const x1 = margins.left + rect.x * scale;
     const x2 = x1 + rect.width * scale;
-    const y2 = list.page_spec.height_points - margins.top - rect.y * scale;
+    const y2 = page_spec.height_points - margins.top - rect.y * scale;
     const y1 = y2 - rect.height * scale;
     try writer.print(
         "<< /Type /Annot /Subtype /Link /Rect [{d:.3} {d:.3} {d:.3} {d:.3}] /Border [0 0 0] /A << /S /URI /URI (",
@@ -1971,7 +1975,6 @@ fn writePdfString(writer: *std.Io.Writer, text: []const u8) !void {
 }
 
 test "write a valid-looking multi-page PDF with selectable text commands" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 3);
     defer commands.deinit(allocator);
@@ -2020,7 +2023,6 @@ test "write a valid-looking multi-page PDF with selectable text commands" {
 }
 
 test "write real fill and stroke alpha through PDF ExtGState" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 2);
     defer commands.deinit(allocator);
@@ -2056,7 +2058,6 @@ test "write real fill and stroke alpha through PDF ExtGState" {
 }
 
 test "serialize Web gradients as axial radial and mesh PDF shadings" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     const stops = display_list.GradientStops{
         .values = blk: {
@@ -2105,7 +2106,6 @@ test "serialize Web gradients as axial radial and mesh PDF shadings" {
 }
 
 test "serialize nested opacity as isolated PDF transparency groups" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     var outer_path = @import("box.zig").OpacityGroupPath{};
     outer_path.append(10, 0.5);
@@ -2170,7 +2170,6 @@ test "write word spacing with Type 0 font TJ adjustments" {
 }
 
 test "map shaped ligature clusters and conflicting glyph Unicode through custom CIDs" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     const resolved = font.resolve(null, "Noto Sans", .normal, .normal);
     const glyph_id = resolved.metrics().glyphId('f');
@@ -2219,7 +2218,6 @@ test "map shaped ligature clusters and conflicting glyph Unicode through custom 
 }
 
 test "wrap clipped paint commands in PDF graphics state" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
     defer commands.deinit(allocator);
@@ -2249,7 +2247,6 @@ test "wrap clipped paint commands in PDF graphics state" {
 }
 
 test "serialize elliptical rounded paths and rounded clipping as PDF curves" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
     defer commands.deinit(allocator);
@@ -2295,7 +2292,6 @@ test "serialize elliptical rounded paths and rounded clipping as PDF curves" {
 }
 
 test "serialize CSS transforms as PDF matrices and transform link bounds" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 2);
     defer commands.deinit(allocator);
@@ -2333,7 +2329,7 @@ test "serialize CSS transforms as PDF matrices and transform link bounds" {
 
     var annotation_output = std.Io.Writer.Allocating.init(allocator);
     defer annotation_output.deinit();
-    try writeLinkAnnotation(&annotation_output.writer, &list, commands.items[1].command.link, transform);
+    try writeLinkAnnotation(&annotation_output.writer, list.page_spec, commands.items[1].command.link, transform);
     try std.testing.expect(std.mem.indexOf(u8, annotation_output.written(), "/Rect [11.250 123.750 26.250 131.250]") != null);
 }
 
@@ -2363,7 +2359,6 @@ test "fit and position native images inside their content box" {
 }
 
 test "preserve supported SVG images as native PDF Form XObjects" {
-    const pagination = @import("pagination.zig");
     const allocator = std.testing.allocator;
     const xml = "<svg viewBox='0 0 100 50'><rect x='5' y='5' width='90' height='40' rx='8' fill='#2563eb'/><path d='M20 30 C35 5 65 45 80 20' fill='none' stroke='#111827' stroke-width='3'/></svg>";
     const encoded_len = std.base64.standard.Encoder.calcSize(xml.len);

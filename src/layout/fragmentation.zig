@@ -5,7 +5,6 @@
 //! extent, atomic-placement, and forced-page-side decisions.
 
 const std = @import("std");
-const box = @import("../box.zig");
 
 const epsilon: f32 = 0.0001;
 
@@ -342,11 +341,29 @@ test "next page start advances from a boundary and a partial page" {
 }
 
 const TestTree = struct {
-    boxes: struct { items: []const box.Box },
+    boxes: struct { items: []const TestBox },
+};
+
+const TestPosition = enum { static, absolute, fixed };
+const TestDisplay = enum { flex, inlineFlex, grid, inlineGrid, other };
+const TestKind = enum { block, listItem, anonymousBlock, table, tableRow, tableCell, tableRowGroup, tableCaption, anonymousTableRow, other };
+const TestStyle = struct {
+    page_name: []const u8 = "auto",
+    position: TestPosition = .static,
+    display: TestDisplay = .other,
+};
+const TestBox = struct {
+    kind: TestKind,
+    style: TestStyle = .{},
+    parent: ?usize = null,
+    first_child: ?usize = null,
+    last_child: ?usize = null,
+    next_sibling: ?usize = null,
+    prev_sibling: ?usize = null,
 };
 
 test "named page auto resolves through ancestors and keeps case-sensitive names" {
-    var boxes = [_]box.Box{
+    var boxes = [_]TestBox{
         .{ .kind = .block, .style = .{ .page_name = "Report" }, .first_child = 1, .last_child = 1 },
         .{ .kind = .block, .parent = 0, .style = .{ .page_name = "auto" } },
         .{ .kind = .block, .style = .{ .page_name = "report" } },
@@ -359,7 +376,7 @@ test "named page auto resolves through ancestors and keeps case-sensitive names"
 }
 
 test "named page start and end values propagate through first and last children" {
-    var boxes = [_]box.Box{
+    var boxes = [_]TestBox{
         .{ .kind = .block, .style = .{ .page_name = "Shell" }, .first_child = 1, .last_child = 2 },
         .{ .kind = .block, .parent = 0, .next_sibling = 2, .style = .{ .page_name = "Cover" } },
         .{ .kind = .block, .parent = 0, .prev_sibling = 1, .style = .{ .page_name = "Summary" } },
