@@ -379,6 +379,7 @@ fn fragmentRowLines(state: anytype, items: []const Item, lines: []Line, content_
     var extent: f32 = 0;
     var positioned: usize = 0;
     var previous_break_after = box.PageBreak.auto;
+    var previous_page_box: ?box.BoxId = null;
     var group_start: ?f32 = null;
     while (positioned < lines.len) : (positioned += 1) {
         var next_index: ?usize = null;
@@ -391,16 +392,20 @@ fn fragmentRowLines(state: anytype, items: []const Item, lines: []Line, content_
         var absolute_y = content_y + line.cross_position;
         const line_items = items[line.start .. line.start + line.count];
         const break_before = parallelBreakBefore(state, line_items);
-        const boundary_break = if (group_start != null)
+        var boundary_break = if (group_start != null)
             fragmentation.resolveBoundary(previous_break_after, break_before)
         else
             box.PageBreak.auto;
+        if (previous_page_box) |previous_id| {
+            boundary_break = fragmentation.resolvePageNameBoundary(state.tree, previous_id, line_items[0].box_id, boundary_break);
+        }
         if (boundary_break.isForced()) {
             const forced_start = context.forcedBreakStart(absolute_y, boundary_break);
             const forced_shift = forced_start - absolute_y;
             line.cross_position += forced_shift;
             cumulative_shift += forced_shift;
             absolute_y = forced_start;
+            state.recordPageName(forced_start, fragmentation.startPageName(state.tree, line_items[0].box_id));
         }
         var kept_group = false;
         var retain_group = false;
@@ -431,6 +436,7 @@ fn fragmentRowLines(state: anytype, items: []const Item, lines: []Line, content_
             group_start = absolute_y;
         }
         previous_break_after = parallelBreakAfter(state, line_items);
+        previous_page_box = line_items[line_items.len - 1].box_id;
         extent = @max(extent, line.cross_position + line.cross_size);
     }
     if (previous_break_after.isForced()) {
@@ -567,6 +573,7 @@ fn fragmentColumnItems(state: anytype, items: []Item, content_y: f32, context: f
     var extent: f32 = 0;
     var positioned: usize = 0;
     var previous_break_after = box.PageBreak.auto;
+    var previous_page_box: ?box.BoxId = null;
     var group_start: ?f32 = null;
     while (positioned < items.len) : (positioned += 1) {
         var next_index: ?usize = null;
@@ -578,16 +585,20 @@ fn fragmentColumnItems(state: anytype, items: []Item, content_y: f32, context: f
         item.main_position += cumulative_shift;
         var absolute_y = content_y + item.main_position;
         const style = state.tree.boxes.items[item.box_id].style;
-        const boundary_break = if (group_start != null)
+        var boundary_break = if (group_start != null)
             fragmentation.resolveBoundary(previous_break_after, style.page_break_before)
         else
             box.PageBreak.auto;
+        if (previous_page_box) |previous_id| {
+            boundary_break = fragmentation.resolvePageNameBoundary(state.tree, previous_id, item.box_id, boundary_break);
+        }
         if (boundary_break.isForced()) {
             const forced_start = context.forcedBreakStart(absolute_y, boundary_break);
             const forced_shift = forced_start - absolute_y;
             item.main_position += forced_shift;
             cumulative_shift += forced_shift;
             absolute_y = forced_start;
+            state.recordPageName(forced_start, fragmentation.startPageName(state.tree, item.box_id));
         }
         var kept_group = false;
         var retain_group = false;
@@ -618,6 +629,7 @@ fn fragmentColumnItems(state: anytype, items: []Item, content_y: f32, context: f
             group_start = absolute_y;
         }
         previous_break_after = style.page_break_after;
+        previous_page_box = item.box_id;
         extent = @max(extent, item.main_position + item.rect.height + item.main_margin_end);
     }
     if (previous_break_after.isForced()) {

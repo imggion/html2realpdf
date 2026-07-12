@@ -542,21 +542,31 @@ fn distributionForAlign(alignment: box.AlignContent, free: f32, count: usize) Di
 fn fragmentRows(state: anytype, items: []const Item, tracks: []const Track, positions: *AxisPositions, content_y: f32, context: fragmentation.Context) void {
     var cumulative_shift: f32 = 0;
     var previous_break_after = box.PageBreak.auto;
+    var previous_page_box: ?box.BoxId = null;
     var group_start: ?f32 = null;
     for (tracks, 0..) |track, index| {
         positions.starts[index] += cumulative_shift;
         var absolute_y = content_y + positions.starts[index];
         const break_before = gridRowBreakBefore(state, items, index);
-        const boundary_break = if (group_start != null)
+        var boundary_break = if (group_start != null)
             fragmentation.resolveBoundary(previous_break_after, break_before)
         else
             box.PageBreak.auto;
+        const current_page_box = gridRowStartPageBox(items, index);
+        if (previous_page_box) |previous_id| {
+            if (current_page_box) |current_id| {
+                boundary_break = fragmentation.resolvePageNameBoundary(state.tree, previous_id, current_id, boundary_break);
+            }
+        }
         if (boundary_break.isForced()) {
             const forced_start = context.forcedBreakStart(absolute_y, boundary_break);
             const forced_shift = forced_start - absolute_y;
             positions.starts[index] += forced_shift;
             cumulative_shift += forced_shift;
             absolute_y = forced_start;
+            if (current_page_box) |current_id| {
+                state.recordPageName(forced_start, fragmentation.startPageName(state.tree, current_id));
+            }
         }
 
         var kept_group = false;
@@ -585,6 +595,7 @@ fn fragmentRows(state: anytype, items: []const Item, tracks: []const Track, posi
         }
         if (!retain_group) group_start = absolute_y;
         previous_break_after = gridRowBreakAfter(state, items, index);
+        if (gridRowEndPageBox(items, index)) |end_id| previous_page_box = end_id;
     }
     if (tracks.len > 0) positions.extent = positions.starts[tracks.len - 1] + tracks[tracks.len - 1].base;
     if (previous_break_after.isForced()) {
@@ -607,6 +618,22 @@ fn gridRowBreakAfter(state: anytype, items: []const Item, row: usize) box.PageBr
         const item_row = item.row orelse 0;
         if (item_row + item.row_span - 1 != row) continue;
         result = fragmentation.resolveBoundary(result, state.tree.boxes.items[item.box_id].style.page_break_after);
+    }
+    return result;
+}
+
+fn gridRowStartPageBox(items: []const Item, row: usize) ?box.BoxId {
+    for (items) |item| {
+        if ((item.row orelse 0) == row) return item.box_id;
+    }
+    return null;
+}
+
+fn gridRowEndPageBox(items: []const Item, row: usize) ?box.BoxId {
+    var result: ?box.BoxId = null;
+    for (items) |item| {
+        const item_row = item.row orelse 0;
+        if (item_row + item.row_span - 1 == row) result = item.box_id;
     }
     return result;
 }

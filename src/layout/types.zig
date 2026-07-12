@@ -92,11 +92,13 @@ pub const Fragment = struct {
 
 pub const LayoutDocument = struct {
     fragments: std.ArrayList(Fragment),
+    page_names: std.ArrayList([]const u8) = .empty,
     content_width: f32,
     content_height: f32,
 
     pub fn deinit(self: *LayoutDocument, allocator: std.mem.Allocator) void {
         self.fragments.deinit(allocator);
+        self.page_names.deinit(allocator);
     }
 };
 

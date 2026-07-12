@@ -110,6 +110,7 @@ fn layoutPass(
     var content_pages = try std.ArrayList(usize).initCapacity(state.allocator, 2);
     defer content_pages.deinit(state.allocator);
     var previous_break_after = box.PageBreak.auto;
+    var previous_page_row: ?box.BoxId = null;
     var sibling_group_fragment_start: ?usize = null;
     var sibling_group_y: f32 = 0;
     const ActiveSpan = struct { remaining: usize = 0, cell: ?CellLayout = null };
@@ -134,7 +135,10 @@ fn layoutPass(
             }
         }
         const row_source = state.tree.boxes.items[row_id];
-        const boundary_break = fragmentation.resolveBoundary(previous_break_after, row_source.style.page_break_before);
+        var boundary_break = fragmentation.resolveBoundary(previous_break_after, row_source.style.page_break_before);
+        if (previous_page_row) |previous_id| {
+            boundary_break = fragmentation.resolvePageNameBoundary(state.tree, previous_id, row_id, boundary_break);
+        }
         if (state.web_sizing and boundary_break.isForced()) {
             if (state.fragmentainer()) |context| {
                 const target_page_start = context.forcedBreakStart(row_y, boundary_break);
@@ -156,6 +160,7 @@ fn layoutPass(
                         last_repeated_page = target_page;
                     }
                 }
+                state.recordPageName(target_page_start, fragmentation.startPageName(state.tree, row_id));
             }
         }
         const row_start_fragment = state.fragments.items.len;
@@ -395,6 +400,7 @@ fn layoutPass(
 
         row_y += row_height;
         previous_break_after = row_source.style.page_break_after;
+        previous_page_row = row_id;
     }
 
     if (state.web_sizing and previous_break_after.isForced()) state.applyForcedBreak(&row_y, previous_break_after);

@@ -38,6 +38,11 @@ pub const ListMarker = struct {
     position: box.ListStylePosition,
 };
 
+const PageNameTransition = struct {
+    page_index: usize,
+    name: []const u8,
+};
+
 const InlineCursor = inline_context.Cursor(State);
 
 pub fn layout(
@@ -51,6 +56,8 @@ pub fn layout(
     @memset(margin_cache, null);
     var pending_positioned = try std.ArrayList(positioned.Pending).initCapacity(allocator, 0);
     defer pending_positioned.deinit(allocator);
+    var page_name_transitions = try std.ArrayList(PageNameTransition).initCapacity(allocator, tree.boxes.items.len * 2 + 1);
+    defer page_name_transitions.deinit(allocator);
     var state = State{
         .allocator = allocator,
         .tree = tree,
@@ -63,6 +70,7 @@ pub fn layout(
         .web_sizing = options.web_sizing,
         .margin_cache = margin_cache,
         .pending_positioned = &pending_positioned,
+        .page_name_transitions = &page_name_transitions,
     };
     errdefer state.fragments.deinit(allocator);
 
@@ -80,8 +88,12 @@ pub fn layout(
     });
     if (options.web_sizing) try positioned.assignPaintMetadata(&state);
 
+    var page_names = try state.buildPageNames(cursor_y);
+    errdefer page_names.deinit(allocator);
+
     return .{
         .fragments = state.fragments,
+        .page_names = page_names,
         .content_width = containing.width,
         .content_height = cursor_y,
     };
@@ -99,6 +111,7 @@ const State = struct {
     web_sizing: bool,
     margin_cache: []?block.MarginInfo,
     pending_positioned: *std.ArrayList(positioned.Pending),
+    page_name_transitions: *std.ArrayList(PageNameTransition),
     next_line_id: usize = 0,
 
     const BlockLayoutOptions = struct {
@@ -229,6 +242,32 @@ const State = struct {
     pub fn applyForcedBreak(self: *const State, cursor_y: *f32, value: box.PageBreak) void {
         const context = self.fragmentainer() orelse return;
         cursor_y.* = context.forcedBreakStart(cursor_y.*, value);
+    }
+
+    pub fn recordPageName(self: *State, position: f32, name: []const u8) void {
+        const context = self.fragmentainer() orelse return;
+        self.page_name_transitions.appendAssumeCapacity(.{
+            .page_index = context.pageIndex(position),
+            .name = name,
+        });
+    }
+
+    fn buildPageNames(self: *const State, content_height: f32) !std.ArrayList([]const u8) {
+        const page_count = if (self.fragmentainer()) |context|
+            @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(@max(content_height, 0.0001) / context.extent))))
+        else
+            1;
+        var result = try std.ArrayList([]const u8).initCapacity(self.allocator, page_count);
+        errdefer result.deinit(self.allocator);
+        const initial_name = fragmentation.startPageName(self.tree, self.tree.root);
+        for (0..page_count) |page_index| {
+            var name = initial_name;
+            for (self.page_name_transitions.items) |transition| {
+                if (transition.page_index <= page_index) name = transition.name;
+            }
+            try result.append(self.allocator, name);
+        }
+        return result;
     }
 
     pub fn atomicFragmentainerShift(self: *const State, position: f32, block_size: f32) f32 {
@@ -1137,6 +1176,54 @@ test "Web named page changes force a new page at block boundaries" {
     }
     try std.testing.expectApproxEqAbs(@as(f32, 0), report.?.y, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 100), summary.?.y, 0.01);
+    try std.testing.expectEqual(@as(usize, 2), result.page_names.items.len);
+    try std.testing.expectEqualStrings("Report", result.page_names.items[0]);
+    try std.testing.expectEqualStrings("Summary", result.page_names.items[1]);
+}
+
+test "Web named page changes propagate through table Flex and Grid fragmentation" {
+    try expectNamedFormatterTransition(
+        "<table style='border-collapse:collapse'><tr style='page:Report;background:#ff0000'><td style='height:20px'>report</td></tr>" ++
+            "<tr style='page:Summary;background:#0000ff'><td style='height:20px'>summary</td></tr></table>",
+    );
+    try expectNamedFormatterTransition(
+        "<div style='display:flex;flex-direction:column'>" ++
+            "<div style='height:20px;page:Report;background:#ff0000'>report</div>" ++
+            "<div style='height:20px;page:Summary;background:#0000ff'>summary</div></div>",
+    );
+    try expectNamedFormatterTransition(
+        "<div style='display:grid;grid-template-rows:20px 20px'>" ++
+            "<div style='page:Report;background:#ff0000'>report</div>" ++
+            "<div style='page:Summary;background:#0000ff'>summary</div></div>",
+    );
+}
+
+fn expectNamedFormatterTransition(source: []const u8) !void {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var summary: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.blue == 1 and color.red == 0) summary = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), summary.?.y, 0.01);
+    try std.testing.expectEqual(@as(usize, 2), result.page_names.items.len);
+    try std.testing.expectEqualStrings("Report", result.page_names.items[0]);
+    try std.testing.expectEqualStrings("Summary", result.page_names.items[1]);
 }
 
 test "Web recto and verso follow the DOM root direction" {
