@@ -33,6 +33,7 @@ test:
 	zig test src/unicode_case.zig
 	zig test src/layout.zig
 	zig test src/pagination.zig
+	zig test src/paged_media.zig
 	zig test src/display_list.zig
 	zig test src/pdf.zig
 	zig test src/render.zig

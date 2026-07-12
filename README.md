@@ -36,7 +36,8 @@ The browser package is published as `@imggion/html2realpdf`.
 - A4, Letter, landscape, custom page sizes, default `@page` size/orientation and
   margins, shared page-fragmentainer placement, propagated and adjacent break
   arbitration, `page`/`left`/`right`/`recto`/`verso`, `avoid`, orphans/widows,
-  and page-aware block, table, Flex, and Grid flows;
+  page-aware block, table, Flex, and Grid flows, and selectable text in all 16
+  standard `@page` margin boxes with `counter(page)`/`counter(pages)`;
 - selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
 - HarfBuzz OpenType shaping, kerning, ligatures, and positioned RTL runs in the
   `web` and `strict` profiles while `document` remains byte-stable;

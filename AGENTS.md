@@ -20,6 +20,7 @@ Read these local docs before changing code:
 - `tests/web/e2e/` runs the browser harness and built React fixture through Playwright on Chromium, Firefox, and WebKit.
 - `docs/css-support.md` is the public, versioned CSS support contract; `src/css/properties.zig` is its machine-readable property inventory.
 - `src/layout/fragmentation.zig` owns page-boundary geometry, facing-page resolution, break arbitration, and block-child propagation. Block, inline, table, Flex, and Grid formatters must use that shared fragmentainer model instead of duplicating modulo arithmetic.
+- `src/paged_media.zig` adds default `@page` margin-box text only after pagination establishes the final page count. Keep page counters, margin-slot geometry, and generated text commands there; do not synthesize DOM boxes or consume content flow.
 - Web table fragmentation measures `<tfoot>` groups before final placement, reserves their page-end extent, and repeats both `<thead>` and `<tfoot>` only on pages occupied by the table. Keep the rollback measurement scoped to table fragments, positioned descendants, and line identifiers.
 - Browser snapshots must preserve which positioned inset sides were authored; computed `top`/`left` used values derived from `bottom`/`right` cannot be reinterpreted against PDF page geometry. Pagination copies fixed templates before appending repeats so array reallocation cannot drop later fixed furniture.
 - `tests/baselines/0.1.0-alpha.0/` freezes deterministic PDFs, first-page Poppler PNGs, metrics, and digests from the document profile.
@@ -54,6 +55,7 @@ Read these local docs before changing code:
 - `zig test src/html.zig` runs the current inline tokenizer tests.
 - `zig test src/dom.zig` runs the current inline DOM parser tests.
 - `zig test src/box.zig` runs the current inline Box Tree tests.
+- `zig test src/paged_media.zig` verifies margin-box slot geometry and page-counter expansion.
 - `zig test src/render.zig` runs the complete renderer/PDF pipeline tests.
 - `zig test src/unicode_case.zig` verifies Unicode 17 full and language-sensitive case mappings.
 - `npm --prefix bindings/js test` builds the WASM/package and runs the Node package tests.

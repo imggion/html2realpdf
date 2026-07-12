@@ -11,6 +11,7 @@ const box = @import("box.zig");
 const layout = @import("layout.zig");
 const pagination = @import("pagination.zig");
 const display_list = @import("display_list.zig");
+const paged_media = @import("paged_media.zig");
 const pdf = @import("pdf.zig");
 const font = @import("font.zig");
 const diagnostics = @import("diagnostics.zig");
@@ -19,6 +20,8 @@ pub const Diagnostic = diagnostics.Diagnostic;
 pub const serializeDiagnostics = diagnostics.serialize;
 
 pub const CssProfile = enum { document, web, strict };
+pub const MarginBoxName = paged_media.MarginBoxName;
+pub const MarginBox = paged_media.MarginBox;
 
 pub const Options = struct {
     page_format: pagination.PageFormat = .a4,
@@ -29,6 +32,7 @@ pub const Options = struct {
     metadata: pdf.Metadata = .{},
     font_registry: ?*const font.Registry = null,
     css_profile: CssProfile = .document,
+    margin_boxes: []const MarginBox = &.{},
 };
 
 pub const Error = error{
@@ -117,6 +121,13 @@ pub fn renderHtml(
 
     var display = try display_list.build(arena, &pages);
     defer display.deinit(arena);
+    try paged_media.appendMarginBoxes(
+        arena,
+        &display,
+        options.margin_boxes,
+        options.font_registry,
+        if (options.css_profile == .document) .identity else .harfbuzz,
+    );
 
     const temporary_pdf = try pdf.writeWithOptions(arena, &display, .{
         .metadata = options.metadata,

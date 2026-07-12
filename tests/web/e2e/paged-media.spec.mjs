@@ -65,6 +65,90 @@ test("default @page size orientation and margins reach PDF geometry", async ({ p
   expect(result.apiPage.textX).toBeCloseTo(0, 3);
 });
 
+test("@page margin boxes render selectable page counters", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+    pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+    const renderer = await pkg.createRenderer({ execution: "main" });
+    const pdf = await renderer.render(`
+      <style>
+        @media print {
+          @page {
+            size: 200px 100px;
+            margin: 12px 10px;
+            @top-center { content: "Quarterly report"; font-family: Noto Sans; font-size: 8px; font-weight: bold; }
+            @bottom-center { content: "Page " counter(page) " of " counter(pages); font-family: Noto Sans; font-size: 8px; color: #334155; }
+          }
+        }
+        html, body { margin: 0; }
+      </style>
+      <div style="height:30px">FIRST</div>
+      <div style="height:30px;break-before:page">SECOND</div>`, {
+      cssProfile: "web",
+      mediaType: "print",
+      unsupportedCss: "error",
+    });
+    const diagnostics = pdf.diagnostics;
+    const documentHandle = await pdfjs.getDocument({ data: pdf.toUint8Array() }).promise;
+    const pages = [];
+    for (let pageNumber = 1; pageNumber <= documentHandle.numPages; pageNumber += 1) {
+      const current = await documentHandle.getPage(pageNumber);
+      const text = await current.getTextContent();
+      pages.push(text.items.flatMap((item) => "str" in item ? [item.str] : []).join("").replaceAll(" ", ""));
+    }
+    const summary = { diagnostics, pageCount: documentHandle.numPages, pages };
+    await documentHandle.destroy();
+    pdf.dispose();
+    renderer.dispose();
+    return summary;
+  });
+
+  expect(result.diagnostics).toEqual([]);
+  expect(result.pageCount).toBe(2);
+  expect(result.pages[0]).toContain("Quarterlyreport");
+  expect(result.pages[0]).toContain("Page1of2");
+  expect(result.pages[0]).toContain("FIRST");
+  expect(result.pages[1]).toContain("Quarterlyreport");
+  expect(result.pages[1]).toContain("Page2of2");
+  expect(result.pages[1]).toContain("SECOND");
+});
+
+test("unsupported margin-box content follows warn and strict policy", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const renderer = await pkg.createRenderer({ execution: "main" });
+    const html = `<style>@page { margin: 20px; @top-center { content: attr(data-title); } }</style><p>Safe body</p>`;
+    const pdf = await renderer.render(html, { cssProfile: "web", mediaType: "print", unsupportedCss: "warn" });
+    const diagnostics = pdf.diagnostics;
+    pdf.dispose();
+    let strictError = "";
+    try {
+      await renderer.render(html, { cssProfile: "strict", mediaType: "print" });
+    } catch (error) {
+      strictError = error instanceof Error ? error.message : String(error);
+    }
+    renderer.dispose();
+    return { diagnostics, strictError };
+  });
+
+  expect(result.diagnostics).toEqual([
+    expect.objectContaining({
+      code: "UNSUPPORTED_PAGED_MEDIA",
+      property: "@top-center content",
+      phase: "fragmentation",
+      severity: "warning",
+    }),
+  ]);
+  expect(result.strictError).toContain("@top-center content:attr(data-title)");
+});
+
 test("unsupported named @page selectors are diagnostic and strict-safe", async ({ page }) => {
   await page.goto("/tests/web/index.html");
   const result = await page.evaluate(async () => {

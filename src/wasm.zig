@@ -8,6 +8,7 @@ const css = html2realpdf.css;
 const renderer = html2realpdf.render;
 const pdf = html2realpdf.pdf;
 const font = html2realpdf.font;
+const geometry = html2realpdf.geometry;
 
 const abi_version_value: u32 = 1;
 
@@ -29,6 +30,17 @@ const JsonMetadata = struct {
     creator: ?[]const u8 = null,
 };
 
+const JsonMarginBox = struct {
+    name: renderer.MarginBoxName,
+    content: []const u8,
+    fontFamily: []const u8 = "Noto Sans",
+    fontSize: f32 = 12,
+    fontWeight: box.FontWeight = .normal,
+    fontStyle: box.FontStyle = .normal,
+    color: []const u8 = "black",
+    textAlign: ?box.TextAlign = null,
+};
+
 const JsonRenderOptions = struct {
     pageWidthPoints: f32,
     pageHeightPoints: f32,
@@ -38,6 +50,7 @@ const JsonRenderOptions = struct {
     marginLeftPoints: f32 = 0,
     metadata: ?JsonMetadata = null,
     cssProfile: renderer.CssProfile = .document,
+    marginBoxes: []const JsonMarginBox = &.{},
 };
 
 const PdfContext = struct {
@@ -335,6 +348,18 @@ fn renderPdfWithJson(
         .keywords = metadata.keywords,
         .creator = metadata.creator,
     } else .{};
+    const margin_boxes = std.heap.wasm_allocator.alloc(renderer.MarginBox, value.marginBoxes.len) catch return createErrorResult(-2, "Margin box allocation failed");
+    defer std.heap.wasm_allocator.free(margin_boxes);
+    for (value.marginBoxes, margin_boxes) |input, *output| output.* = .{
+        .name = input.name,
+        .content = input.content,
+        .font_family = input.fontFamily,
+        .font_size = if (std.math.isFinite(input.fontSize)) @max(input.fontSize, 1) else 12,
+        .font_weight = input.fontWeight,
+        .font_style = input.fontStyle,
+        .color = geometry.parseColor(input.color) orelse geometry.Color.black,
+        .text_align = input.textAlign,
+    };
     var registry = if (context) |available| available.registry() else font.Registry{};
     return renderPdf(ptr, len, .{
         .custom_page_width_points = value.pageWidthPoints,
@@ -348,6 +373,7 @@ fn renderPdfWithJson(
         .metadata = metadata,
         .font_registry = if (context != null) &registry else null,
         .css_profile = value.cssProfile,
+        .margin_boxes = margin_boxes,
     });
 }
 
