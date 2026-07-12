@@ -15,12 +15,15 @@ pub fn append(
     const rect = fragment.rect;
     const border = fragment.border;
     const paint = fragment.border_paint;
-    if (fragment.border_radius > 0 and uniformBorder(border, paint)) {
+    var radii = fragment.border_radii.resolve(rect.width, rect.height);
+    if (!radii.hasRadius() and fragment.border_radius > 0) radii = box.ResolvedBorderRadii.uniform(fragment.border_radius);
+    if (radii.hasRadius() and uniformBorder(border, paint)) {
         try commands.append(allocator, .{
             .page_index = page_index,
             .command = .{ .stroke_rounded_rect = .{
                 .rect = rect,
                 .radius = fragment.border_radius,
+                .radii = radii,
                 .width = border.top,
                 .color = paint.top_color,
                 .style = paint.top_style,

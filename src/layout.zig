@@ -162,11 +162,17 @@ const State = struct {
                 .width = @max(rect.width - source.border.left - source.border.right, 0),
                 .height = @max(rect.height - source.border.top - source.border.bottom, 0),
             };
+            var clip_radii = style.border_radii.resolve(rect.width, rect.height);
+            if (!clip_radii.hasRadius() and style.border_radius > 0) clip_radii = box.ResolvedBorderRadii.uniform(style.border_radius);
+            clip_radii = clip_radii.inset(source.border);
             for (self.fragments.items[fragment_start + 1 ..]) |*fragment| {
-                fragment.clip_rect = if (fragment.clip_rect) |existing|
-                    existing.intersection(clip) orelse geometry.Rect{ .x = clip.x, .y = clip.y }
-                else
-                    clip;
+                if (fragment.clip_rect) |existing| {
+                    fragment.clip_rect = existing.intersection(clip) orelse geometry.Rect{ .x = clip.x, .y = clip.y };
+                    fragment.clip_radii = null;
+                } else {
+                    fragment.clip_rect = clip;
+                    fragment.clip_radii = if (clip_radii.hasRadius()) clip_radii else null;
+                }
             }
         }
         if (self.web_sizing and (style.position == .relative or style.position == .sticky)) {

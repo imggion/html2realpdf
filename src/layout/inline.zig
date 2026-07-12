@@ -699,6 +699,7 @@ pub fn Cursor(comptime State: type) type {
                 .border = source.border,
                 .border_paint = types.borderPaint(source.style),
                 .border_radius = if (modern) source.style.border_radius else 0,
+                .border_radii = if (modern) source.style.border_radii else .{},
                 .vertical_align = source.style.vertical_align,
                 .link_url = link_url,
                 .image_source = self.state.attributeForBox(box_id, "src"),

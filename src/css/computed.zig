@@ -78,27 +78,28 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "align-content",             "align-items",         "align-self",            "aspect-ratio",         "background-color",
-    "border-bottom-color",       "border-bottom-style", "border-bottom-width",   "border-collapse",      "border-left-color",
-    "border-left-style",         "border-left-width",   "border-radius",         "border-right-color",   "border-right-style",
-    "border-right-width",        "border-top-color",    "border-top-style",      "border-top-width",     "box-decoration-break",
-    "bottom",                    "box-sizing",          "break-after",           "break-before",         "break-inside",
-    "caption-side",              "clear",               "color",                 "column-gap",           "direction",
-    "display",                   "flex-basis",          "flex-direction",        "flex-grow",            "flex-shrink",
-    "flex-wrap",                 "float",               "font-family",           "font-size",            "font-style",
-    "font-weight",               "gap",                 "grid-auto-columns",     "grid-auto-flow",       "grid-auto-rows",
-    "grid-column-end",           "grid-column-start",   "grid-row-end",          "grid-row-start",       "grid-template-areas",
-    "grid-template-columns",     "grid-template-rows",  "height",                "justify-content",      "justify-items",
-    "justify-self",              "left",                "letter-spacing",        "line-height",          "list-style-position",
-    "list-style-type",           "margin-bottom",       "margin-left",           "margin-right",         "margin-top",
-    "max-height",                "max-width",           "min-height",            "min-width",            "object-fit",
-    "object-position",           "opacity",             "order",                 "orphans",              "overflow",
-    "overflow-wrap",             "padding-bottom",      "padding-left",          "padding-right",        "padding-top",
-    "page-break-after",          "page-break-before",   "page-break-inside",     "position",             "right",
-    "row-gap",                   "text-align",          "text-decoration-color", "text-decoration-line", "text-decoration-style",
-    "text-decoration-thickness", "text-indent",         "text-overflow",         "text-transform",       "top",
-    "vertical-align",            "white-space",         "widows",                "width",                "word-break",
-    "word-spacing",              "z-index",
+    "align-content",           "align-items",               "align-self",                 "aspect-ratio",          "background-color",
+    "border-bottom-color",     "border-bottom-left-radius", "border-bottom-right-radius", "border-bottom-style",   "border-bottom-width",
+    "border-collapse",         "border-left-color",         "border-left-style",          "border-left-width",     "border-radius",
+    "border-right-color",      "border-right-style",        "border-right-width",         "border-top-color",      "border-top-left-radius",
+    "border-top-right-radius", "border-top-style",          "border-top-width",           "box-decoration-break",  "bottom",
+    "box-sizing",              "break-after",               "break-before",               "break-inside",          "caption-side",
+    "clear",                   "color",                     "column-gap",                 "direction",             "display",
+    "flex-basis",              "flex-direction",            "flex-grow",                  "flex-shrink",           "flex-wrap",
+    "float",                   "font-family",               "font-size",                  "font-style",            "font-weight",
+    "gap",                     "grid-auto-columns",         "grid-auto-flow",             "grid-auto-rows",        "grid-column-end",
+    "grid-column-start",       "grid-row-end",              "grid-row-start",             "grid-template-areas",   "grid-template-columns",
+    "grid-template-rows",      "height",                    "justify-content",            "justify-items",         "justify-self",
+    "left",                    "letter-spacing",            "line-height",                "list-style-position",   "list-style-type",
+    "margin-bottom",           "margin-left",               "margin-right",               "margin-top",            "max-height",
+    "max-width",               "min-height",                "min-width",                  "object-fit",            "object-position",
+    "opacity",                 "order",                     "orphans",                    "overflow",              "overflow-wrap",
+    "padding-bottom",          "padding-left",              "padding-right",              "padding-top",           "page-break-after",
+    "page-break-before",       "page-break-inside",         "position",                   "right",                 "row-gap",
+    "text-align",              "text-decoration-color",     "text-decoration-line",       "text-decoration-style", "text-decoration-thickness",
+    "text-indent",             "text-overflow",             "text-transform",             "top",                   "vertical-align",
+    "white-space",             "widows",                    "width",                      "word-break",            "word-spacing",
+    "z-index",
 };
 
 const logical_properties = [_][]const u8{
@@ -339,8 +340,24 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
         if (parseBorderCollapse(value)) |collapse| style.border_collapse = collapse;
     } else if (eqlProp(name, "caption-side")) {
         if (parseCaptionSide(value)) |side| style.caption_side = side;
+    } else if (eqlProp(name, "border-top-left-radius")) {
+        if (try parseCornerRadius(context, value, style.font_size)) |radius| style.border_radii.top_left = radius;
+        updateLegacyBorderRadius(style);
+    } else if (eqlProp(name, "border-top-right-radius")) {
+        if (try parseCornerRadius(context, value, style.font_size)) |radius| style.border_radii.top_right = radius;
+        updateLegacyBorderRadius(style);
+    } else if (eqlProp(name, "border-bottom-right-radius")) {
+        if (try parseCornerRadius(context, value, style.font_size)) |radius| style.border_radii.bottom_right = radius;
+        updateLegacyBorderRadius(style);
+    } else if (eqlProp(name, "border-bottom-left-radius")) {
+        if (try parseCornerRadius(context, value, style.font_size)) |radius| style.border_radii.bottom_left = radius;
+        updateLegacyBorderRadius(style);
     } else if (eqlProp(name, "border-radius")) {
-        if (parseLength(value)) |radius| style.border_radius = @max(radius, 0);
+        if (parseLength(value)) |radius| {
+            style.border_radius = @max(radius, 0);
+            const corner = box.CornerRadius{ .x = .{ .px = style.border_radius }, .y = .{ .px = style.border_radius } };
+            style.border_radii = .{ .top_left = corner, .top_right = corner, .bottom_right = corner, .bottom_left = corner };
+        }
     } else if (eqlProp(name, "page-break-before") or eqlProp(name, "break-before")) {
         if (parsePageBreak(value)) |pb| style.page_break_before = pb;
     } else if (eqlProp(name, "page-break-after") or eqlProp(name, "break-after")) {
@@ -396,6 +413,60 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
     } else if (eqlProp(name, "border-left-width")) {
         if (parseBorderWidth(value)) |l| style.border.left = l;
     }
+}
+
+fn parseCornerRadius(context: Context, value: []const u8, font_size: f32) !?box.CornerRadius {
+    const pair = splitRadiusPair(value);
+    const horizontal = try parseDimensionWithContext(context.allocator, context.expression_store, pair.first, context.expressionContext(font_size)) orelse return null;
+    const vertical = if (pair.second) |second|
+        try parseDimensionWithContext(context.allocator, context.expression_store, second, context.expressionContext(font_size)) orelse return null
+    else
+        horizontal;
+    return .{ .x = horizontal, .y = vertical };
+}
+
+const RadiusPair = struct { first: []const u8, second: ?[]const u8 = null };
+
+fn splitRadiusPair(value: []const u8) RadiusPair {
+    const trimmed = std.mem.trim(u8, value, " \t\n\r\x0C");
+    var depth: usize = 0;
+    for (trimmed, 0..) |byte, index| {
+        if (byte == '(') depth += 1 else if (byte == ')') depth -|= 1 else if (depth == 0 and std.ascii.isWhitespace(byte)) {
+            const second = std.mem.trim(u8, trimmed[index..], " \t\n\r\x0C");
+            return .{ .first = trimmed[0..index], .second = if (second.len > 0) second else null };
+        }
+    }
+    return .{ .first = trimmed };
+}
+
+fn updateLegacyBorderRadius(style: *box.Style) void {
+    const first = cornerScalar(style.border_radii.top_left) orelse {
+        style.border_radius = 0;
+        return;
+    };
+    inline for (.{ style.border_radii.top_right, style.border_radii.bottom_right, style.border_radii.bottom_left }) |corner| {
+        const value = cornerScalar(corner) orelse {
+            style.border_radius = 0;
+            return;
+        };
+        if (@abs(value - first) > 0.0001) {
+            style.border_radius = 0;
+            return;
+        }
+    }
+    style.border_radius = first;
+}
+
+fn cornerScalar(radius: box.CornerRadius) ?f32 {
+    const horizontal = switch (radius.x) {
+        .px => |value| value,
+        else => return null,
+    };
+    const vertical = switch (radius.y) {
+        .px => |value| value,
+        else => return null,
+    };
+    return if (@abs(horizontal - vertical) <= 0.0001) @max(horizontal, 0) else null;
 }
 
 /// The native profile currently implements horizontal-tb writing. Logical
@@ -679,6 +750,31 @@ fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) 
     }
     if (eqlProp(name, "caption-side")) {
         target.caption_side = source.caption_side;
+        return;
+    }
+    if (eqlProp(name, "border-radius")) {
+        target.border_radius = source.border_radius;
+        target.border_radii = source.border_radii;
+        return;
+    }
+    if (eqlProp(name, "border-top-left-radius")) {
+        target.border_radii.top_left = source.border_radii.top_left;
+        updateLegacyBorderRadius(target);
+        return;
+    }
+    if (eqlProp(name, "border-top-right-radius")) {
+        target.border_radii.top_right = source.border_radii.top_right;
+        updateLegacyBorderRadius(target);
+        return;
+    }
+    if (eqlProp(name, "border-bottom-right-radius")) {
+        target.border_radii.bottom_right = source.border_radii.bottom_right;
+        updateLegacyBorderRadius(target);
+        return;
+    }
+    if (eqlProp(name, "border-bottom-left-radius")) {
+        target.border_radii.bottom_left = source.border_radii.bottom_left;
+        updateLegacyBorderRadius(target);
         return;
     }
     if (eqlProp(name, "display")) target.display = source.display else if (eqlProp(name, "direction")) target.direction = source.direction else if (eqlProp(name, "position")) target.position = source.position else if (eqlProp(name, "float")) target.float_direction = source.float_direction else if (eqlProp(name, "white-space")) target.white_space = source.white_space else if (eqlProp(name, "font-size")) target.font_size = source.font_size else if (eqlProp(name, "font-family")) target.font_family = source.font_family else if (eqlProp(name, "font-weight")) target.font_weight = source.font_weight else if (eqlProp(name, "font-style")) target.font_style = source.font_style else if (eqlProp(name, "color")) target.color = source.color else if (eqlProp(name, "background") or eqlProp(name, "background-color")) target.background = source.background else if (eqlProp(name, "width")) target.width = source.width else if (eqlProp(name, "height")) target.height = source.height else if (eqlProp(name, "aspect-ratio")) target.aspect_ratio = source.aspect_ratio else if (eqlProp(name, "min-width")) target.min_width = source.min_width else if (eqlProp(name, "max-width")) target.max_width = source.max_width else if (eqlProp(name, "min-height")) target.min_height = source.min_height else if (eqlProp(name, "max-height")) target.max_height = source.max_height else if (eqlProp(name, "line-height")) target.line_height = source.line_height else if (eqlProp(name, "letter-spacing")) target.letter_spacing = source.letter_spacing else if (eqlProp(name, "word-spacing")) target.word_spacing = source.word_spacing else if (eqlProp(name, "text-indent")) target.text_indent = source.text_indent else if (eqlProp(name, "text-align")) target.text_align = source.text_align else if (eqlProp(name, "text-transform")) target.text_transform = source.text_transform else if (eqlProp(name, "word-break")) target.word_break = source.word_break else if (eqlProp(name, "overflow-wrap")) target.overflow_wrap = source.overflow_wrap else if (eqlProp(name, "overflow")) target.overflow = source.overflow else if (eqlProp(name, "text-overflow")) target.text_overflow = source.text_overflow else if (eqlProp(name, "object-fit")) target.object_fit = source.object_fit else if (eqlProp(name, "object-position")) target.object_position = source.object_position else if (eqlProp(name, "vertical-align")) target.vertical_align = source.vertical_align else if (eqlProp(name, "text-decoration") or eqlProp(name, "text-decoration-line")) target.text_decoration = source.text_decoration else if (eqlProp(name, "text-decoration-style")) target.text_decoration_style = source.text_decoration_style else if (eqlProp(name, "text-decoration-color")) target.text_decoration_color = source.text_decoration_color else if (eqlProp(name, "text-decoration-thickness")) target.text_decoration_thickness = source.text_decoration_thickness else if (eqlProp(name, "box-sizing")) target.box_sizing = source.box_sizing else if (eqlProp(name, "border-collapse")) target.border_collapse = source.border_collapse else if (eqlProp(name, "border-radius")) target.border_radius = source.border_radius else if (eqlProp(name, "page-break-before") or eqlProp(name, "break-before")) target.page_break_before = source.page_break_before else if (eqlProp(name, "page-break-after") or eqlProp(name, "break-after")) target.page_break_after = source.page_break_after else if (eqlProp(name, "page-break-inside") or eqlProp(name, "break-inside")) target.page_break_inside = source.page_break_inside else if (eqlProp(name, "orphans")) target.orphans = source.orphans else if (eqlProp(name, "widows")) target.widows = source.widows else if (eqlProp(name, "margin")) {

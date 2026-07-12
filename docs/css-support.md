@@ -32,7 +32,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; web/strict collapse sibling, parent/child, empty-block, and mixed positive/negative margin groups across eligible block formatting contexts; flex items consume main/cross `auto` margins |
 | logical sizing/margin/padding/border | Y | Y | Y | Y | Y | Y | Y | `*-block`/`*-inline` longhands and axis shorthands map with final `direction`, share cascade priority with physical peers, and preserve logical `inherit`; horizontal-tb writing mode |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
-| `border-radius` | Y | Y | Y | Y | Y | Y | Y | one uniform circular radius |
+| `border-radius` | Y | Y | Y | Y | Y | Y | Y | four independent length-percentage corners, elliptical slash syntax, overlap normalization, native PDF curves, and rounded overflow clipping |
 | `box-decoration-break` | Y | Y | Y | Y | Y | Y | Y | web/strict support `slice` and `clone` across page fragments; document preserves its legacy repeated-border behavior |
 | color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `currentColor`, and native PDF alpha via ExtGState |
 | font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | four Noto Sans Latin faces plus built-in Arabic/Hebrew fallbacks and registered TTF faces |
@@ -42,7 +42,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `text-indent` | Y | Y | Y | Y | Y | Y | Y | lengths and percentages on the first formatted line |
 | `text-transform` | Y | Y | Y | Y | Y | Y | Y | Unicode 17 full mappings for uppercase, lowercase, and capitalize; conditional Lithuanian, Turkish, and Azeri casing follows inherited `lang` |
 | `word-break` / `overflow-wrap` | Y | Y | Y | Y | Y | Y | Y | UAX #14 legal opportunities, CJK keep-all, and extended-grapheme emergency wrapping for break-all, break-word, and anywhere |
-| `overflow` / `text-overflow` | Y | Y | Y | Y | Y | Y | Y | visible plus rectangular padding-edge clipping for hidden/clip/auto/scroll; selectable single-line ellipsis |
+| `overflow` / `text-overflow` | Y | Y | Y | Y | Y | Y | Y | visible plus padding-edge clipping, including border-radius curves, for hidden/clip/auto/scroll; selectable single-line ellipsis |
 | `vertical-align` / inline baselines | Y | Y | Y | Y | Y | Y | Y | mixed text metrics, keywords, and length-percentage offsets; web/strict add replaced-element bottom-margin and inline-block last-line/bottom-margin baselines |
 | `white-space` | Y | Y | Y | Y | Y | Y | Y | normal, nowrap, pre, pre-wrap, pre-line |
 | `text-align` | Y | Y | Y | Y | Y | Y | Y | start/end resolved from direction, plus left, center, right, justify |

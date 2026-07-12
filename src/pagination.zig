@@ -213,6 +213,7 @@ fn appendSplitBox(
         if (is_split) {
             if (fragment.legacy_fragment_borders) {
                 segment.border_radius = 0;
+                segment.border_radii = .{};
             } else switch (fragment.box_decoration_break) {
                 .slice => {
                     if (!is_first) segment.border.top = 0;
@@ -221,6 +222,7 @@ fn appendSplitBox(
                     // per-corner radii, so a sliced middle edge cannot retain only
                     // the two outer rounded corners.
                     segment.border_radius = 0;
+                    segment.border_radii = .{};
                 },
                 .clone => {},
             }

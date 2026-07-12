@@ -93,12 +93,11 @@ real-PDF rendering model.
 
 The alpha supports report-oriented block/inline/table layout, common CSS box
 model properties, A4/Letter/custom pages, pagination controls, links, JPEG,
-transparent PNG, uniform rounded fills/borders, Noto Sans Latin/Arabic/Hebrew, and registered
-embeddable TTF fonts. `border-radius` currently accepts one uniform absolute
-radius; per-corner, elliptical, and clipping behavior remain outside the alpha
-profile. Flexbox, Grid,
-floats, positioned layout, transforms, filters, shadows, and arbitrary browser
-painting are outside the current profile. Layout-critical unsupported CSS is
+transparent PNG, per-corner elliptical rounded fills/borders and rounded
+overflow clipping, Noto Sans Latin/Arabic/Hebrew, and registered embeddable TTF
+fonts. The Web profile also supports Flexbox, Grid, floats, and positioned
+layout. Transforms, filters, shadows, and arbitrary browser painting remain
+outside the current profile. Layout-critical unsupported CSS is
 rejected; cosmetic omissions are available through `pdf.diagnostics` and can
 be promoted to errors with `strict: true`.
 

@@ -75,6 +75,7 @@ pub fn layout(
             .border = row_source.border,
             .border_paint = borderPaint(row_source.style),
             .border_radius = row_source.style.border_radius,
+            .border_radii = row_source.style.border_radii,
             .box_decoration_break = row_source.style.box_decoration_break,
             .legacy_fragment_borders = !state.web_sizing,
             .page_break_before = row_source.style.page_break_before,

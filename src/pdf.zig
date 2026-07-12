@@ -380,7 +380,7 @@ fn pageContent(
         const page_command = list.commands.items[command_index];
         defer command_index += 1;
         if (page_command.page_index != page_index) continue;
-        if (page_command.clip_rect) |clip| try writeClipRect(writer, list, clip);
+        if (page_command.clip_rect) |clip| try writeClipRect(writer, list, clip, page_command.clip_radii);
 
         switch (page_command.command) {
             .fill_rect => |fill| {
@@ -402,7 +402,7 @@ fn pageContent(
                 const height = fill.rect.height * scale;
                 try writeAlphaState(writer, alpha_usage, fill.color.alpha * page_command.opacity);
                 try writeFillColor(writer, fill.color);
-                try writeRoundedRectPath(writer, x, y, width, height, fill.radius * scale);
+                try writeRoundedRectPathRadii(writer, x, y, width, height, resolvedCommandRadii(fill.radii, fill.radius, scale));
                 try writer.writeAll("f\n");
             },
             .stroke_rounded_rect => |stroke| {
@@ -418,7 +418,7 @@ fn pageContent(
                     .dotted => try writer.writeAll("[0.1 2] 0 d 1 J\n"),
                 }
                 try writer.print("{d:.3} w\n", .{@max(stroke.width * scale, 0.1)});
-                try writeRoundedRectPath(writer, x, y, width, height, stroke.radius * scale);
+                try writeRoundedRectPathRadii(writer, x, y, width, height, resolvedCommandRadii(stroke.radii, stroke.radius, scale));
                 try writer.writeAll("S\n");
             },
             .stroke_line => |line| {
@@ -484,6 +484,7 @@ fn pageContent(
                         next_run.word_spacing != run.word_spacing or
                         font_usage.indexForRun(next_run) != used_font_index or
                         !clipRectsEqual(next_command.clip_rect, page_command.clip_rect) or
+                        !clipRadiiEqual(next_command.clip_radii, page_command.clip_radii) or
                         @abs(next_command.opacity - page_command.opacity) > 0.0001 or
                         !colorsEqual(next_run.color, run.color) or
                         @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) > 0.1) break;
@@ -552,17 +553,28 @@ fn fittedImageRect(command: display_list.Image) geometry.Rect {
     };
 }
 
-fn writeClipRect(writer: *std.Io.Writer, list: *const display_list.DisplayList, clip: geometry.Rect) !void {
+fn writeClipRect(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    clip: geometry.Rect,
+    radii: ?@import("box.zig").ResolvedBorderRadii,
+) !void {
     const scale = geometry.css_px_to_pdf_points;
     const margins = list.page_spec.margins_points;
     const x = margins.left + clip.x * scale;
     const y = list.page_spec.height_points - margins.top - (clip.y + clip.height) * scale;
-    try writer.print("q {d:.3} {d:.3} {d:.3} {d:.3} re W n\n", .{
-        x,
-        y,
-        @max(clip.width * scale, 0),
-        @max(clip.height * scale, 0),
-    });
+    try writer.writeAll("q ");
+    if (radii) |resolved| {
+        try writeRoundedRectPathRadii(writer, x, y, @max(clip.width * scale, 0), @max(clip.height * scale, 0), resolvedCommandRadii(resolved, 0, scale));
+        try writer.writeAll("W n\n");
+    } else {
+        try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} re W n\n", .{
+            x,
+            y,
+            @max(clip.width * scale, 0),
+            @max(clip.height * scale, 0),
+        });
+    }
 }
 
 fn clipRectsEqual(left: ?geometry.Rect, right: ?geometry.Rect) bool {
@@ -574,39 +586,84 @@ fn clipRectsEqual(left: ?geometry.Rect, right: ?geometry.Rect) bool {
         @abs(left.?.height - right.?.height) <= tolerance;
 }
 
-fn writeRoundedRectPath(
+fn clipRadiiEqual(left: ?@import("box.zig").ResolvedBorderRadii, right: ?@import("box.zig").ResolvedBorderRadii) bool {
+    if (left == null or right == null) return left == null and right == null;
+    const tolerance: f32 = 0.0001;
+    inline for (.{
+        .{ left.?.top_left, right.?.top_left },
+        .{ left.?.top_right, right.?.top_right },
+        .{ left.?.bottom_right, right.?.bottom_right },
+        .{ left.?.bottom_left, right.?.bottom_left },
+    }) |pair| {
+        if (@abs(pair[0].x - pair[1].x) > tolerance or @abs(pair[0].y - pair[1].y) > tolerance) return false;
+    }
+    return true;
+}
+
+fn resolvedCommandRadii(radii: @import("box.zig").ResolvedBorderRadii, legacy_radius: f32, scale: f32) @import("box.zig").ResolvedBorderRadii {
+    var result = if (radii.hasRadius()) radii else @import("box.zig").ResolvedBorderRadii.uniform(legacy_radius);
+    inline for (.{ &result.top_left, &result.top_right, &result.bottom_right, &result.bottom_left }) |corner| {
+        corner.x *= scale;
+        corner.y *= scale;
+    }
+    return result;
+}
+
+fn writeRoundedRectPathRadii(
     writer: *std.Io.Writer,
     x: f32,
     y: f32,
     width: f32,
     height: f32,
-    requested_radius: f32,
+    radii: @import("box.zig").ResolvedBorderRadii,
 ) !void {
-    const radius = @max(@min(requested_radius, @min(width, height) / 2), 0);
-    if (radius == 0) {
+    if (!radii.hasRadius()) {
         try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} re\n", .{ x, y, width, height });
         return;
     }
-
-    const control = radius * 0.55228475;
+    const control: f32 = 0.55228475;
     const right = x + width;
     const top = y + height;
-    try writer.print("{d:.3} {d:.3} m\n", .{ x + radius, y });
-    try writer.print("{d:.3} {d:.3} l\n", .{ right - radius, y });
+    const bottom_left = radii.bottom_left;
+    const bottom_right = radii.bottom_right;
+    const top_right = radii.top_right;
+    const top_left = radii.top_left;
+    try writer.print("{d:.3} {d:.3} m\n", .{ x + bottom_left.x, y });
+    try writer.print("{d:.3} {d:.3} l\n", .{ right - bottom_right.x, y });
     try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c\n", .{
-        right - radius + control, y, right, y + radius - control, right, y + radius,
+        right - bottom_right.x + bottom_right.x * control,
+        y,
+        right,
+        y + bottom_right.y - bottom_right.y * control,
+        right,
+        y + bottom_right.y,
     });
-    try writer.print("{d:.3} {d:.3} l\n", .{ right, top - radius });
+    try writer.print("{d:.3} {d:.3} l\n", .{ right, top - top_right.y });
     try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c\n", .{
-        right, top - radius + control, right - radius + control, top, right - radius, top,
+        right,
+        top - top_right.y + top_right.y * control,
+        right - top_right.x + top_right.x * control,
+        top,
+        right - top_right.x,
+        top,
     });
-    try writer.print("{d:.3} {d:.3} l\n", .{ x + radius, top });
+    try writer.print("{d:.3} {d:.3} l\n", .{ x + top_left.x, top });
     try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c\n", .{
-        x + radius - control, top, x, top - radius + control, x, top - radius,
+        x + top_left.x - top_left.x * control,
+        top,
+        x,
+        top - top_left.y + top_left.y * control,
+        x,
+        top - top_left.y,
     });
-    try writer.print("{d:.3} {d:.3} l\n", .{ x, y + radius });
+    try writer.print("{d:.3} {d:.3} l\n", .{ x, y + bottom_left.y });
     try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c h\n", .{
-        x, y + radius - control, x + radius - control, y, x + radius, y,
+        x,
+        y + bottom_left.y - bottom_left.y * control,
+        x + bottom_left.x - bottom_left.x * control,
+        y,
+        x + bottom_left.x,
+        y,
     });
 }
 
@@ -1307,6 +1364,52 @@ test "wrap clipped paint commands in PDF graphics state" {
     defer allocator.free(content);
     try std.testing.expect(std.mem.indexOf(u8, content, " re W n\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "Q\nQ") != null);
+}
+
+test "serialize elliptical rounded paths and rounded clipping as PDF curves" {
+    const pagination = @import("pagination.zig");
+    const allocator = std.testing.allocator;
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .clip_rect = .{ .x = 10, .y = 10, .width = 80, .height = 40 },
+        .clip_radii = .{
+            .top_left = .{ .x = 12, .y = 6 },
+            .top_right = .{ .x = 18, .y = 9 },
+            .bottom_right = .{ .x = 4, .y = 8 },
+            .bottom_left = .{ .x = 10, .y = 5 },
+        },
+        .command = .{ .fill_rounded_rect = .{
+            .rect = .{ .x = 5, .y = 5, .width = 100, .height = 60 },
+            .radii = .{
+                .top_left = .{ .x = 20, .y = 8 },
+                .top_right = .{ .x = 10, .y = 16 },
+                .bottom_right = .{ .x = 6, .y = 12 },
+                .bottom_left = .{ .x = 14, .y = 7 },
+            },
+            .color = geometry.Color.black,
+        } },
+    });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var font_usage = try FontUsage.init(allocator, null);
+    defer font_usage.deinit(allocator);
+    try font_usage.collect(&list);
+    var alpha_usage = try AlphaUsage.init(allocator);
+    defer alpha_usage.deinit(allocator);
+    try alpha_usage.collect(allocator, &list);
+    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage);
+    defer allocator.free(content);
+
+    try std.testing.expectEqual(@as(usize, 6), std.mem.count(u8, content, " c\n"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, content, " c h\n"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, content, "W n\n"));
+    try std.testing.expect(std.mem.indexOf(u8, content, " re W n\n") == null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "f\nQ\nQ") != null);
 }
 
 test "fit and position native images inside their content box" {

@@ -82,6 +82,7 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
         }
         for (commands.items[command_start..]) |*command| {
             command.clip_rect = fragment.clip_rect;
+            command.clip_radii = fragment.clip_radii;
             command.opacity = fragment.opacity;
         }
     }
@@ -157,6 +158,44 @@ test "build rounded fill and uniform rounded border commands" {
     try std.testing.expectEqual(@as(usize, 2), list.commands.items.len);
     try std.testing.expect(list.commands.items[0].command == .fill_rounded_rect);
     try std.testing.expect(list.commands.items[1].command == .stroke_rounded_rect);
+}
+
+test "build per-corner elliptical paint and rounded clip commands" {
+    const box = @import("box.zig");
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(pagination.PagedFragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{
+        .page_index = 0,
+        .fragment = .{
+            .kind = .box,
+            .source_box = 0,
+            .rect = .{ .width = 200, .height = 100 },
+            .background = .{ .red = 0.2, .green = 0.4, .blue = 0.8 },
+            .border_radii = .{
+                .top_left = .{ .x = .{ .percent = 0.1 }, .y = .{ .percent = 0.2 } },
+                .top_right = .{ .x = .{ .px = 30 }, .y = .{ .px = 12 } },
+            },
+            .clip_rect = .{ .width = 180, .height = 80 },
+            .clip_radii = .{ .top_left = .{ .x = 15, .y = 8 } },
+        },
+    });
+    const paged = pagination.PagedDocument{
+        .fragments = fragments,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var list = try build(allocator, &paged);
+    defer list.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), list.commands.items.len);
+    const page_command = list.commands.items[0];
+    try std.testing.expect(page_command.command == .fill_rounded_rect);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), page_command.command.fill_rounded_rect.radii.top_left.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), page_command.command.fill_rounded_rect.radii.top_left.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), page_command.command.fill_rounded_rect.radii.top_right.x, 0.001);
+    try std.testing.expect(page_command.clip_radii != null);
+    try std.testing.expectEqual(box.ResolvedCornerRadius{ .x = 15, .y = 8 }, page_command.clip_radii.?.top_left);
 }
 
 test "propagate fragment clipping to every paint command" {

@@ -668,6 +668,80 @@ pub const Insets = struct {
     left: Length = .auto,
 };
 
+pub const CornerRadius = struct {
+    x: Length = .{ .px = 0 },
+    y: Length = .{ .px = 0 },
+};
+
+pub const ResolvedCornerRadius = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+};
+
+pub const ResolvedBorderRadii = struct {
+    top_left: ResolvedCornerRadius = .{},
+    top_right: ResolvedCornerRadius = .{},
+    bottom_right: ResolvedCornerRadius = .{},
+    bottom_left: ResolvedCornerRadius = .{},
+
+    pub fn hasRadius(self: @This()) bool {
+        return self.top_left.x > 0 or self.top_left.y > 0 or self.top_right.x > 0 or self.top_right.y > 0 or
+            self.bottom_right.x > 0 or self.bottom_right.y > 0 or self.bottom_left.x > 0 or self.bottom_left.y > 0;
+    }
+
+    pub fn uniform(radius: f32) @This() {
+        const corner = ResolvedCornerRadius{ .x = radius, .y = radius };
+        return .{ .top_left = corner, .top_right = corner, .bottom_right = corner, .bottom_left = corner };
+    }
+
+    pub fn inset(self: @This(), edges: EdgeSizes) @This() {
+        return .{
+            .top_left = .{ .x = @max(self.top_left.x - edges.left, 0), .y = @max(self.top_left.y - edges.top, 0) },
+            .top_right = .{ .x = @max(self.top_right.x - edges.right, 0), .y = @max(self.top_right.y - edges.top, 0) },
+            .bottom_right = .{ .x = @max(self.bottom_right.x - edges.right, 0), .y = @max(self.bottom_right.y - edges.bottom, 0) },
+            .bottom_left = .{ .x = @max(self.bottom_left.x - edges.left, 0), .y = @max(self.bottom_left.y - edges.bottom, 0) },
+        };
+    }
+};
+
+pub const BorderRadii = struct {
+    top_left: CornerRadius = .{},
+    top_right: CornerRadius = .{},
+    bottom_right: CornerRadius = .{},
+    bottom_left: CornerRadius = .{},
+
+    pub fn resolve(self: @This(), width: f32, height: f32) ResolvedBorderRadii {
+        var result = ResolvedBorderRadii{
+            .top_left = resolveCorner(self.top_left, width, height),
+            .top_right = resolveCorner(self.top_right, width, height),
+            .bottom_right = resolveCorner(self.bottom_right, width, height),
+            .bottom_left = resolveCorner(self.bottom_left, width, height),
+        };
+        const horizontal_scale = @min(@min(scaleForPair(width, result.top_left.x, result.top_right.x), scaleForPair(width, result.bottom_left.x, result.bottom_right.x)), 1);
+        const vertical_scale = @min(@min(scaleForPair(height, result.top_left.y, result.bottom_left.y), scaleForPair(height, result.top_right.y, result.bottom_right.y)), 1);
+        const scale = @min(horizontal_scale, vertical_scale);
+        if (scale < 1) {
+            inline for (.{ &result.top_left, &result.top_right, &result.bottom_right, &result.bottom_left }) |corner| {
+                corner.x *= scale;
+                corner.y *= scale;
+            }
+        }
+        return result;
+    }
+
+    fn resolveCorner(corner: CornerRadius, width: f32, height: f32) ResolvedCornerRadius {
+        return .{
+            .x = @max(corner.x.resolve(width) orelse 0, 0),
+            .y = @max(corner.y.resolve(height) orelse 0, 0),
+        };
+    }
+
+    fn scaleForPair(available: f32, first: f32, second: f32) f32 {
+        const total = first + second;
+        return if (total > 0) available / total else 1;
+    }
+};
+
 pub const GridAutoFlow = enum {
     row,
     column,
@@ -764,6 +838,7 @@ pub const Style = struct {
     border_collapse: BorderCollapse = .separate,
     caption_side: CaptionSide = .top,
     border_radius: f32 = 0,
+    border_radii: BorderRadii = .{},
 
     page_break_before: PageBreak = .auto,
     page_break_after: PageBreak = .auto,
@@ -1023,6 +1098,8 @@ const BuildState = struct {
         style.border_right_style = .none;
         style.border_bottom_style = .none;
         style.border_left_style = .none;
+        style.border_radius = 0;
+        style.border_radii = .{};
         style.border_top_color = "black";
         style.border_right_color = "black";
         style.border_bottom_color = "black";
@@ -1346,6 +1423,7 @@ fn anonymousStyle(parent: Style) Style {
     style.border_bottom_style = .none;
     style.border_left_style = .none;
     style.border_radius = 0;
+    style.border_radii = .{};
     style.page_break_before = .auto;
     style.page_break_after = .auto;
     style.page_break_inside = .auto;
@@ -2075,4 +2153,21 @@ test "text boxes inherit the nearest HTML language" {
         return;
     }
     return error.TestExpectedEqual;
+}
+
+test "resolve and proportionally normalize elliptical border radii" {
+    const radii = BorderRadii{
+        .top_left = .{ .x = .{ .percent = 0.8 }, .y = .{ .px = 30 } },
+        .top_right = .{ .x = .{ .percent = 0.8 }, .y = .{ .px = 20 } },
+        .bottom_right = .{ .x = .{ .px = 20 }, .y = .{ .percent = 0.75 } },
+        .bottom_left = .{ .x = .{ .px = 10 }, .y = .{ .percent = 0.75 } },
+    };
+    const resolved = radii.resolve(100, 40);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 50), resolved.top_left.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), resolved.top_right.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 18.75), resolved.top_left.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.5), resolved.top_right.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 18.75), resolved.bottom_right.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 18.75), resolved.bottom_left.y, 0.001);
 }

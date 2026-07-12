@@ -89,7 +89,10 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "border-left-color",
   "border-collapse",
   "caption-side",
-  "border-radius",
+  "border-top-left-radius",
+  "border-top-right-radius",
+  "border-bottom-right-radius",
+  "border-bottom-left-radius",
   "background-color",
   "color",
   "direction",
@@ -155,7 +158,7 @@ const SUPPORTED_DISPLAY = new Set([
 const ACTIVE_ELEMENTS = "script,iframe,object,embed";
 const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   ...SUPPORTED_COMPUTED_PROPERTIES,
-  "margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left",
+  "margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left", "border-radius",
   "border-width", "border-style", "border-color", "background", "page-break-before", "page-break-after",
   "page-break-inside", "list-style", "flex", "flex-flow", "gap", "inset", "inset-block", "inset-inline",
   "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end", "orphans", "widows",

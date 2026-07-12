@@ -29,13 +29,15 @@ pub const FillRect = struct {
 
 pub const FillRoundedRect = struct {
     rect: geometry.Rect,
-    radius: f32,
+    radius: f32 = 0,
+    radii: box.ResolvedBorderRadii = .{},
     color: geometry.Color,
 };
 
 pub const StrokeRoundedRect = struct {
     rect: geometry.Rect,
-    radius: f32,
+    radius: f32 = 0,
+    radii: box.ResolvedBorderRadii = .{},
     width: f32,
     color: geometry.Color,
     style: box.BorderStyle = .solid,
@@ -77,6 +79,7 @@ pub const PageCommand = struct {
     page_index: usize,
     command: Command,
     clip_rect: ?geometry.Rect = null,
+    clip_radii: ?box.ResolvedBorderRadii = null,
     opacity: f32 = 1,
 };
 

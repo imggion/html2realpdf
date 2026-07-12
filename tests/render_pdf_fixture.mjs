@@ -64,6 +64,15 @@ const html = `
       <div style="position: absolute; left: 40px; top: 135px; width: 145px; height: 70px; z-index: 1; background: #ea580c"></div>
       <div style="position: absolute; left: 70px; top: 150px; width: 145px; height: 70px; z-index: 3; opacity: .55; background: #2563eb"></div>
     </section>
+    <section style="page-break-before: always; width: 560px; padding: 20px; background: #f8fafc">
+      <h2 style="margin-top: 0; color: #0f172a">Per-corner elliptical radii</h2>
+      <div style="width: 480px; height: 120px; padding: 18px; border: 4px solid #2563eb; border-radius: 64px 12px 42px 20px / 30px 18px 50px 10px; background: #dbeafe">
+        Native PDF cubic paths preserve four independent elliptical corners.
+      </div>
+      <div style="width: 300px; height: 70px; margin-top: 18px; overflow: hidden; border: 3px solid #0f766e; border-radius: 42px 8px / 28px 18px; background: #ccfbf1">
+        <div style="width: 160px; height: 48px; margin-left: 260px; margin-top: 10px; background: #0d9488"></div>
+      </div>
+    </section>
     <section style="page-break-before: always; display: grid; width: 600px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: 72px 110px; grid-template-areas: &quot;hero hero aside&quot; &quot;revenue users aside&quot;; gap: 14px; padding: 14px; background: #f8fafc">
       <div style="grid-area: hero; padding: 14px; background: #1e3a8a; color: white"><strong>Native CSS Grid dashboard</strong><br>Explicit named areas and flexible tracks</div>
       <div style="grid-area: revenue; padding: 14px; background: #dbeafe"><strong>Revenue</strong><br>EUR 128k</div>

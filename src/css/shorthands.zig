@@ -33,6 +33,7 @@ pub fn expand(
     if (values.eqlProp(name, "border-width")) return try expandQuad(allocator, "border-width", value, important);
     if (values.eqlProp(name, "border-style")) return try expandQuad(allocator, "border-style", value, important);
     if (values.eqlProp(name, "border-color")) return try expandQuad(allocator, "border-color", value, important);
+    if (values.eqlProp(name, "border-radius")) return try expandBorderRadius(allocator, value, important);
     if (values.eqlProp(name, "border-block-width")) return try expandLogicalPair(allocator, "border-block", "width", value, important);
     if (values.eqlProp(name, "border-inline-width")) return try expandLogicalPair(allocator, "border-inline", "width", value, important);
     if (values.eqlProp(name, "border-block-style")) return try expandLogicalPair(allocator, "border-block", "style", value, important);
@@ -64,6 +65,42 @@ pub fn expand(
     if (values.eqlProp(name, "list-style")) return try expandListStyle(allocator, value, important);
     if (values.eqlProp(name, "text-decoration")) return try expandTextDecoration(allocator, value, important);
     return null;
+}
+
+fn expandBorderRadius(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
+    if (isCssWideKeyword(std.mem.trim(u8, value, " \t\n\r\x0C"))) {
+        const declarations = try allocator.alloc(Declaration, 4);
+        const names = [_][]const u8{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" };
+        for (names, 0..) |name, index| declarations[index] = .{ .name = name, .value = value, .important = important };
+        return .{ .declarations = declarations, .owns_names = false };
+    }
+    const axes = splitSlashComponents(value);
+    if (axes.len == 0 or axes.len > 2) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+    const horizontal = splitComponents(axes.items[0]);
+    const vertical = if (axes.len == 2) splitComponents(axes.items[1]) else horizontal;
+    if (horizontal.len == 0 or horizontal.len > 4 or vertical.len == 0 or vertical.len > 4) {
+        return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+    }
+    const horizontal_values = expandRadiusQuad(horizontal);
+    const vertical_values = expandRadiusQuad(vertical);
+    const names = [_][]const u8{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" };
+    const declarations = try allocator.alloc(Declaration, 4);
+    for (names, 0..) |name, index| declarations[index] = .{
+        .name = name,
+        .value = try std.fmt.allocPrint(allocator, "{s} {s}", .{ horizontal_values[index], vertical_values[index] }),
+        .important = important,
+    };
+    return .{ .declarations = declarations, .owns_names = false, .owns_values = true };
+}
+
+fn expandRadiusQuad(components: Components) [4][]const u8 {
+    return switch (components.len) {
+        1 => .{ components.items[0], components.items[0], components.items[0], components.items[0] },
+        2 => .{ components.items[0], components.items[1], components.items[0], components.items[1] },
+        3 => .{ components.items[0], components.items[1], components.items[2], components.items[1] },
+        4 => .{ components.items[0], components.items[1], components.items[2], components.items[3] },
+        else => unreachable,
+    };
 }
 
 fn expandGridAxis(allocator: std.mem.Allocator, axis: []const u8, value: []const u8, important: bool) !Expansion {
@@ -638,6 +675,23 @@ test "expand physical and logical inset shorthands" {
     defer logical.deinit(allocator);
     try std.testing.expectEqualStrings("inset-inline-start", logical.declarations[0].name);
     try std.testing.expectEqualStrings("inset-inline-end", logical.declarations[1].name);
+}
+
+test "expand elliptical border radius into corner longhands" {
+    const allocator = std.testing.allocator;
+    const radius = (try expand(allocator, "border-radius", "10px 20% 30px / 4px 8px", true)).?;
+    defer radius.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 4), radius.declarations.len);
+    try std.testing.expectEqualStrings("border-top-left-radius", radius.declarations[0].name);
+    try std.testing.expectEqualStrings("10px 4px", radius.declarations[0].value);
+    try std.testing.expectEqualStrings("border-top-right-radius", radius.declarations[1].name);
+    try std.testing.expectEqualStrings("20% 8px", radius.declarations[1].value);
+    try std.testing.expectEqualStrings("border-bottom-right-radius", radius.declarations[2].name);
+    try std.testing.expectEqualStrings("30px 4px", radius.declarations[2].value);
+    try std.testing.expectEqualStrings("border-bottom-left-radius", radius.declarations[3].name);
+    try std.testing.expectEqualStrings("20% 8px", radius.declarations[3].value);
+    for (radius.declarations) |declaration| try std.testing.expect(declaration.important);
 }
 
 test "expand Grid placement and template shorthands" {

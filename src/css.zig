@@ -853,6 +853,25 @@ test "cascade: uniform border radius" {
     try std.testing.expectEqual(@as(f32, 14), ct.styles[div_id].border_radius);
 }
 
+test "cascade: elliptical border radius preserves per-corner percentages" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<style>.card { border-radius: 10% 20px 30% / 4px 8% 12px; }</style><div class='card'>rounded</div>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const div_id = ct.document.nodes.items[style_id].next_sibling.?;
+    const radii = ct.styles[div_id].border_radii;
+
+    try std.testing.expectEqual(box.Length{ .percent = 0.1 }, radii.top_left.x);
+    try std.testing.expectEqual(box.Length{ .px = 4 }, radii.top_left.y);
+    try std.testing.expectEqual(box.Length{ .px = 20 }, radii.top_right.x);
+    try std.testing.expectEqual(box.Length{ .percent = 0.08 }, radii.top_right.y);
+    try std.testing.expectEqual(box.Length{ .percent = 0.3 }, radii.bottom_right.x);
+    try std.testing.expectEqual(box.Length{ .px = 12 }, radii.bottom_right.y);
+    try std.testing.expectEqual(box.Length{ .px = 20 }, radii.bottom_left.x);
+    try std.testing.expectEqual(box.Length{ .percent = 0.08 }, radii.bottom_left.y);
+    try std.testing.expectEqual(@as(f32, 0), ct.styles[div_id].border_radius);
+}
+
 test "cascade: text-align and line-height" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<style>p { text-align: center; line-height: 1.5; }</style><p>centered</p>");

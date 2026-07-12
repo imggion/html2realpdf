@@ -108,6 +108,7 @@ pub fn layoutWithOptions(
         .border = border,
         .border_paint = types.borderPaint(style),
         .border_radius = style.border_radius,
+        .border_radii = style.border_radii,
         .box_decoration_break = style.box_decoration_break,
         .legacy_fragment_borders = !state.web_sizing,
         .page_break_before = style.page_break_before,
@@ -185,6 +186,10 @@ pub fn layoutWithOptions(
                         .left_color = marker_color,
                     },
                     .border_radius = if (is_circle) marker_width / 2 else 0,
+                    .border_radii = if (is_circle) blk: {
+                        const radius = box.CornerRadius{ .x = .{ .px = marker_width / 2 }, .y = .{ .px = marker_width / 2 } };
+                        break :blk .{ .top_left = radius, .top_right = radius, .bottom_right = radius, .bottom_left = radius };
+                    } else .{},
                 });
             },
         }

@@ -32,7 +32,7 @@ The browser package is published as `@imggion/html2realpdf`.
   `web` and `strict` profiles while `document` remains byte-stable;
 - JPEG pass-through, transparent PNG soft masks, vector backgrounds/borders,
   and live link annotations;
-- uniform `border-radius` fills and borders emitted as native PDF Bézier paths;
+- per-corner circular/elliptical `border-radius` fills, borders, and overflow clips emitted as native PDF Bézier paths;
 - compressed PDF 1.7 streams, metadata, deterministic classic xref output;
 - a versioned WASM ABI with independent result handles and structured errors;
 - an ESM/TypeScript browser package with Worker execution, DOM/React-ref
