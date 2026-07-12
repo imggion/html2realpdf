@@ -87,6 +87,7 @@ pub fn renderHtml(
     for (styles) |style| {
         if (!style.layout_supported) return Error.UnsupportedDisplayLayout;
         if ((style.display == .flex or style.display == .inlineFlex) and options.css_profile == .document) return Error.UnsupportedDisplayLayout;
+        if ((style.display == .grid or style.display == .inlineGrid) and options.css_profile == .document) return Error.UnsupportedDisplayLayout;
         if (style.position != .static and options.css_profile == .document) return Error.UnsupportedPositionedLayout;
         if (style.float_direction != .none and options.css_profile == .document) return Error.UnsupportedFloatLayout;
     }

@@ -22,6 +22,9 @@ The browser package is published as `@imggion/html2realpdf`.
 - Web/strict relative, absolute, fixed, and sticky positioning with physical
   and logical insets, positioned containing blocks, `z-index` paint phases,
   overflow clipping, native opacity, and repeated fixed page furniture;
+- Web/strict CSS Grid with explicit and implicit tracks, `fr`, `repeat()`,
+  `minmax()`, auto-placement, spans, named lines/areas, Box Alignment, nested
+  grids, intrinsic sizing, replaced elements, and page-aware row placement;
 - A4, Letter, landscape, custom page sizes, forced breaks, `break-inside`,
   orphans, and widows;
 - selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
@@ -37,8 +40,8 @@ The browser package is published as `@imggion/html2realpdf`.
 
 The document profile remains aimed at invoices, reports, tickets, letters, and
 similar documents. The Web profile additionally enables floats, Flexbox, and
-positioned layout. Grid, transforms, shadows, and arbitrary browser painting
-are still rejected or reported instead of being silently rasterized.
+positioned layout, and CSS Grid. Transforms, shadows, and arbitrary browser
+painting are still rejected or reported instead of being silently rasterized.
 
 See [docs/css-support.md](docs/css-support.md) for the versioned property and
 pipeline-stage support matrix.

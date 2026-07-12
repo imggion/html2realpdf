@@ -551,7 +551,7 @@ fn itemBaseline(fragments: []const @import("types.zig").Fragment, rect: geometry
 
 fn justifyDistribution(alignment: box.JustifyContent, free_space: f32, count: usize) Distribution {
     return switch (alignment) {
-        .flexStart => .{},
+        .normal, .flexStart => .{},
         .flexEnd => .{ .start = free_space },
         .center => .{ .start = free_space / 2 },
         .spaceBetween => if (count > 1 and free_space > 0) .{ .between = free_space / @as(f32, @floatFromInt(count - 1)) } else .{},

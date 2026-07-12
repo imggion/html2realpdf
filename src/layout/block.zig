@@ -198,6 +198,12 @@ pub fn layoutWithOptions(
             .{ .x = content_x, .y = content_y, .width = content_width, .height = specified_content_height orelse 0 },
             specified_content_height,
         );
+    } else if (state.web_sizing and (style.display == .grid or style.display == .inlineGrid)) {
+        child_cursor_y += try state.layoutGrid(
+            box_id,
+            .{ .x = content_x, .y = content_y, .width = content_width, .height = specified_content_height orelse 0 },
+            specified_content_height,
+        );
     } else if (source.kind == .table) {
         child_cursor_y += try state.layoutTable(box_id, content_x, content_y, content_width);
     } else if (source.first_child) |_| {
@@ -341,6 +347,8 @@ pub fn layoutWithOptions(
     if (source.kind == .replaced) {
         if (options.forced_content_height == null and options.forced_content_width != null and replaced_size.?.ratio != null) {
             content_height = options.forced_content_width.? / replaced_size.?.ratio.?;
+        } else if (options.forced_content_height == null and style.width.isAuto() and style.height.isAuto() and replaced_size.?.ratio != null) {
+            content_height = content_width / replaced_size.?.ratio.?;
         } else {
             content_height = @max(content_height, replaced_size.?.height);
         }
@@ -535,6 +543,7 @@ fn acceptsCollapsingChildren(source: box.Box) bool {
     const block_container = source.kind == .block or source.kind == .listItem or source.kind == .anonymousBlock;
     return block_container and source.style.float_direction == .none and
         source.style.display != .flex and source.style.display != .inlineFlex and
+        source.style.display != .grid and source.style.display != .inlineGrid and
         source.style.position != .absolute and source.style.position != .fixed and
         source.style.overflow == .visible;
 }

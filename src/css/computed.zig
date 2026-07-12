@@ -47,6 +47,8 @@ const parseJustifyContent = values.parseJustifyContent;
 const parseAlignItems = values.parseAlignItems;
 const parseAlignSelf = values.parseAlignSelf;
 const parseAlignContent = values.parseAlignContent;
+const parseGridAutoFlow = values.parseGridAutoFlow;
+const parseGridLine = values.parseGridLine;
 const parseNonNegativeNumber = values.parseNonNegativeNumber;
 const parseOrder = values.parseOrder;
 const parsePageBreak = values.parsePageBreak;
@@ -76,24 +78,27 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "align-content",         "align-items",          "align-self",            "aspect-ratio",              "background-color",
-    "border-bottom-color",   "border-bottom-style",  "border-bottom-width",   "border-collapse",           "border-left-color",
-    "border-left-style",     "border-left-width",    "border-radius",         "border-right-color",        "border-right-style",
-    "border-right-width",    "border-top-color",     "border-top-style",      "border-top-width",          "box-decoration-break",
-    "bottom",                "box-sizing",           "break-after",           "break-before",              "break-inside",
-    "caption-side",          "clear",                "color",                 "column-gap",                "direction",
-    "display",               "flex-basis",           "flex-direction",        "flex-grow",                 "flex-shrink",
-    "flex-wrap",             "float",                "font-family",           "font-size",                 "font-style",
-    "font-weight",           "gap",                  "height",                "justify-content",           "left",
-    "letter-spacing",        "line-height",          "list-style-position",   "list-style-type",           "margin-bottom",
-    "margin-left",           "margin-right",         "margin-top",            "max-height",                "max-width",
-    "min-height",            "min-width",            "object-fit",            "object-position",           "opacity",
-    "order",                 "orphans",              "overflow",              "overflow-wrap",             "padding-bottom",
-    "padding-left",          "padding-right",        "padding-top",           "page-break-after",          "page-break-before",
-    "page-break-inside",     "position",             "right",                 "row-gap",                   "text-align",
-    "text-decoration-color", "text-decoration-line", "text-decoration-style", "text-decoration-thickness", "text-indent",
-    "text-overflow",         "text-transform",       "top",                   "vertical-align",            "white-space",
-    "widows",                "width",                "word-break",            "word-spacing",              "z-index",
+    "align-content",             "align-items",         "align-self",            "aspect-ratio",         "background-color",
+    "border-bottom-color",       "border-bottom-style", "border-bottom-width",   "border-collapse",      "border-left-color",
+    "border-left-style",         "border-left-width",   "border-radius",         "border-right-color",   "border-right-style",
+    "border-right-width",        "border-top-color",    "border-top-style",      "border-top-width",     "box-decoration-break",
+    "bottom",                    "box-sizing",          "break-after",           "break-before",         "break-inside",
+    "caption-side",              "clear",               "color",                 "column-gap",           "direction",
+    "display",                   "flex-basis",          "flex-direction",        "flex-grow",            "flex-shrink",
+    "flex-wrap",                 "float",               "font-family",           "font-size",            "font-style",
+    "font-weight",               "gap",                 "grid-auto-columns",     "grid-auto-flow",       "grid-auto-rows",
+    "grid-column-end",           "grid-column-start",   "grid-row-end",          "grid-row-start",       "grid-template-areas",
+    "grid-template-columns",     "grid-template-rows",  "height",                "justify-content",      "justify-items",
+    "justify-self",              "left",                "letter-spacing",        "line-height",          "list-style-position",
+    "list-style-type",           "margin-bottom",       "margin-left",           "margin-right",         "margin-top",
+    "max-height",                "max-width",           "min-height",            "min-width",            "object-fit",
+    "object-position",           "opacity",             "order",                 "orphans",              "overflow",
+    "overflow-wrap",             "padding-bottom",      "padding-left",          "padding-right",        "padding-top",
+    "page-break-after",          "page-break-before",   "page-break-inside",     "position",             "right",
+    "row-gap",                   "text-align",          "text-decoration-color", "text-decoration-line", "text-decoration-style",
+    "text-decoration-thickness", "text-indent",         "text-overflow",         "text-transform",       "top",
+    "vertical-align",            "white-space",         "widows",                "width",                "word-break",
+    "word-spacing",              "z-index",
 };
 
 const logical_properties = [_][]const u8{
@@ -205,6 +210,30 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
         if (parseAlignSelf(value)) |alignment| style.align_self = alignment;
     } else if (eqlProp(name, "align-content")) {
         if (parseAlignContent(value)) |alignment| style.align_content = alignment;
+    } else if (eqlProp(name, "justify-items")) {
+        if (parseAlignItems(value)) |alignment| style.justify_items = alignment;
+    } else if (eqlProp(name, "justify-self")) {
+        if (parseAlignSelf(value)) |alignment| style.justify_self = alignment;
+    } else if (eqlProp(name, "grid-template-columns")) {
+        style.grid_template_columns = normalized;
+    } else if (eqlProp(name, "grid-template-rows")) {
+        style.grid_template_rows = normalized;
+    } else if (eqlProp(name, "grid-template-areas")) {
+        style.grid_template_areas = normalized;
+    } else if (eqlProp(name, "grid-auto-columns")) {
+        style.grid_auto_columns = normalized;
+    } else if (eqlProp(name, "grid-auto-rows")) {
+        style.grid_auto_rows = normalized;
+    } else if (eqlProp(name, "grid-auto-flow")) {
+        if (parseGridAutoFlow(value)) |flow| style.grid_auto_flow = flow;
+    } else if (eqlProp(name, "grid-column-start")) {
+        if (parseGridLine(value)) |line| style.grid_column_start = line;
+    } else if (eqlProp(name, "grid-column-end")) {
+        if (parseGridLine(value)) |line| style.grid_column_end = line;
+    } else if (eqlProp(name, "grid-row-start")) {
+        if (parseGridLine(value)) |line| style.grid_row_start = line;
+    } else if (eqlProp(name, "grid-row-end")) {
+        if (parseGridLine(value)) |line| style.grid_row_end = line;
     } else if (eqlProp(name, "row-gap") or eqlProp(name, "column-gap") or eqlProp(name, "gap")) {
         const gap: ?box.Length = if (eqlProp(normalized, "normal")) .{ .px = 0 } else try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(style.font_size));
         if (gap) |resolved| {
@@ -582,6 +611,54 @@ fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) 
     }
     if (eqlProp(name, "align-content")) {
         target.align_content = source.align_content;
+        return;
+    }
+    if (eqlProp(name, "justify-items")) {
+        target.justify_items = source.justify_items;
+        return;
+    }
+    if (eqlProp(name, "justify-self")) {
+        target.justify_self = source.justify_self;
+        return;
+    }
+    if (eqlProp(name, "grid-template-columns")) {
+        target.grid_template_columns = source.grid_template_columns;
+        return;
+    }
+    if (eqlProp(name, "grid-template-rows")) {
+        target.grid_template_rows = source.grid_template_rows;
+        return;
+    }
+    if (eqlProp(name, "grid-template-areas")) {
+        target.grid_template_areas = source.grid_template_areas;
+        return;
+    }
+    if (eqlProp(name, "grid-auto-columns")) {
+        target.grid_auto_columns = source.grid_auto_columns;
+        return;
+    }
+    if (eqlProp(name, "grid-auto-rows")) {
+        target.grid_auto_rows = source.grid_auto_rows;
+        return;
+    }
+    if (eqlProp(name, "grid-auto-flow")) {
+        target.grid_auto_flow = source.grid_auto_flow;
+        return;
+    }
+    if (eqlProp(name, "grid-column-start")) {
+        target.grid_column_start = source.grid_column_start;
+        return;
+    }
+    if (eqlProp(name, "grid-column-end")) {
+        target.grid_column_end = source.grid_column_end;
+        return;
+    }
+    if (eqlProp(name, "grid-row-start")) {
+        target.grid_row_start = source.grid_row_start;
+        return;
+    }
+    if (eqlProp(name, "grid-row-end")) {
+        target.grid_row_end = source.grid_row_end;
         return;
     }
     if (eqlProp(name, "box-decoration-break")) {

@@ -309,6 +309,15 @@ const State = struct {
         return flex.layout(self, container_id, content, specified_content_height);
     }
 
+    pub fn layoutGrid(
+        self: *State,
+        container_id: box.BoxId,
+        content: geometry.Rect,
+        specified_content_height: ?f32,
+    ) !f32 {
+        return grid.layout(self, container_id, content, specified_content_height);
+    }
+
     pub fn linkForBox(self: *const State, box_id: box.BoxId) ?[]const u8 {
         const node_id = self.tree.boxes.items[box_id].node orelse return null;
         const node = self.document.nodes.items[node_id];
@@ -2398,6 +2407,155 @@ test "Web column flex advances atomic items across fragmentainers" {
         .page_height = 60,
         .web_sizing = true,
     });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    var after: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+        if (color.green == 1 and color.red == 0) after = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 60), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), second.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 150), after.?.y, 0.01);
+}
+
+test "Web Grid lays out named areas fixed and flexible tracks" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:grid;width:300px;height:120px;grid-template-columns:100px 1fr;grid-template-rows:40px 1fr;grid-template-areas:&quot;head head&quot; &quot;side main&quot;;gap:10px'>" ++
+        "<div style='grid-area:head;background:#ff0000'>header</div>" ++
+        "<div style='grid-area:side;background:#00ff00'>side</div>" ++
+        "<div style='grid-area:main;background:#0000ff'>main</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var header: ?geometry.Rect = null;
+    var side: ?geometry.Rect = null;
+    var main: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.green == 0) header = fragment.rect;
+        if (color.green == 1 and color.red == 0) side = fragment.rect;
+        if (color.blue == 1 and color.red == 0) main = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 300), header.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), header.?.height, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), side.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), side.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 110), main.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 190), main.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 70), main.?.height, 0.01);
+}
+
+test "Web Grid auto placement spans alignment and nested grids" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='display:grid;width:330px;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:60px;gap:15px;align-items:center'>" ++
+        "<div style='height:20px;justify-self:end;background:#ff0000'>one</div>" ++
+        "<div style='grid-column:span 2;background:#00ff00'>span</div>" ++
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:4px;background:#0000ff'><span style='background:#ffff00'>a</span><span>b</span></div>" ++
+        "<div style='background:#ff00ff'>four</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 330, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var spanning: ?geometry.Rect = null;
+    var nested: ?geometry.Rect = null;
+    var fourth: ?geometry.Rect = null;
+    var nested_cell: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.green == 0 and color.blue == 0) first = fragment.rect;
+        if (color.green == 1 and color.red == 0) spanning = fragment.rect;
+        if (color.blue == 1 and color.red == 0) nested = fragment.rect;
+        if (color.red == 1 and color.blue == 1) fourth = fragment.rect;
+        if (color.red == 1 and color.green == 1 and color.blue == 0) nested_cell = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 20), first.?.height, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 215), spanning.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 95.4), nested.?.y, 0.1);
+    try std.testing.expectApproxEqAbs(nested.?.y, fourth.?.y, 0.01);
+    try std.testing.expect(nested_cell.?.width < nested.?.width / 2);
+}
+
+test "Web inline Grid uses track intrinsic width and preserves replaced ratios" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<p style='margin:0'><span style='display:inline-grid;grid-template-columns:40px 50px;column-gap:5px;background:#00ff00'><span>a</span><span>b</span></span><span>tail</span></p>" ++
+        "<div style='display:grid;width:200px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:100px'><img width='200' height='100'></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 220, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var inline_grid: ?geometry.Rect = null;
+    var image: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.background) |color| {
+            if (color.green == 1 and color.red == 0) inline_grid = fragment.rect;
+        }
+        if (fragment.kind == .replaced) image = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 95), inline_grid.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), image.?.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), image.?.height, 0.01);
+}
+
+test "Web Grid advances intact rows across fragmentainers" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:45px'></div>" ++
+        "<div style='display:grid;width:100px;grid-template-columns:1fr;grid-auto-rows:30px;row-gap:5px'>" ++
+        "<div style='background:#ff0000'>first</div><div style='background:#0000ff'>second</div></div>" ++
+        "<div style='height:10px;background:#00ff00'>after</div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 60, .web_sizing = true });
     defer result.deinit(allocator);
 
     var first: ?geometry.Rect = null;

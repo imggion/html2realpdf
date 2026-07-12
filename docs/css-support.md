@@ -12,9 +12,8 @@ label "CSS3".
   letters, tables, and presentation-like pages. Unsupported layout-critical
   behavior fails instead of being silently painted incorrectly.
 - **web** is the staged `0.2+` profile. It enables the Unicode typography,
-  browser snapshot, normal-flow, table, float, Flexbox, and positioned-layout
-  formatting contexts; Grid and the remaining web effects are staged
-  separately.
+  browser snapshot, normal-flow, table, float, Flexbox, positioned-layout, and
+  Grid formatting contexts; the remaining web effects are staged separately.
 - **strict** uses the same layout engine and turns unsupported CSS into an
   immediate error at the browser snapshot boundary.
 
@@ -63,6 +62,9 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `clear` | Y | Y | Y | Y | - | Y | Y | none, left, right, and both within the current block formatting context |
 | Flexbox container | Y | Y | Y | Y | Y | Y | Y | web/strict `flex` and `inline-flex`; row/column/reverse, wrap/wrap-reverse, gaps, justify/align items/content, baseline and RTL main-start |
 | Flexbox items | Y | Y | Y | Y | Y | Y | Y | basis including percentages/content, grow/shrink with iterative min/max freezing, partial grow factors, order, auto margins, replaced elements, nested flex, intrinsic sizing, and atomic line/item page advancement |
+| Grid container | Y | Y | Y | Y | Y | Y | Y | web/strict `grid` and `inline-grid`; explicit/implicit rows and columns, fixed/percentage/intrinsic/`fr` tracks, integer/auto `repeat()`, `minmax()`, gaps, nested grids, and row-aware pagination |
+| Grid placement | Y | Y | Y | Y | Y | Y | Y | row/column auto-flow with dense packing, numeric and negative lines, spans, named lines, rectangular named areas, stable `order`, and replaced items |
+| Grid alignment | Y | Y | Y | Y | Y | Y | Y | justify/align items, self, and content plus auto margins; horizontal-tb axes |
 | selectors | Y | Y | - | - | - | - | Y | type, class, ID, universal, compound, descendant, child |
 | `!important`, inheritance, source order | Y | Y | Y | - | - | - | Y | author origin and inline style ordering |
 | supported shorthands | Y | Y | Y | - | - | - | Y | expanded to physical longhands before computed values |
@@ -83,8 +85,8 @@ Playwright E2E make the matrix verifiable.
 - non-color typed values such as angles, transforms, and images; isolated
   opacity groups and blend/compositing modes remain pending;
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
-- Grid and full Appendix E painting nuances beyond the supported positioned
-  stacking phases;
+- Grid `subgrid`, masonry, and experimental features; full Appendix E painting
+  nuances beyond the supported positioned stacking phases;
 - multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
 - vertical `writing-mode` values; logical box properties currently map within horizontal-tb;
 - CSS `unicode-bidi` isolate/override modes and language-specific case tailoring beyond Unicode `SpecialCasing.txt`;
@@ -110,9 +112,10 @@ the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
   result handle in Node.
 - `make test-browser` runs the browser harness and mounted React-ref preview on
   Chromium, Firefox, and WebKit, plus a Chromium differential gate that compares
-  Web Flexbox and positioned-layout vector geometry with live DOM rectangles
-  within `0.75` CSS px; the positioned gate also verifies clipping, opacity,
-  stacking order, fixed-page repetition, and absence of raster fallback.
+  Web Flexbox, positioned-layout, and Grid vector geometry with live DOM
+  rectangles within `0.75` CSS px; the positioned gate also verifies clipping,
+  opacity, stacking order, fixed-page repetition, and absence of raster
+  fallback.
 - `make test-baseline` regenerates the versioned PDF fixtures in memory and
   compares their SHA-256 digests with the committed visual baseline manifest.
 - `make test-release` runs all of the above plus package and React builds.

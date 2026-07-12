@@ -136,6 +136,9 @@ pub fn measureBoxInline(
     if (source.style.display == .flex or source.style.display == .inlineFlex) {
         return measureFlexInline(allocator, tree, box_id, registry, shaping_mode);
     }
+    if (source.style.display == .grid or source.style.display == .inlineGrid) {
+        return measureGridInline(allocator, tree, box_id, registry, shaping_mode);
+    }
 
     var result = InlineSizes{};
     var line_min: f32 = 0;
@@ -168,6 +171,129 @@ pub fn measureBoxInline(
     }
     result.max_content = @max(result.max_content, result.min_content);
     return result;
+}
+
+fn measureGridInline(
+    allocator: std.mem.Allocator,
+    tree: *const box.BoxTree,
+    box_id: box.BoxId,
+    registry: ?*const font.Registry,
+    shaping_mode: font.ShapingMode,
+) std.mem.Allocator.Error!InlineSizes {
+    const source = tree.boxes.items[box_id];
+    const column_count = @min(gridTrackCount(source.style.grid_template_columns), 32);
+    var minimums: [32]f32 = @splat(0);
+    var maximums: [32]f32 = @splat(0);
+    var fixed_index: usize = 0;
+    applyFixedGridTracks(source.style.grid_template_columns, &minimums, &maximums, &fixed_index);
+    var source_index: usize = 0;
+    var child = source.first_child;
+    while (child) |child_id| : (source_index += 1) {
+        const child_box = tree.boxes.items[child_id];
+        child = child_box.next_sibling;
+        if (child_box.style.position == .absolute or child_box.style.position == .fixed) continue;
+        const measured = resolveChildContribution(child_box, try measureBoxInline(allocator, tree, child_id, registry, shaping_mode));
+        const column = switch (child_box.style.grid_column_start) {
+            .line => |line| if (line > 0) @min(@as(usize, @intCast(line - 1)), column_count - 1) else source_index % column_count,
+            else => source_index % column_count,
+        };
+        minimums[column] = @max(minimums[column], measured.min_content);
+        maximums[column] = @max(maximums[column], measured.max_content);
+    }
+    const gap = source.style.column_gap.resolve(0) orelse 0;
+    var result = InlineSizes{
+        .min_content = gap * @as(f32, @floatFromInt(column_count -| 1)),
+        .max_content = gap * @as(f32, @floatFromInt(column_count -| 1)),
+    };
+    for (minimums[0..column_count]) |value| result.min_content += value;
+    for (maximums[0..column_count]) |value| result.max_content += value;
+    result.max_content = @max(result.max_content, result.min_content);
+    return result;
+}
+
+fn applyFixedGridTracks(raw: []const u8, minimums: *[32]f32, maximums: *[32]f32, output_index: *usize) void {
+    var index: usize = 0;
+    while (index < raw.len and output_index.* < minimums.len) {
+        while (index < raw.len and std.ascii.isWhitespace(raw[index])) index += 1;
+        if (index >= raw.len) break;
+        if (raw[index] == '[') {
+            while (index < raw.len and raw[index] != ']') index += 1;
+            index += @intFromBool(index < raw.len);
+            continue;
+        }
+        const start = index;
+        var depth: usize = 0;
+        while (index < raw.len) : (index += 1) {
+            const byte = raw[index];
+            if (byte == '(') depth += 1 else if (byte == ')') depth -|= 1 else if (depth == 0 and std.ascii.isWhitespace(byte)) break;
+        }
+        const token = raw[start..index];
+        if (token.len > 8 and std.ascii.eqlIgnoreCase(token[0..7], "repeat(") and token[token.len - 1] == ')') {
+            const inner = token[7 .. token.len - 1];
+            const comma = gridTopLevelComma(inner) orelse continue;
+            const count = std.fmt.parseInt(usize, std.mem.trim(u8, inner[0..comma], " \t"), 10) catch 1;
+            for (0..count) |_| applyFixedGridTracks(inner[comma + 1 ..], minimums, maximums, output_index);
+            continue;
+        }
+        if (fixedGridLength(token)) |width| {
+            minimums[output_index.*] = @max(minimums[output_index.*], width);
+            maximums[output_index.*] = @max(maximums[output_index.*], width);
+        } else if (token.len > 8 and std.ascii.eqlIgnoreCase(token[0..7], "minmax(") and token[token.len - 1] == ')') {
+            const inner = token[7 .. token.len - 1];
+            if (gridTopLevelComma(inner)) |comma| {
+                if (fixedGridLength(std.mem.trim(u8, inner[0..comma], " \t"))) |minimum| minimums[output_index.*] = @max(minimums[output_index.*], minimum);
+                if (fixedGridLength(std.mem.trim(u8, inner[comma + 1 ..], " \t"))) |maximum| maximums[output_index.*] = @max(maximums[output_index.*], maximum);
+            }
+        }
+        output_index.* += 1;
+    }
+}
+
+fn fixedGridLength(value: []const u8) ?f32 {
+    if (std.mem.eql(u8, value, "0")) return 0;
+    if (!std.mem.endsWith(u8, value, "px")) return null;
+    return std.fmt.parseFloat(f32, value[0 .. value.len - 2]) catch null;
+}
+
+fn gridTopLevelComma(value: []const u8) ?usize {
+    var depth: usize = 0;
+    for (value, 0..) |byte, index| {
+        if (byte == '(') depth += 1 else if (byte == ')') depth -|= 1 else if (byte == ',' and depth == 0) return index;
+    }
+    return null;
+}
+
+fn gridTrackCount(raw: []const u8) usize {
+    const value = std.mem.trim(u8, raw, " \t\n\r\x0C");
+    if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "none")) return 1;
+    var count: usize = 0;
+    var index: usize = 0;
+    while (index < value.len) {
+        while (index < value.len and std.ascii.isWhitespace(value[index])) index += 1;
+        if (index >= value.len) break;
+        if (value[index] == '[') {
+            while (index < value.len and value[index] != ']') index += 1;
+            index += @intFromBool(index < value.len);
+            continue;
+        }
+        const start = index;
+        var depth: usize = 0;
+        while (index < value.len) : (index += 1) {
+            const byte = value[index];
+            if (byte == '(') depth += 1 else if (byte == ')') depth -|= 1 else if (depth == 0 and std.ascii.isWhitespace(byte)) break;
+        }
+        const token = value[start..index];
+        if (token.len > 8 and std.ascii.eqlIgnoreCase(token[0..7], "repeat(")) {
+            const comma = std.mem.indexOfScalar(u8, token, ',') orelse {
+                count += 1;
+                continue;
+            };
+            count += std.fmt.parseInt(usize, std.mem.trim(u8, token[7..comma], " \t"), 10) catch 1;
+        } else {
+            count += 1;
+        }
+    }
+    return @max(count, 1);
 }
 
 fn measureFlexInline(

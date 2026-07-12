@@ -64,6 +64,15 @@ const html = `
       <div style="position: absolute; left: 40px; top: 135px; width: 145px; height: 70px; z-index: 1; background: #ea580c"></div>
       <div style="position: absolute; left: 70px; top: 150px; width: 145px; height: 70px; z-index: 3; opacity: .55; background: #2563eb"></div>
     </section>
+    <section style="page-break-before: always; display: grid; width: 600px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: 72px 110px; grid-template-areas: &quot;hero hero aside&quot; &quot;revenue users aside&quot;; gap: 14px; padding: 14px; background: #f8fafc">
+      <div style="grid-area: hero; padding: 14px; background: #1e3a8a; color: white"><strong>Native CSS Grid dashboard</strong><br>Explicit named areas and flexible tracks</div>
+      <div style="grid-area: revenue; padding: 14px; background: #dbeafe"><strong>Revenue</strong><br>EUR 128k</div>
+      <div style="grid-area: users; padding: 14px; background: #dcfce7"><strong>Active users</strong><br>4,812</div>
+      <div style="display: grid; grid-area: aside; grid-template-rows: 1fr 1fr; gap: 8px; padding: 10px; background: #fef3c7">
+        <div style="padding: 10px; background: #fde68a"><strong>Nested Grid</strong></div>
+        <div style="padding: 10px; background: #facc15">Vector cells</div>
+      </div>
+    </section>
     <section style="box-decoration-break: clone; width: 400px; height: 820px; margin-top: 18px; padding: 12px; border: 5px solid #7c3aed; border-radius: 10px; background: #f5f3ff">
       <h2 style="margin-top: 0; color: #6d28d9">Cloned page decoration</h2>
       <p>This tall native box crosses a page boundary. Its purple border and rounded corners must be painted on both fragments.</p>

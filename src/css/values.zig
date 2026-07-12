@@ -21,6 +21,8 @@ pub fn parseDisplay(value: []const u8) ?box.Display {
     if (eqlProp(v, "inline-block")) return .inlineBlock;
     if (eqlProp(v, "flex")) return .flex;
     if (eqlProp(v, "inline-flex")) return .inlineFlex;
+    if (eqlProp(v, "grid")) return .grid;
+    if (eqlProp(v, "inline-grid")) return .inlineGrid;
     if (eqlProp(v, "table")) return .table;
     if (eqlProp(v, "table-row")) return .tableRow;
     if (eqlProp(v, "table-cell")) return .tableCell;
@@ -29,6 +31,41 @@ pub fn parseDisplay(value: []const u8) ?box.Display {
     if (eqlProp(v, "table-column")) return .tableColumn;
     if (eqlProp(v, "table-column-group")) return .tableColumnGroup;
     return null;
+}
+
+pub fn parseGridAutoFlow(value: []const u8) ?box.GridAutoFlow {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "row")) return .row;
+    if (eqlProp(v, "column")) return .column;
+    if (eqlProp(v, "dense") or eqlProp(v, "row dense") or eqlProp(v, "dense row")) return .rowDense;
+    if (eqlProp(v, "column dense") or eqlProp(v, "dense column")) return .columnDense;
+    return null;
+}
+
+pub fn parseGridLine(value: []const u8) ?box.GridLine {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "auto")) return .auto;
+
+    var tokens = std.mem.tokenizeAny(u8, v, " \t\n\r\x0C");
+    const first = tokens.next() orelse return null;
+    if (eqlProp(first, "span")) {
+        const second = tokens.next() orelse return .{ .span = 1 };
+        const parsed_count = std.fmt.parseInt(u16, second, 10) catch null;
+        if (parsed_count) |count| {
+            if (count == 0 or tokens.next() != null) return null;
+            return .{ .span = count };
+        }
+        const third = tokens.next();
+        const count = if (third) |candidate| std.fmt.parseInt(u16, candidate, 10) catch return null else 1;
+        if (count == 0 or tokens.next() != null) return null;
+        return .{ .namedSpan = .{ .name = second, .count = count } };
+    }
+    if (std.fmt.parseInt(i32, first, 10) catch null) |line| {
+        if (line == 0 or tokens.next() != null) return null;
+        return .{ .line = line };
+    }
+    if (tokens.next() != null) return null;
+    return .{ .named = first };
 }
 
 pub fn parseFlexDirection(value: []const u8) ?box.FlexDirection {
@@ -50,7 +87,8 @@ pub fn parseFlexWrap(value: []const u8) ?box.FlexWrap {
 
 pub fn parseJustifyContent(value: []const u8) ?box.JustifyContent {
     const v = stripSafeAlignment(value);
-    if (eqlProp(v, "normal") or eqlProp(v, "start") or eqlProp(v, "flex-start")) return .flexStart;
+    if (eqlProp(v, "normal")) return .normal;
+    if (eqlProp(v, "start") or eqlProp(v, "flex-start")) return .flexStart;
     if (eqlProp(v, "end") or eqlProp(v, "flex-end")) return .flexEnd;
     if (eqlProp(v, "center")) return .center;
     if (eqlProp(v, "space-between")) return .spaceBetween;

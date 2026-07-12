@@ -42,6 +42,18 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "align-items",
   "align-self",
   "align-content",
+  "justify-items",
+  "justify-self",
+  "grid-template-columns",
+  "grid-template-rows",
+  "grid-template-areas",
+  "grid-auto-columns",
+  "grid-auto-rows",
+  "grid-auto-flow",
+  "grid-column-start",
+  "grid-column-end",
+  "grid-row-start",
+  "grid-row-end",
   "width",
   "height",
   "min-width",
@@ -127,6 +139,8 @@ const SUPPORTED_DISPLAY = new Set([
   "inline-block",
   "flex",
   "inline-flex",
+  "grid",
+  "inline-grid",
   "table",
   "table-row-group",
   "table-header-group",
@@ -145,6 +159,7 @@ const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   "border-width", "border-style", "border-color", "background", "page-break-before", "page-break-after",
   "page-break-inside", "list-style", "flex", "flex-flow", "gap", "inset", "inset-block", "inset-inline",
   "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end", "orphans", "widows",
+  "grid", "grid-template", "grid-column", "grid-row", "grid-area",
 ]);
 
 export async function snapshotSource(source: HtmlSource, options: SnapshotOptions): Promise<SnapshotResult> {
@@ -745,7 +760,7 @@ function materializeComputedStyle(
   const position = computed.getPropertyValue("position");
   const floatValue = computed.getPropertyValue("float");
 
-  if (!SUPPORTED_DISPLAY.has(display) || ((display === "flex" || display === "inline-flex") && !usesWebLayout(options))) {
+  if (!SUPPORTED_DISPLAY.has(display) || (["flex", "inline-flex", "grid", "inline-grid"].includes(display) && !usesWebLayout(options))) {
     throw new UnsupportedCssError(`display:${display} is outside the document/report layout profile`);
   }
   if (position !== "static" && !usesWebLayout(options)) {
@@ -1249,7 +1264,7 @@ function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnost
 }
 
 function validateAuthoredLayout(property: string, value: string, options: SnapshotOptions): void {
-  if (property === "display" && (!SUPPORTED_DISPLAY.has(value) || ((value === "flex" || value === "inline-flex") && !usesWebLayout(options)))) {
+  if (property === "display" && (!SUPPORTED_DISPLAY.has(value) || (["flex", "inline-flex", "grid", "inline-grid"].includes(value) && !usesWebLayout(options)))) {
     throw new UnsupportedCssError(`display:${value} is outside the document/report layout profile`);
   }
   if (property === "position" && value !== "static" && !usesWebLayout(options)) {

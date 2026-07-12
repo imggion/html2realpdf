@@ -173,7 +173,7 @@ fn assignBoxMetadata(
     }
     std.mem.sort(Child, children.items, SortContext{
         .tree = state.tree,
-        .flex_parent = source.style.display == .flex or source.style.display == .inlineFlex,
+        .flex_parent = source.style.display == .flex or source.style.display == .inlineFlex or source.style.display == .grid or source.style.display == .inlineGrid,
     }, childLessThan);
     for (children.items) |entry| {
         try assignBoxMetadata(state, entry.box_id, opacity[box_id], orders, opacity, next_order);

@@ -80,6 +80,8 @@ pub const Display = enum {
     inlineBlock,
     flex,
     inlineFlex,
+    grid,
+    inlineGrid,
     table,
     tableRow,
     tableCell,
@@ -97,6 +99,8 @@ pub const Display = enum {
             .inlineBlock => "inline-block",
             .flex => "flex",
             .inlineFlex => "inline-flex",
+            .grid => "grid",
+            .inlineGrid => "inline-grid",
             .table => "table",
             .tableRow => "table-row",
             .tableCell => "table-cell",
@@ -239,7 +243,7 @@ pub const FlexDirection = enum {
 
 pub const FlexWrap = enum { nowrap, wrap, wrapReverse };
 
-pub const JustifyContent = enum { flexStart, flexEnd, center, spaceBetween, spaceAround, spaceEvenly };
+pub const JustifyContent = enum { normal, flexStart, flexEnd, center, spaceBetween, spaceAround, spaceEvenly };
 
 pub const AlignItems = enum { stretch, flexStart, flexEnd, center, baseline };
 
@@ -664,6 +668,21 @@ pub const Insets = struct {
     left: Length = .auto,
 };
 
+pub const GridAutoFlow = enum {
+    row,
+    column,
+    rowDense,
+    columnDense,
+};
+
+pub const GridLine = union(enum) {
+    auto,
+    line: i32,
+    span: u16,
+    named: []const u8,
+    namedSpan: struct { name: []const u8, count: u16 = 1 },
+};
+
 /// Style data resolved enough for Box Tree construction.
 ///
 /// This is not the CSS parser format. The builder only needs properties that
@@ -726,10 +745,22 @@ pub const Style = struct {
     order: i32 = 0,
     row_gap: Length = .{ .px = 0 },
     column_gap: Length = .{ .px = 0 },
-    justify_content: JustifyContent = .flexStart,
+    justify_content: JustifyContent = .normal,
     align_items: AlignItems = .stretch,
     align_self: AlignSelf = .auto,
     align_content: AlignContent = .stretch,
+    justify_items: AlignItems = .stretch,
+    justify_self: AlignSelf = .auto,
+    grid_template_columns: []const u8 = "none",
+    grid_template_rows: []const u8 = "none",
+    grid_template_areas: []const u8 = "none",
+    grid_auto_columns: []const u8 = "auto",
+    grid_auto_rows: []const u8 = "auto",
+    grid_auto_flow: GridAutoFlow = .row,
+    grid_column_start: GridLine = .auto,
+    grid_column_end: GridLine = .auto,
+    grid_row_start: GridLine = .auto,
+    grid_row_end: GridLine = .auto,
     border_collapse: BorderCollapse = .separate,
     caption_side: CaptionSide = .top,
     border_radius: f32 = 0,
@@ -1014,10 +1045,22 @@ const BuildState = struct {
         style.order = 0;
         style.row_gap = .{ .px = 0 };
         style.column_gap = .{ .px = 0 };
-        style.justify_content = .flexStart;
+        style.justify_content = .normal;
         style.align_items = .stretch;
         style.align_self = .auto;
         style.align_content = .stretch;
+        style.justify_items = .stretch;
+        style.justify_self = .auto;
+        style.grid_template_columns = "none";
+        style.grid_template_rows = "none";
+        style.grid_template_areas = "none";
+        style.grid_auto_columns = "auto";
+        style.grid_auto_rows = "auto";
+        style.grid_auto_flow = .row;
+        style.grid_column_start = .auto;
+        style.grid_column_end = .auto;
+        style.grid_row_start = .auto;
+        style.grid_row_end = .auto;
 
         return style;
     }
@@ -1315,10 +1358,22 @@ fn anonymousStyle(parent: Style) Style {
     style.order = 0;
     style.row_gap = .{ .px = 0 };
     style.column_gap = .{ .px = 0 };
-    style.justify_content = .flexStart;
+    style.justify_content = .normal;
     style.align_items = .stretch;
     style.align_self = .auto;
     style.align_content = .stretch;
+    style.justify_items = .stretch;
+    style.justify_self = .auto;
+    style.grid_template_columns = "none";
+    style.grid_template_rows = "none";
+    style.grid_template_areas = "none";
+    style.grid_auto_columns = "auto";
+    style.grid_auto_rows = "auto";
+    style.grid_auto_flow = .row;
+    style.grid_column_start = .auto;
+    style.grid_column_end = .auto;
+    style.grid_row_start = .auto;
+    style.grid_row_end = .auto;
     return style;
 }
 
@@ -1380,6 +1435,8 @@ fn boxTypeForElement(element: dom.Element, style: Style) BoxType {
         .inlineBlock => .inlineBlock,
         .flex => .block,
         .inlineFlex => .inlineBlock,
+        .grid => .block,
+        .inlineGrid => .inlineBlock,
         .table => .table,
         .tableRow => .tableRow,
         .tableCell => .tableCell,

@@ -678,6 +678,8 @@ test "parse value: display keywords" {
     try std.testing.expectEqual(box.Display.inlineBox, parseDisplay("inline").?);
     try std.testing.expectEqual(box.Display.none, parseDisplay("none").?);
     try std.testing.expectEqual(box.Display.inlineBlock, parseDisplay("inline-block").?);
+    try std.testing.expectEqual(box.Display.grid, parseDisplay("grid").?);
+    try std.testing.expectEqual(box.Display.inlineGrid, parseDisplay("inline-grid").?);
 }
 
 test "parse font weight and style" {
@@ -1029,6 +1031,26 @@ test "cascade: flex shorthands produce typed non-inherited item and container va
     try std.testing.expectEqual(box.AlignSelf.flexEnd, ct.styles[item_id].align_self);
     try std.testing.expect(ct.styles[item_id].margin_auto.left);
     try std.testing.expectEqual(@as(f32, 0), ct.styles[item_id].margin.left);
+}
+
+test "cascade: Grid tracks placement areas and alignment remain canonical" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='display:grid;grid-template-columns:[start] repeat(2,minmax(0,1fr)) [end];grid-template-rows:auto 40px;grid-template-areas:&quot;hero hero&quot; &quot;side main&quot;;grid-auto-flow:row dense;grid-auto-columns:80px;justify-items:center'>" ++
+        "<span style='grid-area:main;grid-column:2 / span 1;justify-self:end'>item</span></div>");
+    defer ct.deinit(allocator);
+    const container_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const item_id = ct.document.nodes.items[container_id].first_child.?;
+    const container = ct.styles[container_id];
+    const item = ct.styles[item_id];
+    try std.testing.expectEqual(box.Display.grid, container.display);
+    try std.testing.expectEqualStrings("[start] repeat(2,minmax(0,1fr)) [end]", container.grid_template_columns);
+    try std.testing.expectEqualStrings("auto 40px", container.grid_template_rows);
+    try std.testing.expectEqualStrings("\"hero hero\" \"side main\"", container.grid_template_areas);
+    try std.testing.expectEqual(box.GridAutoFlow.rowDense, container.grid_auto_flow);
+    try std.testing.expectEqual(box.AlignItems.center, container.justify_items);
+    try std.testing.expectEqual(@as(i32, 2), item.grid_column_start.line);
+    try std.testing.expectEqual(@as(u16, 1), item.grid_column_end.span);
+    try std.testing.expectEqual(box.AlignSelf.flexEnd, item.justify_self);
 }
 
 test "cascade: positioned layout resolves physical logical and group properties" {

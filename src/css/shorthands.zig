@@ -57,9 +57,61 @@ pub fn expand(
     if (values.eqlProp(name, "inset")) return try expandInset(allocator, value, important);
     if (values.eqlProp(name, "inset-block")) return try expandLogicalPair(allocator, "inset-block", null, value, important);
     if (values.eqlProp(name, "inset-inline")) return try expandLogicalPair(allocator, "inset-inline", null, value, important);
+    if (values.eqlProp(name, "grid-column")) return try expandGridAxis(allocator, "column", value, important);
+    if (values.eqlProp(name, "grid-row")) return try expandGridAxis(allocator, "row", value, important);
+    if (values.eqlProp(name, "grid-area")) return try expandGridArea(allocator, value, important);
+    if (values.eqlProp(name, "grid-template") or values.eqlProp(name, "grid")) return try expandGridTemplate(allocator, value, important);
     if (values.eqlProp(name, "list-style")) return try expandListStyle(allocator, value, important);
     if (values.eqlProp(name, "text-decoration")) return try expandTextDecoration(allocator, value, important);
     return null;
+}
+
+fn expandGridAxis(allocator: std.mem.Allocator, axis: []const u8, value: []const u8, important: bool) !Expansion {
+    const components = splitSlashComponents(value);
+    if (components.len == 0 or components.len > 2) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = true };
+    const declarations = try allocator.alloc(Declaration, 2);
+    declarations[0] = .{
+        .name = try std.fmt.allocPrint(allocator, "grid-{s}-start", .{axis}),
+        .value = components.items[0],
+        .important = important,
+    };
+    declarations[1] = .{
+        .name = try std.fmt.allocPrint(allocator, "grid-{s}-end", .{axis}),
+        .value = if (components.len == 2) components.items[1] else "auto",
+        .important = important,
+    };
+    return .{ .declarations = declarations, .owns_names = true };
+}
+
+fn expandGridArea(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
+    const components = splitSlashComponents(value);
+    if (components.len == 0 or components.len > 4) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+    const single_named = if (components.len == 1)
+        if (values.parseGridLine(components.items[0])) |line| switch (line) {
+            .named => true,
+            else => false,
+        } else false
+    else
+        false;
+    const row_start = components.items[0];
+    const column_start = if (components.len > 1) components.items[1] else if (single_named) row_start else "auto";
+    const row_end = if (components.len > 2) components.items[2] else if (single_named) row_start else "auto";
+    const column_end = if (components.len > 3) components.items[3] else if (single_named) row_start else "auto";
+    const declarations = try allocator.alloc(Declaration, 4);
+    declarations[0] = .{ .name = "grid-row-start", .value = row_start, .important = important };
+    declarations[1] = .{ .name = "grid-column-start", .value = column_start, .important = important };
+    declarations[2] = .{ .name = "grid-row-end", .value = row_end, .important = important };
+    declarations[3] = .{ .name = "grid-column-end", .value = column_end, .important = important };
+    return .{ .declarations = declarations, .owns_names = false };
+}
+
+fn expandGridTemplate(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
+    const components = splitSlashComponents(value);
+    if (components.len != 2) return .{ .declarations = try allocator.alloc(Declaration, 0), .owns_names = false };
+    const declarations = try allocator.alloc(Declaration, 2);
+    declarations[0] = .{ .name = "grid-template-rows", .value = components.items[0], .important = important };
+    declarations[1] = .{ .name = "grid-template-columns", .value = components.items[1], .important = important };
+    return .{ .declarations = declarations, .owns_names = false };
 }
 
 fn expandInset(allocator: std.mem.Allocator, value: []const u8, important: bool) !Expansion {
@@ -416,6 +468,37 @@ const Components = struct {
     }
 };
 
+fn splitSlashComponents(value: []const u8) Components {
+    var result = Components{};
+    var start: usize = 0;
+    var index: usize = 0;
+    var depth: usize = 0;
+    var quote: ?u8 = null;
+    while (index <= value.len) : (index += 1) {
+        const at_end = index == value.len;
+        const byte = if (at_end) 0 else value[index];
+        if (!at_end and quote != null) {
+            if (byte == '\\' and index + 1 < value.len) index += 1 else if (byte == quote.?) quote = null;
+            continue;
+        }
+        if (!at_end and (byte == '"' or byte == '\'')) {
+            quote = byte;
+        } else if (!at_end and (byte == '(' or byte == '[' or byte == '{')) {
+            depth += 1;
+        } else if (!at_end and (byte == ')' or byte == ']' or byte == '}')) {
+            depth -|= 1;
+        } else if (at_end or (depth == 0 and byte == '/')) {
+            if (result.len == result.items.len) break;
+            const component = std.mem.trim(u8, value[start..index], " \t\n\r\x0C");
+            if (component.len == 0) return .{};
+            result.items[result.len] = component;
+            result.len += 1;
+            start = index + 1;
+        }
+    }
+    return result;
+}
+
 fn splitComponents(value: []const u8) Components {
     var result = Components{};
     var index: usize = 0;
@@ -555,4 +638,24 @@ test "expand physical and logical inset shorthands" {
     defer logical.deinit(allocator);
     try std.testing.expectEqualStrings("inset-inline-start", logical.declarations[0].name);
     try std.testing.expectEqualStrings("inset-inline-end", logical.declarations[1].name);
+}
+
+test "expand Grid placement and template shorthands" {
+    const allocator = std.testing.allocator;
+    const column = (try expand(allocator, "grid-column", "2 / span 3", false)).?;
+    defer column.deinit(allocator);
+    try std.testing.expectEqualStrings("grid-column-start", column.declarations[0].name);
+    try std.testing.expectEqualStrings("2", column.declarations[0].value);
+    try std.testing.expectEqualStrings("span 3", column.declarations[1].value);
+
+    const area = (try expand(allocator, "grid-area", "hero", false)).?;
+    defer area.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 4), area.declarations.len);
+    for (area.declarations) |declaration| try std.testing.expectEqualStrings("hero", declaration.value);
+
+    const template = (try expand(allocator, "grid-template", "auto 1fr / 120px minmax(0,1fr)", true)).?;
+    defer template.deinit(allocator);
+    try std.testing.expectEqualStrings("auto 1fr", template.declarations[0].value);
+    try std.testing.expectEqualStrings("120px minmax(0,1fr)", template.declarations[1].value);
+    try std.testing.expect(template.declarations[0].important);
 }
