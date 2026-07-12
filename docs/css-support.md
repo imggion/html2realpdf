@@ -118,7 +118,8 @@ WASM result handle as owned structured diagnostics. Browser snapshots attach
 the same diagnostic shape and honor `unsupportedCss: "warn" | "error" |
 "ignore"`. Unsupported inline SVG emits `CSS_SUBTREE_RASTERIZED` with a
 `nodePath`, `phase: "paint"`, and `fallback: "rasterized-subtree"`; callers can
-disable that scoped fallback with `fallback: "error"`.
+opt into that scoped fallback with `fallback: "rasterize-subtree"`. The default
+is `fallback: "error"`; whole-page rasterization is never used.
 
 ## Verification gates
 

@@ -493,11 +493,12 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
-async function renderFixture(html, metadata) {
+async function renderFixture(html, metadata, options = {}) {
   const renderer = await getPackageRenderer();
   return renderer.render(html, {
     page: { format: "a4", margin: [32, 36, 32, 36], unit: "pt" },
     metadata,
+    ...options,
   });
 }
 
@@ -515,7 +516,7 @@ async function renderAnalyticsReport() {
     author: "Northstar Commerce",
     subject: "Quarterly business review fixture",
     keywords: ["analytics", "revenue", "quarterly report"],
-  });
+  }, { fallback: "rasterize-subtree" });
 }
 
 async function renderRoundedOperationsReport() {

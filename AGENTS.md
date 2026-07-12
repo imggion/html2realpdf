@@ -34,8 +34,9 @@ Read these local docs before changing code:
 - `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
 - The browser package is framework-agnostic; React refs are supported structurally without a React dependency.
 - Supported inline SVG shapes and paths remain vector through `src/svg.zig` and
-  PDF Form XObjects; unsupported SVG rasterizes only its subtree with a
-  structured diagnostic and honors `fallback: "error"`.
+  PDF Form XObjects; unsupported SVG is rejected by default and rasterizes only
+  its subtree with a structured diagnostic after explicit
+  `fallback: "rasterize-subtree"` opt-in.
 - Browser rendering resolves default, named, and `:first`/`:left`/`:right`/`:blank`
   `@page` geometry through a typed page-rule cascade unless explicit API page
   options override it. Pagination, display-list commands, and PDF coordinate

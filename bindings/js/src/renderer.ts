@@ -137,7 +137,9 @@ export class Html2RealPdf {
       // API opts into print rather than silently changing existing documents.
       mediaType: options.mediaType ?? "screen",
       unsupportedCss: options.unsupportedCss ?? (options.cssProfile === "strict" || options.strict ? "error" : "warn"),
-      fallback: options.fallback ?? (options.cssProfile === "strict" || options.strict ? "error" : "rasterize-subtree"),
+      // Raster fallback is deliberately opt-in. A caller must acknowledge the
+      // loss of native PDF primitives for the affected subtree explicitly.
+      fallback: options.fallback ?? "error",
     };
     if (options.baseUrl !== undefined) snapshotOptions.baseUrl = options.baseUrl;
     if (options.resourceResolver !== undefined) snapshotOptions.resourceResolver = options.resourceResolver;

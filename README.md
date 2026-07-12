@@ -55,9 +55,10 @@ similar documents. The Web profile additionally enables floats, Flexbox,
 positioned layout, CSS Grid, 2D transforms, layered backgrounds, gradients,
 shadows, and isolated opacity. Filters, blend modes, 3D transforms, and
 arbitrary browser painting are still rejected or reported instead of silently
-rasterizing the whole page. Canvas and unsupported SVG paint can rasterize only
-their own subtree; every such SVG fallback is exposed through structured
-diagnostics and can be disabled with `fallback: "error"`.
+rasterizing the whole page. Canvas is captured as its own image resource.
+Unsupported SVG paint is rejected by default and can rasterize only its own
+subtree when callers explicitly opt into `fallback: "rasterize-subtree"`;
+every fallback is exposed through structured diagnostics.
 
 See [docs/css-support.md](docs/css-support.md) for the versioned property and
 pipeline-stage support matrix.
@@ -69,6 +70,10 @@ import { renderPdf } from "@imggion/html2realpdf";
 
 const pdf = await renderPdf(document.querySelector("#invoice")!, {
   cssProfile: "web",
+  mediaType: "print",
+  viewport: { width: 1440, height: 900 },
+  unsupportedCss: "warn",
+  fallback: "error",
   page: { format: "a4", margin: [15, 12], unit: "mm" },
   metadata: { title: "Invoice 2026-001", author: "Example Ltd" },
 });

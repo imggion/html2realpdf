@@ -139,6 +139,36 @@ test("packaged WASM returns owned structured CSS diagnostics", async () => {
   }
 });
 
+test("packaged WASM strict profile rejects unsupported CSS", async () => {
+  const wasm = await readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url));
+  const { instance } = await WebAssembly.instantiate(wasm, {});
+  const exports = instance.exports;
+  const encoder = new TextEncoder();
+  const input = encoder.encode('<p style="filter:blur(2px);color:red">strict</p>');
+  const options = encoder.encode(JSON.stringify({
+    pageWidthPoints: 595.2756,
+    pageHeightPoints: 841.8898,
+    cssProfile: "strict",
+  }));
+  const inputPointer = exports.alloc(input.length);
+  const optionsPointer = exports.alloc(options.length);
+  new Uint8Array(exports.memory.buffer, inputPointer, input.length).set(input);
+  new Uint8Array(exports.memory.buffer, optionsPointer, options.length).set(options);
+  const result = exports.render_html_to_pdf_with_json_options(inputPointer, input.length, optionsPointer, options.length);
+
+  try {
+    assert.notEqual(exports.pdf_result_status(result), 0);
+    const pointer = exports.pdf_result_error_ptr(result);
+    const length = exports.pdf_result_error_len(result);
+    const message = new TextDecoder().decode(new Uint8Array(exports.memory.buffer, pointer, length));
+    assert.match(message, /UnsupportedCss/);
+  } finally {
+    exports.pdf_result_free(result);
+    exports.free(inputPointer, input.length);
+    exports.free(optionsPointer, options.length);
+  }
+});
+
 test("packaged WASM context registers and embeds a custom TrueType family", async () => {
   const [wasm, font] = await Promise.all([
     readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url)),

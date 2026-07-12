@@ -41,6 +41,7 @@ pub const Options = struct {
 };
 
 pub const Error = error{
+    UnsupportedCss,
     UnsupportedPositionedLayout,
     UnsupportedFloatLayout,
     UnsupportedDisplayLayout,
@@ -95,6 +96,7 @@ pub fn renderHtml(
         .viewport_height = page_spec.contentHeightCssPx(),
         .diagnostics = &diagnostic_list,
     });
+    if (options.css_profile == .strict and diagnostic_list.items.len > 0) return Error.UnsupportedCss;
     for (styles) |style| {
         if (!style.layout_supported) return Error.UnsupportedDisplayLayout;
         if ((style.display == .flex or style.display == .inlineFlex) and options.css_profile == .document) return Error.UnsupportedDisplayLayout;
@@ -309,6 +311,17 @@ test "return structured diagnostics for ignored CSS declarations" {
     try std.testing.expect(std.mem.indexOf(u8, result.diagnostics_json, "\"code\":\"UNSUPPORTED_CSS_PROPERTY\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.diagnostics_json, "\"property\":\"filter\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.diagnostics_json, "\"phase\":\"computed\"") != null);
+}
+
+test "strict profile rejects unsupported native declarations" {
+    try std.testing.expectError(
+        Error.UnsupportedCss,
+        renderHtml(
+            std.testing.allocator,
+            "<p style=\"filter:blur(2px);color:red\">strict</p>",
+            .{ .css_profile = .strict },
+        ),
+    );
 }
 
 test "preserve CSS alpha as a native PDF graphics state" {

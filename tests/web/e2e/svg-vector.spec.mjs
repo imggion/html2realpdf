@@ -100,7 +100,7 @@ test("unsupported SVG rasterizes only its subtree and reports the fallback", asy
     const diagnostics = pdf.diagnostics;
     pdf.dispose();
 
-    let strictError = "";
+    let explicitError = "";
     try {
       await renderer.render(fixture, {
         cssProfile: "web",
@@ -110,14 +110,26 @@ test("unsupported SVG rasterizes only its subtree and reports the fallback", asy
         unsupportedCss: "error",
       });
     } catch (error) {
-      strictError = error instanceof Error ? error.message : String(error);
+      explicitError = error instanceof Error ? error.message : String(error);
+    }
+    let defaultError = "";
+    try {
+      await renderer.render(fixture, {
+        cssProfile: "web",
+        page: { format: [240, 160], unit: "px", margin: 0 },
+        viewport: { width: 240, height: 160 },
+        unsupportedCss: "error",
+      });
+    } catch (error) {
+      defaultError = error instanceof Error ? error.message : String(error);
     }
     renderer.dispose();
     fixture.remove();
     const source = new TextDecoder("latin1").decode(bytes);
     return {
       diagnostics,
-      strictError,
+      explicitError,
+      defaultError,
       imageObjects: (source.match(/\/Subtype \/Image/g) ?? []).length,
       hasSelectableSibling: source.includes("/ToUnicode"),
     };
@@ -134,6 +146,8 @@ test("unsupported SVG rasterizes only its subtree and reports the fallback", asy
       nodePath: "#fallback-chart",
     }),
   ]);
-  expect(result.strictError).toContain("Inline SVG requires subtree rasterization");
-  expect(result.strictError).toContain("<text>");
+  expect(result.explicitError).toContain("Inline SVG requires subtree rasterization");
+  expect(result.explicitError).toContain("<text>");
+  expect(result.defaultError).toContain("Inline SVG requires subtree rasterization");
+  expect(result.defaultError).toContain("<text>");
 });
