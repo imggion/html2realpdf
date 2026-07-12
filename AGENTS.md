@@ -18,6 +18,7 @@ Read these local docs before changing code:
 - `build.zig` defines the native executable from `src/main.zig`, the package/root module from `src/root.zig`, and the wasm executable from `src/wasm.zig`; reusable parser/tree modules are exported from `src/root.zig`.
 - `tests/web/` covers structural dumps plus real PDF generation, the embedded canvas viewer, complex invoice/report fixtures, download, DOM/ref rendering, SVG charts, and transparent canvas resources.
 - `tests/web/e2e/` runs the browser harness and built React fixture through Playwright on Chromium, Firefox, and WebKit.
+- `src/wpt_subset_test.zig` adapts three pinned upstream Web Platform Test scenarios into renderer-native geometry assertions; `src/robustness_test.zig` owns deterministic malformed-input, allocation-exhaustion, and large-document gates.
 - `docs/css-support.md` is the public, versioned CSS support contract; `src/css/properties.zig` is its machine-readable property inventory.
 - `src/layout/page_geometry.zig` owns typed page boxes, page-selector cascade, and named-page sequences. `src/layout/fragmentation.zig` consumes those sequences for variable-height page boundaries, facing-page resolution, break arbitration, and block-child propagation. Block, inline, table, Flex, and Grid formatters must use that shared fragmentainer model instead of duplicating modulo arithmetic.
 - `src/paged_media.zig` selects default/named/pseudo `@page` margin-box text only after pagination establishes page names, forced blank pages, and the final page count. Keep selector matching, page counters, margin-slot geometry, and generated text commands there; do not synthesize DOM boxes or consume content flow.
@@ -63,6 +64,8 @@ Read these local docs before changing code:
 - `zig test src/paged_media.zig` verifies margin-box slot geometry and page-counter expansion.
 - `zig test src/render.zig` runs the complete renderer/PDF pipeline tests.
 - `zig test src/unicode_case.zig` verifies Unicode 17 full and language-sensitive case mappings.
+- `make test-wpt` runs the pinned renderer-native WPT subset.
+- `make test-robustness` runs the deterministic parser mutation corpus, allocation-exhaustion behavior, and a 30-plus-page native PDF gate in `ReleaseSafe`.
 - `npm --prefix bindings/js test` builds the WASM/package and runs the Node package tests.
 - `node tests/web/verify_snapshots.mjs` verifies WASM structural snapshots and PDF handles.
 - `make test-react` builds the React integration fixture; `make react` starts its Vite development server after rebuilding WASM and bindings.

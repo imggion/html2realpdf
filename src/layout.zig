@@ -2597,6 +2597,37 @@ test "Web relative positioning shifts paint without changing normal flow" {
     try std.testing.expectApproxEqAbs(@as(f32, 20), flow.?.y, 0.01);
 }
 
+test "Web sticky positioning resolves as relative in paged media" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='position:sticky;left:15px;top:7px;height:20px;background:#ff0000'>sticky</div>" ++
+        "<div style='height:20px;background:#0000ff'>flow</div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var sticky: ?geometry.Rect = null;
+    var flow: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) sticky = fragment.rect;
+        if (color.blue == 1 and color.red == 0) flow = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 15), sticky.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 7), sticky.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), flow.?.y, 0.01);
+}
+
 test "Web absolute positioning resolves padding containing blocks and inset sizing" {
     const html = @import("html.zig");
     const css = @import("css.zig");

@@ -26,7 +26,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 
 | Property or group | P | C | V | L | Paint | Page | T | Current limit |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | --- |
-| `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, list-item, flex, inline-flex, and table roles |
+| `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, list-item, flex, inline-flex, grid, inline-grid, and table roles |
 | width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`/`min()`/`max()`/`clamp()`, `min-content`/`max-content`/`fit-content()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
 | `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic fallback for replaced elements; web/strict transfer the preferred ratio into auto block size for normal boxes |
 | `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
@@ -63,7 +63,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | default `@page` size/margins | Y | Y | Y | Y | - | Y | Y | browser CSSOM cascade including `!important`; A3/A4/A5, Letter/Legal/Ledger/Tabloid, portrait/landscape, one/two absolute lengths, and physical margin longhands; explicit API page options override CSS |
 | named and pseudo `@page` geometry | Y | Y | Y | Y | - | Y | Y | case-sensitive page names plus `:first`, `:left`, `:right`, and `:blank`; importance, page-selector specificity, and source order resolve per-page PDF geometry; the shared fragmentainer uses variable content heights, re-sizes auto-width initial-containing-block descendants, rewraps inline lines, and records forced facing-page gaps as blank pages |
 | `@page` margin boxes | Y | Y | Y | Y | Y | Y | Y | default, named, and `:first`/`:left`/`:right`/`:blank` selection across all 16 standard positions; concatenated CSS strings plus decimal `counter(page)`/`counter(pages)`; font family/size/weight/style, color, and text alignment remain selectable native PDF text |
-| `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; authored top/right/bottom/left anchors survive browser used-value capture, fixed headers/footers repeat at page-relative coordinates, and sticky resolves as relative in paged media |
+| `position` | Y | Y | Y | Y | Y | Y | Y | web/strict relative, absolute, fixed, and sticky; document rejects non-static; authored top/right/bottom/left anchors survive browser used-value capture, fixed headers/footers repeat at page-relative coordinates, auto-width fixed boxes follow each repeated page's inline extent, and sticky resolves as relative in paged media |
 | physical/logical inset | Y | Y | Y | Y | - | Y | Y | top/right/bottom/left plus block/inline logical forms; auto sizing, opposing-inset stretch, auto margins, and nearest positioned padding containing block |
 | `z-index` / stacking order | Y | Y | Y | Y | Y | Y | Y | negative, normal-flow, auto/zero, and positive positioned paint phases with atomic descendant traversal |
 | `opacity` | Y | Y | Y | Y | Y | Y | Y | each opacity stacking context becomes a nested isolated PDF transparency Form XObject, so overlapping descendants are composited once |
@@ -123,6 +123,11 @@ is `fallback: "error"`; whole-page rasterization is never used.
 
 ## Verification gates
 
+- `make test-wpt` runs the revision-pinned renderer-native Flex, Grid, and
+  pagination scenarios documented in `tests/wpt/README.md`.
+- `make test-robustness` runs 512 deterministic malformed HTML/CSS mutations,
+  an allocation-exhaustion error path, and a 30-plus-page native/selectable PDF
+  gate under `ReleaseSafe`.
 - `make test` runs focused Zig parser, cascade, layout, pagination, display-list,
   and PDF tests plus native linked HarfBuzz, SheenBidi, and libunibreak gates.
 - `make test-web-snapshots` checks stable WASM structural output and a real PDF
@@ -132,9 +137,10 @@ is `fallback: "error"`; whole-page rasterization is never used.
   Web Flexbox, positioned-layout, and Grid vector geometry with live DOM
   rectangles within `0.75` CSS px; the positioned gate also verifies clipping,
   opacity, stacking order, fixed-page repetition, and absence of raster
-  fallback. Chromium also verifies that supported SVG yields vector PDF paths
-  without image objects and that unsupported SVG fallback remains scoped and
-  diagnostic.
+  fallback. All three engines verify compiled CSS Modules, styled-components,
+  and escaped Tailwind-style selectors as native selectable content. Chromium
+  also verifies that supported SVG yields vector PDF paths without image
+  objects and that unsupported SVG fallback remains scoped and diagnostic.
 - `make test-baseline` regenerates the versioned PDF fixtures in memory and
   compares their SHA-256 digests with the committed visual baseline manifest.
 - `make test-release` runs all of the above plus package and React builds.

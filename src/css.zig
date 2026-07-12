@@ -196,6 +196,14 @@ test "skip unparseable pseudo-element and recover" {
     try std.testing.expectEqualStrings("div", ss.rules[1].selectors[0].parts[0].tests[0].tag);
 }
 
+test "recover from a malformed nested declaration block" {
+    var stylesheet = try parseStylesheet(std.testing.allocator, "h{bad{unterminated");
+    defer stylesheet.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), stylesheet.rules.len);
+    try std.testing.expectEqual(@as(usize, 0), stylesheet.rules[0].declarations.len);
+}
+
 test "cascade: skip style with pseudo-element" {
     const allocator = std.testing.allocator;
     const source = "<style>.note::before { content: \"x\"; } p { color: red; }</style><p>hello</p>";

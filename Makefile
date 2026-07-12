@@ -1,4 +1,4 @@
-.PHONY: debug release wasm run react baseline test test-harfbuzz test-bidi test-line-break test-format test-js test-react test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
+.PHONY: debug release wasm run react baseline test test-wpt test-robustness test-harfbuzz test-bidi test-line-break test-format test-js test-react test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
 
 debug:
 	zig build -Doptimize=Debug
@@ -22,7 +22,7 @@ react: wasm
 baseline: wasm
 	node tests/baselines/generate.mjs
 
-test:
+test: test-wpt test-robustness
 	zig test src/html.zig
 	zig test src/dom.zig
 	zig test src/box.zig
@@ -43,6 +43,12 @@ test:
 	zig build test-bidi
 	zig build test-bidi-integration
 	zig build test-line-break
+
+test-wpt:
+	zig test src/wpt_subset_test.zig --test-filter "WPT subset"
+
+test-robustness:
+	zig test src/robustness_test.zig -O ReleaseSafe --test-filter "robustness:"
 
 test-harfbuzz:
 	zig build test-harfbuzz
@@ -102,6 +108,9 @@ help:
 	@echo "  make react    Start the React ref integration app"
 	@echo "  make baseline Capture versioned PDF and PNG baselines"
 	@echo "  make test     Run tests"
+	@echo "  make test-wpt Run the pinned renderer-native WPT subset"
+	@echo "  make test-robustness"
+	@echo "                Run parser fuzz, allocation, and large-document gates"
 	@echo "  make test-harfbuzz"
 	@echo "                Run the linked native OpenType shaping gate"
 	@echo "  make test-bidi"

@@ -192,7 +192,11 @@ fn measureGridInline(
         const child_box = tree.boxes.items[child_id];
         child = child_box.next_sibling;
         if (child_box.style.position == .absolute or child_box.style.position == .fixed) continue;
-        const measured = resolveChildContribution(child_box, try measureBoxInline(allocator, tree, child_id, registry, shaping_mode));
+        var measured = resolveChildContribution(child_box, try measureBoxInline(allocator, tree, child_id, registry, shaping_mode));
+        if (gridItemTransferredInlineSize(source.style, child_box, source_index, column_count)) |transferred| {
+            measured.min_content = @max(measured.min_content, transferred);
+            measured.max_content = @max(measured.max_content, transferred);
+        }
         const column = switch (child_box.style.grid_column_start) {
             .line => |line| if (line > 0) @min(@as(usize, @intCast(line - 1)), column_count - 1) else source_index % column_count,
             else => source_index % column_count,
@@ -209,6 +213,93 @@ fn measureGridInline(
     for (maximums[0..column_count]) |value| result.max_content += value;
     result.max_content = @max(result.max_content, result.min_content);
     return result;
+}
+
+/// Resolves the intrinsic inline contribution transferred through a preferred
+/// aspect ratio when the grid area has a definite fixed block size. Percentage
+/// heights are definite in that area even while an inline-grid's own inline
+/// size is still being shrink-to-fit measured.
+fn gridItemTransferredInlineSize(container: box.Style, item: box.Box, source_index: usize, column_count: usize) ?f32 {
+    if (!item.style.width.isAuto()) return null;
+    const ratio = item.style.aspect_ratio.resolve(if (item.kind == .replaced) item.intrinsic_ratio else null) orelse return null;
+    if (ratio <= 0) return null;
+
+    const area_height = definiteGridRowSpan(container, item.style, source_index, column_count) orelse return null;
+    const horizontal_non_content = item.border.left + item.border.right + item.padding.left + item.padding.right;
+    const vertical_non_content = item.border.top + item.border.bottom + item.padding.top + item.padding.bottom;
+    const content_height = resolveContentDimensionOptional(
+        item.style.height,
+        area_height,
+        vertical_non_content,
+        item.style.box_sizing,
+    ) orelse return null;
+    const ratio_height = switch (item.style.box_sizing) {
+        .contentBox => content_height,
+        .borderBox => content_height + vertical_non_content,
+    };
+    const ratio_width = ratio_height * ratio;
+    const content_width = switch (item.style.box_sizing) {
+        .contentBox => ratio_width,
+        .borderBox => @max(ratio_width - horizontal_non_content, 0),
+    };
+    return content_width + horizontal_non_content + item.margin.left + item.margin.right;
+}
+
+fn definiteGridRowSpan(container: box.Style, item: box.Style, source_index: usize, column_count: usize) ?f32 {
+    var rows: [32]?f32 = @splat(null);
+    var row_count: usize = 0;
+    appendDefiniteGridTracks(container.grid_template_rows, &rows, &row_count);
+    if (row_count == 0) return null;
+
+    const start = switch (item.grid_row_start) {
+        .line => |line| if (line > 0) @as(usize, @intCast(line - 1)) else return null,
+        .auto => source_index / @max(column_count, 1),
+        else => return null,
+    };
+    var span: usize = switch (item.grid_row_end) {
+        .line => |line| if (line > 0 and @as(usize, @intCast(line - 1)) > start)
+            @as(usize, @intCast(line - 1)) - start
+        else
+            1,
+        .span => |count| @max(count, 1),
+        .namedSpan => |value| @max(value.count, 1),
+        else => 1,
+    };
+    span = @min(span, rows.len -| start);
+    if (span == 0 or start >= row_count or start + span > row_count) return null;
+
+    var extent = (container.row_gap.resolve(0) orelse 0) * @as(f32, @floatFromInt(span - 1));
+    for (rows[start .. start + span]) |row| extent += row orelse return null;
+    return @max(extent, 0);
+}
+
+fn appendDefiniteGridTracks(raw: []const u8, output: *[32]?f32, output_index: *usize) void {
+    var index: usize = 0;
+    while (index < raw.len and output_index.* < output.len) {
+        while (index < raw.len and std.ascii.isWhitespace(raw[index])) index += 1;
+        if (index >= raw.len) break;
+        if (raw[index] == '[') {
+            while (index < raw.len and raw[index] != ']') index += 1;
+            index += @intFromBool(index < raw.len);
+            continue;
+        }
+        const start = index;
+        var depth: usize = 0;
+        while (index < raw.len) : (index += 1) {
+            const byte = raw[index];
+            if (byte == '(') depth += 1 else if (byte == ')') depth -|= 1 else if (depth == 0 and std.ascii.isWhitespace(byte)) break;
+        }
+        const token = raw[start..index];
+        if (token.len > 8 and std.ascii.eqlIgnoreCase(token[0..7], "repeat(") and token[token.len - 1] == ')') {
+            const inner = token[7 .. token.len - 1];
+            const comma = gridTopLevelComma(inner) orelse continue;
+            const count = std.fmt.parseInt(usize, std.mem.trim(u8, inner[0..comma], " \t"), 10) catch 0;
+            for (0..count) |_| appendDefiniteGridTracks(inner[comma + 1 ..], output, output_index);
+            continue;
+        }
+        output[output_index.*] = fixedGridLength(token);
+        output_index.* += 1;
+    }
 }
 
 fn applyFixedGridTracks(raw: []const u8, minimums: *[32]f32, maximums: *[32]f32, output_index: *usize) void {

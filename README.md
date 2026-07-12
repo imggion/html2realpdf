@@ -153,12 +153,18 @@ Useful focused commands:
 
 ```sh
 make test
+make test-wpt
+make test-robustness
 make test-react
 make test-web
 make test-debug-tokenizer
 make test-debug-dom
 make test-debug-box
 ```
+
+`make test-wpt` runs the locally adapted, revision-pinned conformance cases
+listed in `tests/wpt/README.md`. `make test-robustness` covers 512 deterministic
+malformed HTML/CSS inputs, allocator exhaustion, and a 30-plus-page native PDF.
 
 ## Browser harness
 

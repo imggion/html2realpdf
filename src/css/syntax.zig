@@ -589,7 +589,12 @@ const CssParser = struct {
             if (c == ';' or c == '}' or c == '{') break;
             _ = self.next();
         }
-        if (self.peek() == ';') _ = self.next();
+        if (self.peek() == ';') {
+            _ = self.next();
+        } else if (self.peek() == '{') {
+            _ = self.next();
+            self.skipBalancedBlock();
+        }
     }
 };
 

@@ -135,7 +135,9 @@ pub fn paginateWithRules(
     }
     for (fixed_templates.items) |template| {
         for (1..page_count) |page_index| {
-            try fragments.append(allocator, .{ .page_index = page_index, .fragment = template });
+            var repeated = template;
+            resolveFragmentainerInlineExtent(&repeated, sequence.spec(page_index));
+            try fragments.append(allocator, .{ .page_index = page_index, .fragment = repeated });
         }
     }
 
@@ -181,6 +183,49 @@ test "fixed fragments repeat at page-relative coordinates" {
         try std.testing.expectApproxEqAbs(@as(f32, 4), fragment.fragment.rect.y, 0.01);
     }
     try std.testing.expectEqual(@as(usize, 2), header_count);
+}
+
+test "auto-width fixed fragments follow each repeated page width" {
+    const allocator = std.testing.allocator;
+    var source = try std.ArrayList(layout.Fragment).initCapacity(allocator, 2);
+    defer source.deinit(allocator);
+    try source.append(allocator, .{
+        .kind = .text,
+        .source_box = 0,
+        .rect = .{ .y = 120, .width = 20, .height = 10 },
+        .text = "page two",
+    });
+    try source.append(allocator, .{
+        .kind = .box,
+        .source_box = 1,
+        .rect = .{ .x = 10, .y = 4, .width = 70, .height = 10 },
+        .fixed = true,
+        .fragmentainer_inline_insets = .{ .left = 10, .right = 20 },
+    });
+    var names = try std.ArrayList([]const u8).initCapacity(allocator, 2);
+    defer names.deinit(allocator);
+    try names.appendSlice(allocator, &.{ "Report", "Summary" });
+    const continuous = layout.LayoutDocument{
+        .fragments = source,
+        .page_names = names,
+        .content_width = 100,
+        .content_height = 130,
+    };
+    var paged = try paginateWithRules(
+        allocator,
+        &continuous,
+        .{ .width_points = 75, .height_points = 75 },
+        &.{.{ .selector = .{ .name = "Summary" }, .width_points = 150, .height_points = 75 }},
+    );
+    defer paged.deinit(allocator);
+
+    var widths: [2]f32 = @splat(0);
+    for (paged.fragments.items) |fragment| {
+        if (!fragment.fragment.fixed) continue;
+        widths[fragment.page_index] = fragment.fragment.rect.width;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 70), widths[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 170), widths[1], 0.01);
 }
 
 test "auto-width box fragments resolve each page inline extent" {
@@ -273,10 +318,7 @@ fn appendSplitBox(
         var segment = fragment;
         segment.rect.y = page_y;
         segment.rect.height = segment_height;
-        if (segment.fragmentainer_inline_insets) |insets| {
-            segment.rect.x = insets.left;
-            segment.rect.width = @max(sequence.spec(page_index).contentWidthCssPx() - insets.left - insets.right, 1);
-        }
+        resolveFragmentainerInlineExtent(&segment, sequence.spec(page_index));
         segment.transform = shiftedTransform(fragment.transform, 0, -page_start);
         segment.clip_transform = shiftedTransform(fragment.clip_transform, 0, -page_start);
         segment.clip_rect = clipForPage(fragment.clip_rect, page_start, content_height);
@@ -307,6 +349,12 @@ fn appendSplitBox(
         is_first = false;
         if (segment_height <= 0) break;
     }
+}
+
+fn resolveFragmentainerInlineExtent(fragment: *layout.Fragment, spec: PageSpec) void {
+    const insets = fragment.fragmentainer_inline_insets orelse return;
+    fragment.rect.x = insets.left;
+    fragment.rect.width = @max(spec.contentWidthCssPx() - insets.left - insets.right, 1);
 }
 
 fn shiftedTransform(transform: geometry.AffineTransform, shift_x: f32, shift_y: f32) geometry.AffineTransform {
