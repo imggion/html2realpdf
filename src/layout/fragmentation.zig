@@ -5,6 +5,7 @@
 //! extent, atomic-placement, and forced-page-side decisions.
 
 const std = @import("std");
+const box = @import("../box.zig");
 
 const epsilon: f32 = 0.0001;
 
@@ -26,6 +27,72 @@ pub fn resolveBoundary(after: anytype, before: @TypeOf(after)) @TypeOf(after) {
     if (after.isForced()) return after;
     if (after.isAvoid() or before.isAvoid()) return .avoid;
     return .auto;
+}
+
+/// Resolves `page: auto` to the nearest ancestor with a named page. The root's
+/// `auto` used value is the empty page name defined by CSS Paged Media.
+pub fn usedPageName(tree: anytype, box_id: usize) []const u8 {
+    var current: ?usize = box_id;
+    while (current) |current_id| {
+        const source = tree.boxes.items[current_id];
+        if (!std.ascii.eqlIgnoreCase(source.style.page_name, "auto")) return source.style.page_name;
+        current = source.parent;
+    }
+    return "";
+}
+
+/// Returns the page name at a box's block-start edge after propagating through
+/// its first in-flow child box to which the `page` property applies.
+pub fn startPageName(tree: anytype, box_id: usize) []const u8 {
+    const child_id = firstPageNameChild(tree, box_id) orelse return usedPageName(tree, box_id);
+    return startPageName(tree, child_id);
+}
+
+/// Returns the page name at a box's block-end edge after the symmetrical last
+/// child propagation required for named-page break arbitration.
+pub fn endPageName(tree: anytype, box_id: usize) []const u8 {
+    const child_id = lastPageNameChild(tree, box_id) orelse return usedPageName(tree, box_id);
+    return endPageName(tree, child_id);
+}
+
+/// A case-sensitive page-name change at a class A opportunity is a forced page
+/// break even when both ordinary break controls are `auto`.
+pub fn pageNameChangesAtBoundary(tree: anytype, after_box_id: usize, before_box_id: usize) bool {
+    return !std.mem.eql(u8, endPageName(tree, after_box_id), startPageName(tree, before_box_id));
+}
+
+/// Adds the forced generic page break implied by a named-page transition while
+/// preserving an already-forced side-specific break at the same opportunity.
+pub fn resolvePageNameBoundary(tree: anytype, after_box_id: usize, before_box_id: usize, boundary: anytype) @TypeOf(boundary) {
+    if (boundary.isForced() or !pageNameChangesAtBoundary(tree, after_box_id, before_box_id)) return boundary;
+    return .page;
+}
+
+fn firstPageNameChild(tree: anytype, box_id: usize) ?usize {
+    var child = tree.boxes.items[box_id].first_child;
+    while (child) |child_id| {
+        const source = tree.boxes.items[child_id];
+        if (source.style.position != .absolute and source.style.position != .fixed and pageNameApplies(source)) return child_id;
+        child = source.next_sibling;
+    }
+    return null;
+}
+
+fn lastPageNameChild(tree: anytype, box_id: usize) ?usize {
+    var child = tree.boxes.items[box_id].last_child;
+    while (child) |child_id| {
+        const source = tree.boxes.items[child_id];
+        if (source.style.position != .absolute and source.style.position != .fixed and pageNameApplies(source)) return child_id;
+        child = source.prev_sibling;
+    }
+    return null;
+}
+
+fn pageNameApplies(source: anytype) bool {
+    return isBlockLevel(source.kind) or switch (source.style.display) {
+        .flex, .inlineFlex, .grid, .inlineGrid => true,
+        else => false,
+    };
 }
 
 pub const Context = struct {
@@ -272,4 +339,36 @@ test "break boundary arbitration makes forced values override avoid" {
 test "next page start advances from a boundary and a partial page" {
     try std.testing.expectEqual(@as(f32, 200), nextPageStart(100, 100));
     try std.testing.expectEqual(@as(f32, 200), nextPageStart(125, 100));
+}
+
+const TestTree = struct {
+    boxes: struct { items: []const box.Box },
+};
+
+test "named page auto resolves through ancestors and keeps case-sensitive names" {
+    var boxes = [_]box.Box{
+        .{ .kind = .block, .style = .{ .page_name = "Report" }, .first_child = 1, .last_child = 1 },
+        .{ .kind = .block, .parent = 0, .style = .{ .page_name = "auto" } },
+        .{ .kind = .block, .style = .{ .page_name = "report" } },
+    };
+    const tree = TestTree{ .boxes = .{ .items = &boxes } };
+
+    try std.testing.expectEqualStrings("Report", usedPageName(tree, 1));
+    try std.testing.expectEqualStrings("Report", startPageName(tree, 0));
+    try std.testing.expect(!std.mem.eql(u8, usedPageName(tree, 1), usedPageName(tree, 2)));
+}
+
+test "named page start and end values propagate through first and last children" {
+    var boxes = [_]box.Box{
+        .{ .kind = .block, .style = .{ .page_name = "Shell" }, .first_child = 1, .last_child = 2 },
+        .{ .kind = .block, .parent = 0, .next_sibling = 2, .style = .{ .page_name = "Cover" } },
+        .{ .kind = .block, .parent = 0, .prev_sibling = 1, .style = .{ .page_name = "Summary" } },
+    };
+    const tree = TestTree{ .boxes = .{ .items = &boxes } };
+
+    try std.testing.expectEqualStrings("Cover", startPageName(tree, 0));
+    try std.testing.expectEqualStrings("Summary", endPageName(tree, 0));
+    try std.testing.expect(pageNameChangesAtBoundary(tree, 1, 2));
+    try std.testing.expectEqual(TestBreak.page, resolvePageNameBoundary(tree, 1, 2, TestBreak.avoid));
+    try std.testing.expectEqual(TestBreak.right, resolvePageNameBoundary(tree, 1, 2, TestBreak.right));
 }

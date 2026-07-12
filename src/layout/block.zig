@@ -248,6 +248,7 @@ pub fn layoutWithOptions(
             var parent_start_open = state.web_sizing and canCollapseStartWithChildren(state.tree, box_id);
             var last_in_flow_was_block = false;
             var previous_break_after = box.PageBreak.auto;
+            var previous_page_box: ?box.BoxId = null;
             var sibling_group_fragment_start: ?usize = null;
             var sibling_group_y: f32 = 0;
             var child = source.first_child;
@@ -258,6 +259,7 @@ pub fn layoutWithOptions(
                 } else if (state.web_sizing and child_box.style.float_direction != .none) {
                     sibling_group_fragment_start = null;
                     previous_break_after = .auto;
+                    previous_page_box = null;
                     const required_width = try floatOuterWidth(state, child_id, content_width);
                     const float_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
                     const band = float_context.bandAt(float_y);
@@ -285,10 +287,13 @@ pub fn layoutWithOptions(
                 } else if (isBlockLevel(child_box.kind) or (state.web_sizing and child_box.style.clear_direction != .none)) {
                     if (state.web_sizing) {
                         const child_break_before = fragmentation.propagatedBefore(state.tree, child_id);
-                        const boundary_break = if (sibling_group_fragment_start != null)
+                        var boundary_break = if (sibling_group_fragment_start != null)
                             fragmentation.resolveBoundary(previous_break_after, child_break_before)
                         else
                             box.PageBreak.auto;
+                        if (previous_page_box) |previous_id| {
+                            boundary_break = fragmentation.resolvePageNameBoundary(state.tree, previous_id, child_id, boundary_break);
+                        }
                         const child_margin = state.marginInfo(child_id);
                         if (child_margin.through and child_box.style.clear_direction == .none) {
                             pending_margin.combine(child_margin.start);
@@ -307,6 +312,7 @@ pub fn layoutWithOptions(
                                 },
                             );
                             previous_break_after = fragmentation.propagatedAfter(state.tree, child_id);
+                            previous_page_box = child_id;
                             child = child_box.next_sibling;
                             continue;
                         }
@@ -351,6 +357,7 @@ pub fn layoutWithOptions(
                             child_rect.y,
                         );
                         previous_break_after = fragmentation.propagatedAfter(state.tree, child_id);
+                        previous_page_box = child_id;
                         pending_margin = child_margin.end;
                         parent_start_open = false;
                         last_in_flow_was_block = true;
@@ -377,6 +384,7 @@ pub fn layoutWithOptions(
                         last_in_flow_was_block = false;
                         sibling_group_fragment_start = null;
                         previous_break_after = .auto;
+                        previous_page_box = null;
                     }
                     const run_height = try state.layoutInlineRun(child_id, content_x, child_cursor_y, content_width, style.text_align);
                     child_cursor_y += run_height;

@@ -913,6 +913,7 @@ pub const Style = struct {
     page_break_before: PageBreak = .auto,
     page_break_after: PageBreak = .auto,
     page_break_inside: PageBreak = .auto,
+    page_name: []const u8 = "auto",
     orphans: u32 = 2,
     widows: u32 = 2,
 

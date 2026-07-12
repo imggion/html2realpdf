@@ -1108,6 +1108,37 @@ test "Web facing-page breaks arbitrate adjacent before and after values" {
     try std.testing.expectApproxEqAbs(@as(f32, 200), right.?.y, 0.01);
 }
 
+test "Web named page changes force a new page at block boundaries" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:20px;page:Report;background:#ff0000'>report</div>" ++
+        "<div style='height:20px;page:Summary;background:#0000ff'>summary</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var report: ?geometry.Rect = null;
+    var summary: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) report = fragment.rect;
+        if (color.blue == 1 and color.red == 0) summary = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), report.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), summary.?.y, 0.01);
+}
+
 test "Web recto and verso follow the DOM root direction" {
     const html = @import("html.zig");
     const css = @import("css.zig");

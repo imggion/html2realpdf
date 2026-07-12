@@ -148,6 +148,7 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "break-before",
   "break-after",
   "break-inside",
+  "page",
 ] as const;
 
 const SVG_COMPUTED_PROPERTIES = [

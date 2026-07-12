@@ -576,6 +576,31 @@ pub fn parsePageBreakInside(value: []const u8) ?box.PageBreak {
     return null;
 }
 
+/// Parses the `page` property's `auto | <custom-ident>` grammar while keeping
+/// authored page names case-sensitive for named-page matching.
+pub fn parsePageName(value: []const u8) ?[]const u8 {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "auto")) return "auto";
+    if (v.len == 0 or isReservedPageName(v) or !isPageNameStart(v[0])) return null;
+    for (v[1..]) |byte| {
+        if (!isPageNameContinue(byte)) return null;
+    }
+    return v;
+}
+
+fn isReservedPageName(value: []const u8) bool {
+    return eqlProp(value, "initial") or eqlProp(value, "inherit") or eqlProp(value, "unset") or
+        eqlProp(value, "revert") or eqlProp(value, "revert-layer") or eqlProp(value, "default");
+}
+
+fn isPageNameStart(byte: u8) bool {
+    return std.ascii.isAlphabetic(byte) or byte == '_' or byte == '-' or byte >= 0x80;
+}
+
+fn isPageNameContinue(byte: u8) bool {
+    return isPageNameStart(byte) or std.ascii.isDigit(byte);
+}
+
 pub fn parseBorderStyle(value: []const u8) ?box.BorderStyle {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (eqlProp(v, "none")) return .none;
@@ -597,4 +622,14 @@ pub fn parsePositiveInteger(value: []const u8) ?u32 {
     const n = std.fmt.parseInt(u32, v, 10) catch return null;
     if (n == 0) return null;
     return n;
+}
+
+test "page names preserve custom-ident case and reject reserved or malformed values" {
+    try std.testing.expectEqualStrings("auto", parsePageName(" AUTO ").?);
+    try std.testing.expectEqualStrings("ReportCover", parsePageName(" ReportCover ").?);
+    try std.testing.expectEqualStrings("chapter-2", parsePageName("chapter-2").?);
+    try std.testing.expect(parsePageName("initial") == null);
+    try std.testing.expect(parsePageName("default") == null);
+    try std.testing.expect(parsePageName("2chapter") == null);
+    try std.testing.expect(parsePageName("chapter two") == null);
 }

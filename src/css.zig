@@ -58,6 +58,7 @@ const parseVerticalAlignKeyword = values.parseVerticalAlignKeyword;
 const parseBoxSizing = values.parseBoxSizing;
 const parseBorderCollapse = values.parseBorderCollapse;
 const parsePageBreak = values.parsePageBreak;
+const parsePageName = values.parsePageName;
 const parseBorderStyle = values.parseBorderStyle;
 const parsePositiveInteger = values.parsePositiveInteger;
 
@@ -766,6 +767,35 @@ test "parse value: page-break" {
     try std.testing.expectEqual(box.PageBreak.recto, parsePageBreak("recto").?);
     try std.testing.expectEqual(box.PageBreak.verso, parsePageBreak("verso").?);
     try std.testing.expectEqual(box.PageBreak.avoid, parsePageBreak("avoid-page").?);
+}
+
+test "parse value: named page" {
+    try std.testing.expectEqualStrings("auto", parsePageName("auto").?);
+    try std.testing.expectEqualStrings("ReportCover", parsePageName("ReportCover").?);
+    try std.testing.expect(parsePageName("default") == null);
+    try std.testing.expect(parsePageName("two words") == null);
+}
+
+test "cascade keeps page names case-sensitive and page non-inherited" {
+    const allocator = std.testing.allocator;
+    const source = "<style>.report { page: Report; } .explicit { page: inherit; }</style><section class=\"report\"><div></div><div class=\"explicit\"></div></section>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const styles = try styleArrayFromDocument(arena.allocator(), &document);
+
+    const style_node = document.nodes.items[document.root].first_child.?;
+    const section_id = document.nodes.items[style_node].next_sibling.?;
+    const auto_child_id = document.nodes.items[section_id].first_child.?;
+    const inherited_child_id = document.nodes.items[auto_child_id].next_sibling.?;
+    try std.testing.expectEqualStrings("Report", styles[section_id].page_name);
+    try std.testing.expectEqualStrings("auto", styles[auto_child_id].page_name);
+    try std.testing.expectEqualStrings("Report", styles[inherited_child_id].page_name);
 }
 
 test "parse value: border-style" {
