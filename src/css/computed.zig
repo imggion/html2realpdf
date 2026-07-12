@@ -97,9 +97,9 @@ const supported_properties = [_][]const u8{
     "padding-bottom",          "padding-left",              "padding-right",              "padding-top",           "page-break-after",
     "page-break-before",       "page-break-inside",         "position",                   "right",                 "row-gap",
     "text-align",              "text-decoration-color",     "text-decoration-line",       "text-decoration-style", "text-decoration-thickness",
-    "text-indent",             "text-overflow",             "text-transform",             "top",                   "vertical-align",
-    "white-space",             "widows",                    "width",                      "word-break",            "word-spacing",
-    "z-index",
+    "text-indent",             "text-overflow",             "text-transform",             "top",                   "transform",
+    "transform-origin",        "vertical-align",            "white-space",                "widows",                "width",
+    "word-break",              "word-spacing",              "z-index",
 };
 
 const logical_properties = [_][]const u8{
@@ -181,6 +181,10 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
         }
     } else if (eqlProp(name, "opacity")) {
         if (parseOpacity(value)) |opacity| style.opacity = opacity;
+    } else if (eqlProp(name, "transform")) {
+        if (try parseTransform(context, value, style.font_size)) |transform| style.transform = transform;
+    } else if (eqlProp(name, "transform-origin")) {
+        if (parseObjectPosition(value)) |origin| style.transform_origin = origin;
     } else if (eqlProp(name, "direction")) {
         if (parseDirection(value)) |direction| style.direction = direction;
     } else if (eqlProp(name, "float")) {
@@ -425,6 +429,131 @@ fn parseCornerRadius(context: Context, value: []const u8, font_size: f32) !?box.
     return .{ .x = horizontal, .y = vertical };
 }
 
+fn parseTransform(context: Context, value: []const u8, font_size: f32) !?[]const box.TransformOperation {
+    const text = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(text, "none")) return &.{};
+
+    var operations = try std.ArrayList(box.TransformOperation).initCapacity(context.allocator, 0);
+    defer operations.deinit(context.allocator);
+    var index: usize = 0;
+    while (index < text.len) {
+        while (index < text.len and std.ascii.isWhitespace(text[index])) index += 1;
+        if (index == text.len) break;
+        const name_start = index;
+        while (index < text.len and (std.ascii.isAlphabetic(text[index]) or text[index] == '-')) index += 1;
+        if (index == name_start or index >= text.len or text[index] != '(') return null;
+        const name = text[name_start..index];
+        index += 1;
+        const arguments_start = index;
+        var depth: usize = 1;
+        while (index < text.len and depth > 0) : (index += 1) {
+            if (text[index] == '(') depth += 1 else if (text[index] == ')') depth -= 1;
+        }
+        if (depth != 0) return null;
+        const arguments = text[arguments_start .. index - 1];
+        const operation = try parseTransformFunction(context, name, arguments, font_size) orelse return null;
+        try operations.append(context.allocator, operation);
+    }
+    if (operations.items.len == 0) return null;
+    return try operations.toOwnedSlice(context.allocator);
+}
+
+fn parseTransformFunction(context: Context, name: []const u8, arguments: []const u8, font_size: f32) !?box.TransformOperation {
+    const parts = splitTransformArguments(arguments);
+    if (eqlProp(name, "matrix")) {
+        if (parts.len != 6) return null;
+        var values_array: [6]f32 = undefined;
+        for (parts.items[0..6], 0..) |part, index| values_array[index] = parseTransformNumber(part) orelse return null;
+        return .{ .matrix = .{
+            .a = values_array[0],
+            .b = values_array[1],
+            .c = values_array[2],
+            .d = values_array[3],
+            .e = values_array[4],
+            .f = values_array[5],
+        } };
+    }
+    if (eqlProp(name, "translate") or eqlProp(name, "translatex") or eqlProp(name, "translatey")) {
+        const expected = if (eqlProp(name, "translate")) parts.len >= 1 and parts.len <= 2 else parts.len == 1;
+        if (!expected) return null;
+        const first = try parseDimensionWithContext(context.allocator, context.expression_store, parts.items[0], context.expressionContext(font_size)) orelse return null;
+        if (eqlProp(name, "translatex")) return .{ .translate = .{ .x = first } };
+        if (eqlProp(name, "translatey")) return .{ .translate = .{ .y = first } };
+        const second = if (parts.len == 2)
+            try parseDimensionWithContext(context.allocator, context.expression_store, parts.items[1], context.expressionContext(font_size)) orelse return null
+        else
+            box.Length{ .px = 0 };
+        return .{ .translate = .{ .x = first, .y = second } };
+    }
+    if (eqlProp(name, "scale") or eqlProp(name, "scalex") or eqlProp(name, "scaley")) {
+        const expected = if (eqlProp(name, "scale")) parts.len >= 1 and parts.len <= 2 else parts.len == 1;
+        if (!expected) return null;
+        const first = parseTransformNumber(parts.items[0]) orelse return null;
+        if (eqlProp(name, "scalex")) return .{ .scale = .{ .x = first } };
+        if (eqlProp(name, "scaley")) return .{ .scale = .{ .y = first } };
+        return .{ .scale = .{ .x = first, .y = if (parts.len == 2) parseTransformNumber(parts.items[1]) orelse return null else first } };
+    }
+    if (eqlProp(name, "rotate")) {
+        if (parts.len != 1) return null;
+        return .{ .rotate = parseTransformAngle(parts.items[0]) orelse return null };
+    }
+    if (eqlProp(name, "skew") or eqlProp(name, "skewx") or eqlProp(name, "skewy")) {
+        const expected = if (eqlProp(name, "skew")) parts.len >= 1 and parts.len <= 2 else parts.len == 1;
+        if (!expected) return null;
+        const first = parseTransformAngle(parts.items[0]) orelse return null;
+        if (eqlProp(name, "skewx")) return .{ .skew = .{ .x = first } };
+        if (eqlProp(name, "skewy")) return .{ .skew = .{ .y = first } };
+        return .{ .skew = .{ .x = first, .y = if (parts.len == 2) parseTransformAngle(parts.items[1]) orelse return null else 0 } };
+    }
+    return null;
+}
+
+const TransformArguments = struct {
+    items: [8][]const u8 = undefined,
+    len: usize = 0,
+};
+
+fn splitTransformArguments(value: []const u8) TransformArguments {
+    var result = TransformArguments{};
+    var start: ?usize = null;
+    var depth: usize = 0;
+    var index: usize = 0;
+    while (index <= value.len) : (index += 1) {
+        const byte: u8 = if (index < value.len) value[index] else ',';
+        if (index < value.len and byte == '(') depth += 1 else if (index < value.len and byte == ')') depth -|= 1;
+        const separator = depth == 0 and (byte == ',' or std.ascii.isWhitespace(byte));
+        if (!separator and start == null) start = index;
+        if (separator and start != null) {
+            if (result.len == result.items.len) return .{};
+            result.items[result.len] = std.mem.trim(u8, value[start.?..index], " \t\n\r\x0C");
+            result.len += 1;
+            start = null;
+        }
+    }
+    return result;
+}
+
+fn parseTransformNumber(value: []const u8) ?f32 {
+    return std.fmt.parseFloat(f32, std.mem.trim(u8, value, " \t\n\r\x0C")) catch null;
+}
+
+fn parseTransformAngle(value: []const u8) ?f32 {
+    const text = std.mem.trim(u8, value, " \t\n\r\x0C");
+    const units = [_]struct { suffix: []const u8, factor: f32 }{
+        .{ .suffix = "deg", .factor = std.math.pi / 180.0 },
+        .{ .suffix = "grad", .factor = std.math.pi / 200.0 },
+        .{ .suffix = "rad", .factor = 1 },
+        .{ .suffix = "turn", .factor = std.math.pi * 2.0 },
+    };
+    inline for (units) |unit| {
+        if (text.len > unit.suffix.len and std.ascii.endsWithIgnoreCase(text, unit.suffix)) {
+            return (std.fmt.parseFloat(f32, text[0 .. text.len - unit.suffix.len]) catch return null) * unit.factor;
+        }
+    }
+    const unitless = parseTransformNumber(text) orelse return null;
+    return if (@abs(unitless) <= 0.0001) 0 else null;
+}
+
 const RadiusPair = struct { first: []const u8, second: ?[]const u8 = null };
 
 fn splitRadiusPair(value: []const u8) RadiusPair {
@@ -629,6 +758,14 @@ fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) 
     }
     if (eqlProp(name, "opacity")) {
         target.opacity = source.opacity;
+        return;
+    }
+    if (eqlProp(name, "transform")) {
+        target.transform = source.transform;
+        return;
+    }
+    if (eqlProp(name, "transform-origin")) {
+        target.transform_origin = source.transform_origin;
         return;
     }
     if (eqlProp(name, "flex-direction")) {

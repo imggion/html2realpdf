@@ -83,7 +83,9 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
         for (commands.items[command_start..]) |*command| {
             command.clip_rect = fragment.clip_rect;
             command.clip_radii = fragment.clip_radii;
+            command.clip_transform = fragment.clip_transform;
             command.opacity = fragment.opacity;
+            command.transform = fragment.transform;
         }
     }
 
@@ -228,6 +230,31 @@ test "propagate fragment clipping to every paint command" {
         return;
     };
     return error.TestExpectedEqual;
+}
+
+test "propagate fragment transforms to every paint command" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(pagination.PagedFragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    const transform = geometry.AffineTransform.translation(12, 8).multiply(geometry.AffineTransform.scaling(1.5, 0.75));
+    try fragments.append(allocator, .{ .page_index = 0, .fragment = .{
+        .kind = .text,
+        .source_box = 0,
+        .rect = .{ .width = 40, .height = 18 },
+        .text = "linked",
+        .text_decoration = .underline,
+        .link_url = "https://example.com/transform",
+        .transform = transform,
+    } });
+    const paged = pagination.PagedDocument{
+        .fragments = fragments,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var list = try build(allocator, &paged);
+    defer list.deinit(allocator);
+    try std.testing.expect(list.commands.items.len >= 3);
+    for (list.commands.items) |command| try std.testing.expect(command.transform.approxEqual(transform, 0.001));
 }
 
 test "sort paged fragments by tree-derived stacking order" {

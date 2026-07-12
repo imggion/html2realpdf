@@ -58,6 +58,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | physical/logical inset | Y | Y | Y | Y | - | Y | Y | top/right/bottom/left plus block/inline logical forms; auto sizing, opposing-inset stretch, auto margins, and nearest positioned padding containing block |
 | `z-index` / stacking order | Y | Y | Y | Y | Y | Y | Y | negative, normal-flow, auto/zero, and positive positioned paint phases with atomic descendant traversal |
 | `opacity` | Y | Y | Y | Y | Y | Y | Y | cumulative element opacity is emitted as native PDF ExtGState alpha; isolated transparency groups remain pending |
+| `transform` / `transform-origin` | Y | Y | Y | Y | Y | Y | Y | web/strict matrix, translate, scale, rotate, and skew; length-percentage origins, cumulative descendant transforms, transformed clips and link bounds; native PDF `cm`, no 3D transforms |
 | `float` | Y | Y | Y | Y | Y | Y | Y | web/strict left and right exclusion bands with shrink-to-fit sizing; document rejects non-none |
 | `clear` | Y | Y | Y | Y | - | Y | Y | none, left, right, and both within the current block formatting context |
 | Flexbox container | Y | Y | Y | Y | Y | Y | Y | web/strict `flex` and `inline-flex`; row/column/reverse, wrap/wrap-reverse, gaps, justify/align items/content, baseline and RTL main-start |
@@ -82,12 +83,12 @@ Playwright E2E make the matrix verifiable.
 
 ## Explicitly unsupported in the current profile
 
-- non-color typed values such as angles, transforms, and images; isolated
-  opacity groups and blend/compositing modes remain pending;
+- typed CSS image values and paint-server lists; isolated opacity groups and
+  blend/compositing modes remain pending;
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
 - Grid `subgrid`, masonry, and experimental features; full Appendix E painting
   nuances beyond the supported positioned stacking phases;
-- multiple backgrounds, gradients, shadows, transforms, filters, and blend modes;
+- multiple backgrounds, gradients, shadows, filters, 3D transforms, and blend modes;
 - vertical `writing-mode` values; logical box properties currently map within horizontal-tb;
 - CSS `unicode-bidi` isolate/override modes and language-specific case tailoring beyond Unicode `SpecialCasing.txt`;
   Arabic and Hebrew have built-in shaped fallbacks, while emoji and other

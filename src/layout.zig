@@ -426,9 +426,10 @@ const State = struct {
         const text_indent = (style.text_indent.resolve(width) orelse 0) + first_line_offset;
         const ellipsis_enabled = style.text_overflow == .ellipsis and style.overflow.clips();
         var cursor = InlineCursor.init(self, start_x, start_y, width, text_align, style.direction, text_indent, ellipsis_enabled);
+        const parent_link = self.linkForBox(parent_id);
         var child = self.tree.boxes.items[parent_id].first_child;
         while (child) |child_id| {
-            try cursor.layoutBox(child_id, null, .baseline);
+            try cursor.layoutBox(child_id, parent_link, .baseline);
             child = self.tree.boxes.items[child_id].next_sibling;
         }
         return cursor.finish();
@@ -1940,6 +1941,52 @@ test "Web stacking metadata orders positioned layers and compounds opacity" {
     try std.testing.expect(normal_order.? < zero_order.?);
     try std.testing.expect(zero_order.? < positive_order.?);
     try std.testing.expectApproxEqAbs(@as(f32, 0.25), normal_opacity.?, 0.001);
+}
+
+test "Web transforms propagate to descendants and establish positioned containing blocks" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='width:100px;height:60px;padding:10px;overflow:hidden;transform:translate(20px,10px) rotate(90deg);transform-origin:0 0;background:#0000ff'>" ++
+        "<div style='position:absolute;right:0;top:0;width:20px;height:10px;transform:scale(1.5,.8);transform-origin:0 0;background:#ff0000'>x</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300, .page_height = 300, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var parent_transform: ?geometry.AffineTransform = null;
+    var child_transform: ?geometry.AffineTransform = null;
+    var child_clip_transform: ?geometry.AffineTransform = null;
+    var text_transform: ?geometry.AffineTransform = null;
+    var child_x: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.text != null) text_transform = fragment.transform;
+        const color = fragment.background orelse continue;
+        if (color.blue == 1) parent_transform = fragment.transform;
+        if (color.red == 1) {
+            child_transform = fragment.transform;
+            child_clip_transform = fragment.clip_transform;
+            child_x = fragment.rect.x;
+        }
+    }
+    try std.testing.expect(parent_transform != null and child_transform != null and child_clip_transform != null and text_transform != null);
+    try std.testing.expect(!parent_transform.?.approxEqual(child_transform.?, 0.001));
+    try std.testing.expect(parent_transform.?.approxEqual(child_clip_transform.?, 0.001));
+    try std.testing.expect(child_transform.?.approxEqual(text_transform.?, 0.001));
+    try std.testing.expectApproxEqAbs(@as(f32, 0), parent_transform.?.a, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), parent_transform.?.b, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -1), parent_transform.?.c, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), parent_transform.?.e, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), parent_transform.?.f, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), child_x.?, 0.001);
 }
 
 test "Web overflow clips deferred absolute descendants" {

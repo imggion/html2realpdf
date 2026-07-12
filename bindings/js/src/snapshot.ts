@@ -28,6 +28,8 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "left",
   "z-index",
   "opacity",
+  "transform",
+  "transform-origin",
   "float",
   "clear",
   "flex-direction",
@@ -772,12 +774,17 @@ function materializeComputedStyle(
   if (floatValue !== "none" && !usesWebLayout(options)) {
     throw new UnsupportedCssError(`float:${floatValue} is outside the document/report layout profile`);
   }
+  const transformValue = computed.getPropertyValue("transform");
+  if (transformValue && transformValue !== "none" && !usesWebLayout(options)) {
+    reportUnsupportedCss("transform", options, diagnostics);
+  } else if (transformValue.startsWith("matrix3d(")) {
+    reportUnsupportedCss("transform", options, diagnostics);
+  }
 
   if (!isSvgElement(original)) {
     const unsupportedComputed = [
       ["background-image", computed.getPropertyValue("background-image"), "none"],
       ["box-shadow", computed.getPropertyValue("box-shadow"), "none"],
-      ["transform", computed.getPropertyValue("transform"), "none"],
       ["filter", computed.getPropertyValue("filter"), "none"],
     ] as const;
     for (const [property, value, initial] of unsupportedComputed) {

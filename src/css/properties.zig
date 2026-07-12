@@ -36,9 +36,9 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "align-self", .stage = layout, .notes = "web and strict per-item flex alignment" },
     .{ .name = "aspect-ratio", .stage = layout, .notes = "preferred ratio, replaced intrinsic fallback, and Web non-replaced auto block sizing" },
     .{ .name = "background-color", .stage = full },
-    .{ .name = "border", .stage = full, .notes = "uniform radius only" },
+    .{ .name = "border", .stage = full, .notes = "physical sides plus per-corner elliptical radius paths" },
     .{ .name = "border-collapse", .stage = layout },
-    .{ .name = "border-radius", .stage = full, .notes = "uniform circular radius" },
+    .{ .name = "border-radius", .stage = full, .notes = "per-corner length-percentage ellipses and rounded overflow clipping" },
     .{ .name = "box-decoration-break", .stage = full, .notes = "web and strict slice or clone page-fragment borders and radius" },
     .{ .name = "box-sizing", .stage = layout },
     .{ .name = "break-after", .stage = layout },
@@ -88,7 +88,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "opacity", .stage = full, .notes = "web and strict cumulative PDF graphics-state alpha" },
     .{ .name = "order", .stage = layout, .notes = "stable visual ordering of flex and Grid items" },
     .{ .name = "orphans", .stage = layout },
-    .{ .name = "overflow", .stage = full, .notes = "rectangular descendant clipping; auto and scroll omit interactive scrollbars" },
+    .{ .name = "overflow", .stage = full, .notes = "rectangular or rounded descendant clipping; auto and scroll omit interactive scrollbars" },
     .{ .name = "overflow-wrap", .stage = full, .notes = "normal break-word and anywhere at extended grapheme boundaries" },
     .{ .name = "padding", .stage = full },
     .{ .name = "position", .stage = layout, .notes = "web and strict relative absolute sticky print flow and repeated fixed page boxes; document rejects non-static" },
@@ -98,6 +98,8 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "text-indent", .stage = full, .notes = "length and percentage on first formatted line" },
     .{ .name = "text-overflow", .stage = full, .notes = "selectable ellipsis for clipped single-line text" },
     .{ .name = "text-transform", .stage = full, .notes = "Unicode 17 full mappings and SpecialCasing language rules" },
+    .{ .name = "transform", .stage = full, .notes = "web and strict matrix translate scale rotate and skew as native PDF cm operators" },
+    .{ .name = "transform-origin", .stage = full, .notes = "web and strict length-percentage origin on the border box" },
     .{ .name = "vertical-align", .stage = full, .notes = "text baselines; web/strict add replaced and inline-block baselines" },
     .{ .name = "white-space", .stage = layout },
     .{ .name = "widows", .stage = layout },
@@ -108,6 +110,7 @@ pub const document_profile = [_]PropertySupport{
 };
 
 pub const web_foundations = [_]FeatureSupport{
+    .{ .name = "2d-transforms", .stage = full, .notes = "typed transform lists cumulative descendant matrices transformed clips and link bounds" },
     .{ .name = "bidirectional-text", .stage = full, .notes = "SheenBidi UAX 9 paragraph levels and L2 line reordering" },
     .{ .name = "browser-media-snapshot", .stage = computed_only, .notes = "deterministic viewport and screen/print selection" },
     .{ .name = "css-identifier-escapes", .stage = computed_only, .notes = "simple and hexadecimal escapes" },

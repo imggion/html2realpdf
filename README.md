@@ -25,6 +25,8 @@ The browser package is published as `@imggion/html2realpdf`.
 - Web/strict CSS Grid with explicit and implicit tracks, `fr`, `repeat()`,
   `minmax()`, auto-placement, spans, named lines/areas, Box Alignment, nested
   grids, intrinsic sizing, replaced elements, and page-aware row placement;
+- Web/strict 2D transforms with length-percentage origins, nested matrices,
+  transformed overflow clips, text, images, vectors, and real link bounds;
 - A4, Letter, landscape, custom page sizes, forced breaks, `break-inside`,
   orphans, and widows;
 - selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
@@ -39,9 +41,10 @@ The browser package is published as `@imggion/html2realpdf`.
   snapshotting, preview/download helpers, and an html2pdf.js-compatible facade.
 
 The document profile remains aimed at invoices, reports, tickets, letters, and
-similar documents. The Web profile additionally enables floats, Flexbox, and
-positioned layout, and CSS Grid. Transforms, shadows, and arbitrary browser
-painting are still rejected or reported instead of being silently rasterized.
+similar documents. The Web profile additionally enables floats, Flexbox,
+positioned layout, CSS Grid, and 2D transforms. Shadows, filters, 3D transforms,
+and arbitrary browser painting are still rejected or reported instead of being
+silently rasterized.
 
 See [docs/css-support.md](docs/css-support.md) for the versioned property and
 pipeline-stage support matrix.

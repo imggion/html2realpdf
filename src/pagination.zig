@@ -98,6 +98,8 @@ pub fn paginate(
 
             var page_fragment = fragment;
             page_fragment.rect.y = page_y;
+            page_fragment.transform = shiftedTransform(fragment.transform, 0, page_y - fragment.rect.y);
+            page_fragment.clip_transform = shiftedTransform(fragment.clip_transform, 0, page_y - fragment.rect.y);
             page_fragment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
             page_fragment.image_content_rect = rectForPage(fragment.image_content_rect, page_index, content_height);
             try fragments.append(allocator, .{ .page_index = page_index, .fragment = page_fragment });
@@ -207,6 +209,8 @@ fn appendSplitBox(
         var segment = fragment;
         segment.rect.y = page_y;
         segment.rect.height = segment_height;
+        segment.transform = shiftedTransform(fragment.transform, 0, -@as(f32, @floatFromInt(page_index)) * content_height);
+        segment.clip_transform = shiftedTransform(fragment.clip_transform, 0, -@as(f32, @floatFromInt(page_index)) * content_height);
         segment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
         segment.image_content_rect = rectForPage(fragment.image_content_rect, page_index, content_height);
         const is_last = segment_height >= remaining;
@@ -235,6 +239,12 @@ fn appendSplitBox(
         is_first = false;
         if (segment_height <= 0) break;
     }
+}
+
+fn shiftedTransform(transform: geometry.AffineTransform, shift_x: f32, shift_y: f32) geometry.AffineTransform {
+    return geometry.AffineTransform.translation(shift_x, shift_y)
+        .multiply(transform)
+        .multiply(geometry.AffineTransform.translation(-shift_x, -shift_y));
 }
 
 fn clipForPage(absolute_clip: ?geometry.Rect, page_index: usize, content_height: f32) ?geometry.Rect {
@@ -355,6 +365,26 @@ test "translate clipping rectangles into the destination page" {
     try std.testing.expectEqual(@as(usize, 1), paged.fragments.items[0].page_index);
     try std.testing.expectApproxEqAbs(@as(f32, 0), paged.fragments.items[0].fragment.clip_rect.?.y, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 10), paged.fragments.items[0].fragment.clip_rect.?.height, 0.01);
+}
+
+test "translate transform coordinate systems into destination pages" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(layout.Fragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{
+        .kind = .text,
+        .source_box = 0,
+        .rect = .{ .y = 95, .width = 20, .height = 10 },
+        .transform = geometry.AffineTransform.rotation(@as(f32, std.math.pi / 2.0)).around(.{ .y = 100 }),
+        .text = "next",
+    });
+    const continuous = layout.LayoutDocument{ .fragments = fragments, .content_width = 100, .content_height = 110 };
+    var paged = try paginate(allocator, &continuous, .{ .width_points = 75, .height_points = 75 });
+    defer paged.deinit(allocator);
+
+    const transformed_origin = paged.fragments.items[0].fragment.transform.applyPoint(.{ .y = 5 });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), transformed_origin.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), transformed_origin.y, 0.001);
 }
 
 test "slice decoration paints borders only at the box ends" {

@@ -130,14 +130,31 @@ pub fn assignPaintMetadata(state: anytype) !void {
     defer state.allocator.free(orders);
     const opacity = try state.allocator.alloc(f32, count);
     defer state.allocator.free(opacity);
+    const transforms = try state.allocator.alloc(geometry.AffineTransform, count);
+    defer state.allocator.free(transforms);
     @memset(orders, 0);
     @memset(opacity, 1);
+    @memset(transforms, geometry.AffineTransform.identity);
     var next_order: usize = 0;
-    try assignBoxMetadata(state, state.tree.root, 1, orders, opacity, &next_order);
+    try assignBoxMetadata(state, state.tree.root, 1, geometry.AffineTransform.identity, orders, opacity, transforms, &next_order);
     for (state.fragments.items) |*fragment| {
         fragment.paint_order = orders[fragment.source_box];
         fragment.opacity = opacity[fragment.source_box];
+        fragment.transform = transforms[fragment.source_box];
+        if (fragment.clip_rect != null) {
+            if (nearestClippingAncestor(state, fragment.source_box)) |ancestor_id| fragment.clip_transform = transforms[ancestor_id];
+        }
     }
+}
+
+fn nearestClippingAncestor(state: anytype, box_id: box.BoxId) ?box.BoxId {
+    var ancestor = state.tree.boxes.items[box_id].parent;
+    while (ancestor) |ancestor_id| {
+        const source = state.tree.boxes.items[ancestor_id];
+        if (source.style.overflow.clips()) return ancestor_id;
+        ancestor = source.parent;
+    }
+    return null;
 }
 
 const Child = struct {
@@ -154,14 +171,17 @@ fn assignBoxMetadata(
     state: anytype,
     box_id: box.BoxId,
     parent_opacity: f32,
+    parent_transform: geometry.AffineTransform,
     orders: []usize,
     opacity: []f32,
+    transforms: []geometry.AffineTransform,
     next_order: *usize,
 ) !void {
     const source = state.tree.boxes.items[box_id];
     orders[box_id] = next_order.*;
     next_order.* += 1;
     opacity[box_id] = parent_opacity * source.style.opacity;
+    transforms[box_id] = parent_transform.multiply(resolveBoxTransform(state, box_id));
 
     var children = try std.ArrayList(Child).initCapacity(state.allocator, 0);
     defer children.deinit(state.allocator);
@@ -176,8 +196,29 @@ fn assignBoxMetadata(
         .flex_parent = source.style.display == .flex or source.style.display == .inlineFlex or source.style.display == .grid or source.style.display == .inlineGrid,
     }, childLessThan);
     for (children.items) |entry| {
-        try assignBoxMetadata(state, entry.box_id, opacity[box_id], orders, opacity, next_order);
+        try assignBoxMetadata(state, entry.box_id, opacity[box_id], transforms[box_id], orders, opacity, transforms, next_order);
     }
+}
+
+fn resolveBoxTransform(state: anytype, box_id: box.BoxId) geometry.AffineTransform {
+    const source = state.tree.boxes.items[box_id];
+    if (source.style.transform.len == 0 or source.kind == .inlineBox or source.kind == .anonymousInline) return .identity;
+    const rect = referenceRectForBox(state, box_id) orelse return .identity;
+    const origin = geometry.Point{
+        .x = rect.x + (source.style.transform_origin.x.resolve(rect.width) orelse rect.width * 0.5),
+        .y = rect.y + (source.style.transform_origin.y.resolve(rect.height) orelse rect.height * 0.5),
+    };
+    return box.resolveTransform(source.style.transform, rect.width, rect.height).around(origin);
+}
+
+fn referenceRectForBox(state: anytype, box_id: box.BoxId) ?geometry.Rect {
+    var descendant_bounds: ?geometry.Rect = null;
+    for (state.fragments.items) |fragment| {
+        if (fragment.source_box == box_id and (fragment.kind == .box or fragment.kind == .replaced)) return fragment.rect;
+        if (!isDescendantOf(state.tree, fragment.source_box, box_id)) continue;
+        descendant_bounds = if (descendant_bounds) |existing| unionRect(existing, fragment.rect) else fragment.rect;
+    }
+    return descendant_bounds;
 }
 
 fn childLessThan(context: SortContext, a: Child, b: Child) bool {
@@ -196,7 +237,7 @@ fn childLessThan(context: SortContext, a: Child, b: Child) bool {
 }
 
 fn paintPhase(style: box.Style) u8 {
-    const positioned = style.position != .static or style.z_index != null or style.opacity < 0.9999;
+    const positioned = style.position != .static or style.z_index != null or style.opacity < 0.9999 or style.transform.len > 0;
     const z_index = style.z_index orelse 0;
     if (positioned and z_index < 0) return 0;
     if (!positioned) return 1;
@@ -208,7 +249,7 @@ fn containingBlock(state: anytype, box_id: box.BoxId, initial: geometry.Rect) ge
     var ancestor = state.tree.boxes.items[box_id].parent;
     while (ancestor) |ancestor_id| {
         const source = state.tree.boxes.items[ancestor_id];
-        if (source.style.position != .static) return fragmentContainingBlock(state, ancestor_id) orelse initial;
+        if (source.style.position != .static or source.style.transform.len > 0) return fragmentContainingBlock(state, ancestor_id) orelse initial;
         ancestor = source.parent;
     }
     return initial;

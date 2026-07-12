@@ -1087,6 +1087,25 @@ test "cascade: positioned layout resolves physical logical and group properties"
     try std.testing.expectApproxEqAbs(@as(f32, 0.75), style.opacity, 0.001);
 }
 
+test "cascade: 2D transforms retain typed operations percentages and origin" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='transform:translate(10%,20px) rotate(90deg) scale(2,.5) skewX(10deg);transform-origin:left 25%'><span>child</span></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const span_id = ct.document.nodes.items[div_id].first_child.?;
+    const style = ct.styles[div_id];
+
+    try std.testing.expectEqual(@as(usize, 4), style.transform.len);
+    try std.testing.expectEqual(box.Length{ .percent = 0.1 }, style.transform[0].translate.x);
+    try std.testing.expectEqual(box.Length{ .px = 20 }, style.transform[0].translate.y);
+    try std.testing.expectApproxEqAbs(@as(f32, std.math.pi / 2.0), style.transform[1].rotate, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), style.transform[2].scale.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), style.transform[2].scale.y, 0.001);
+    try std.testing.expectEqual(box.Length{ .percent = 0 }, style.transform_origin.x);
+    try std.testing.expectEqual(box.Length{ .percent = 0.25 }, style.transform_origin.y);
+    try std.testing.expectEqual(@as(usize, 0), ct.styles[span_id].transform.len);
+}
+
 test "cascade: text-decoration shorthand keeps line style color and thickness" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");

@@ -39,6 +39,83 @@ pub const Rect = struct {
     }
 };
 
+/// CSS-space 2D affine transform using the `matrix(a,b,c,d,e,f)` convention.
+/// Coordinates keep the browser's downward-positive Y axis until the PDF
+/// backend performs the single page-space conjugation.
+pub const AffineTransform = struct {
+    a: f32 = 1,
+    b: f32 = 0,
+    c: f32 = 0,
+    d: f32 = 1,
+    e: f32 = 0,
+    f: f32 = 0,
+
+    pub const identity: AffineTransform = .{};
+
+    pub fn translation(x: f32, y: f32) AffineTransform {
+        return .{ .e = x, .f = y };
+    }
+
+    pub fn scaling(x: f32, y: f32) AffineTransform {
+        return .{ .a = x, .d = y };
+    }
+
+    pub fn rotation(radians: f32) AffineTransform {
+        const cosine = @cos(radians);
+        const sine = @sin(radians);
+        return .{ .a = cosine, .b = sine, .c = -sine, .d = cosine };
+    }
+
+    pub fn skewing(x_radians: f32, y_radians: f32) AffineTransform {
+        return .{ .b = @tan(y_radians), .c = @tan(x_radians) };
+    }
+
+    /// Returns `self * next`, matching CSS transform-list matrix post-multiplication.
+    pub fn multiply(self: AffineTransform, next: AffineTransform) AffineTransform {
+        return .{
+            .a = self.a * next.a + self.c * next.b,
+            .b = self.b * next.a + self.d * next.b,
+            .c = self.a * next.c + self.c * next.d,
+            .d = self.b * next.c + self.d * next.d,
+            .e = self.a * next.e + self.c * next.f + self.e,
+            .f = self.b * next.e + self.d * next.f + self.f,
+        };
+    }
+
+    pub fn around(self: AffineTransform, origin: Point) AffineTransform {
+        return translation(origin.x, origin.y).multiply(self).multiply(translation(-origin.x, -origin.y));
+    }
+
+    pub fn applyPoint(self: AffineTransform, point: Point) Point {
+        return .{
+            .x = self.a * point.x + self.c * point.y + self.e,
+            .y = self.b * point.x + self.d * point.y + self.f,
+        };
+    }
+
+    pub fn bounds(self: AffineTransform, rect: Rect) Rect {
+        const top_left = self.applyPoint(.{ .x = rect.x, .y = rect.y });
+        const top_right = self.applyPoint(.{ .x = rect.x + rect.width, .y = rect.y });
+        const bottom_right = self.applyPoint(.{ .x = rect.x + rect.width, .y = rect.y + rect.height });
+        const bottom_left = self.applyPoint(.{ .x = rect.x, .y = rect.y + rect.height });
+        const left = @min(@min(top_left.x, top_right.x), @min(bottom_right.x, bottom_left.x));
+        const top = @min(@min(top_left.y, top_right.y), @min(bottom_right.y, bottom_left.y));
+        const right = @max(@max(top_left.x, top_right.x), @max(bottom_right.x, bottom_left.x));
+        const bottom = @max(@max(top_left.y, top_right.y), @max(bottom_right.y, bottom_left.y));
+        return .{ .x = left, .y = top, .width = right - left, .height = bottom - top };
+    }
+
+    pub fn isIdentity(self: AffineTransform) bool {
+        return self.approxEqual(identity, 0.0001);
+    }
+
+    pub fn approxEqual(self: AffineTransform, other: AffineTransform, tolerance: f32) bool {
+        return @abs(self.a - other.a) <= tolerance and @abs(self.b - other.b) <= tolerance and
+            @abs(self.c - other.c) <= tolerance and @abs(self.d - other.d) <= tolerance and
+            @abs(self.e - other.e) <= tolerance and @abs(self.f - other.f) <= tolerance;
+    }
+};
+
 pub const Color = struct {
     red: f32,
     green: f32,
@@ -219,4 +296,17 @@ test "intersect clipping rectangles" {
     try std.testing.expectEqual(@as(f32, 20), overlap.width);
     try std.testing.expectEqual(@as(f32, 15), overlap.height);
     try std.testing.expect((Rect{ .width = 5, .height = 5 }).intersection(.{ .x = 6, .width = 2, .height = 2 }) == null);
+}
+
+test "compose CSS affine transforms and compute transformed bounds" {
+    const transform = AffineTransform.translation(10, 20).multiply(AffineTransform.rotation(@as(f32, std.math.pi / 2.0)));
+    const point = transform.applyPoint(.{ .x = 4, .y = 2 });
+    try std.testing.expectApproxEqAbs(@as(f32, 8), point.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 24), point.y, 0.001);
+
+    const bounds = AffineTransform.scaling(2, 3).around(.{ .x = 5, .y = 5 }).bounds(.{ .x = 0, .y = 0, .width = 10, .height = 10 });
+    try std.testing.expectApproxEqAbs(@as(f32, -5), bounds.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -10), bounds.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), bounds.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), bounds.height, 0.001);
 }

@@ -13,6 +13,7 @@
 const std = @import("std");
 const dom = @import("dom.zig");
 const html = @import("html.zig");
+const geometry = @import("geometry.zig");
 const expressions = @import("css/expressions.zig");
 
 /// Stable index into `BoxTree.boxes`.
@@ -442,6 +443,32 @@ pub const ObjectPosition = struct {
     y: Length = .{ .percent = 0.5 },
 };
 
+pub const TransformOperation = union(enum) {
+    matrix: geometry.AffineTransform,
+    translate: struct { x: Length = .{ .px = 0 }, y: Length = .{ .px = 0 } },
+    scale: struct { x: f32 = 1, y: f32 = 1 },
+    rotate: f32,
+    skew: struct { x: f32 = 0, y: f32 = 0 },
+};
+
+pub fn resolveTransform(operations: []const TransformOperation, width: f32, height: f32) geometry.AffineTransform {
+    var result = geometry.AffineTransform.identity;
+    for (operations) |operation| {
+        const matrix = switch (operation) {
+            .matrix => |value| value,
+            .translate => |value| geometry.AffineTransform.translation(
+                value.x.resolve(width) orelse 0,
+                value.y.resolve(height) orelse 0,
+            ),
+            .scale => |value| geometry.AffineTransform.scaling(value.x, value.y),
+            .rotate => |radians| geometry.AffineTransform.rotation(radians),
+            .skew => |value| geometry.AffineTransform.skewing(value.x, value.y),
+        };
+        result = result.multiply(matrix);
+    }
+    return result;
+}
+
 pub const VerticalAlign = union(enum) {
     baseline,
     sub,
@@ -769,6 +796,8 @@ pub const Style = struct {
     insets: Insets = .{},
     z_index: ?i32 = null,
     opacity: f32 = 1,
+    transform: []const TransformOperation = &.{},
+    transform_origin: ObjectPosition = .{},
     float_direction: Float = .none,
     clear_direction: Clear = .none,
     white_space: WhiteSpace = .normal,
@@ -1081,6 +1110,8 @@ const BuildState = struct {
         style.insets = .{};
         style.z_index = null;
         style.opacity = 1;
+        style.transform = &.{};
+        style.transform_origin = .{};
         style.float_direction = .none;
         style.clear_direction = .none;
         style.background = null;
@@ -1405,6 +1436,8 @@ fn anonymousStyle(parent: Style) Style {
     style.insets = .{};
     style.z_index = null;
     style.opacity = 1;
+    style.transform = &.{};
+    style.transform_origin = .{};
     style.float_direction = .none;
     style.clear_direction = .none;
     style.background = null;

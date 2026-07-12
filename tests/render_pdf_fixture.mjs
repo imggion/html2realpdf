@@ -72,6 +72,10 @@ const html = `
       <div style="width: 300px; height: 70px; margin-top: 18px; overflow: hidden; border: 3px solid #0f766e; border-radius: 42px 8px / 28px 18px; background: #ccfbf1">
         <div style="width: 160px; height: 48px; margin-left: 260px; margin-top: 10px; background: #0d9488"></div>
       </div>
+      <div style="position: relative; width: 420px; height: 120px; margin-top: 34px; overflow: hidden; border-radius: 26px; transform: rotate(-4deg); transform-origin: 50% 50%; background: #ede9fe">
+        <div style="position: absolute; left: 42px; top: 30px; width: 190px; height: 54px; padding: 10px; transform: translate(28px, 4px) rotate(9deg); transform-origin: left top; background: #7c3aed; color: white">Nested native transform</div>
+        <a href="https://example.com/transformed-card" style="position: absolute; left: 295px; top: 42px; display: block; width: 110px; font-size: 10px; line-height: 13px; transform: skewX(-12deg); transform-origin: left top; color: #4c1d95">Real transformed link</a>
+      </div>
     </section>
     <section style="page-break-before: always; display: grid; width: 600px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: 72px 110px; grid-template-areas: &quot;hero hero aside&quot; &quot;revenue users aside&quot;; gap: 14px; padding: 14px; background: #f8fafc">
       <div style="grid-area: hero; padding: 14px; background: #1e3a8a; color: white"><strong>Native CSS Grid dashboard</strong><br>Explicit named areas and flexible tracks</div>

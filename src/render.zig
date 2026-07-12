@@ -35,6 +35,7 @@ pub const Error = error{
     UnsupportedPositionedLayout,
     UnsupportedFloatLayout,
     UnsupportedDisplayLayout,
+    UnsupportedTransform,
     MissingGlyph,
 };
 
@@ -90,6 +91,7 @@ pub fn renderHtml(
         if ((style.display == .grid or style.display == .inlineGrid) and options.css_profile == .document) return Error.UnsupportedDisplayLayout;
         if (style.position != .static and options.css_profile == .document) return Error.UnsupportedPositionedLayout;
         if (style.float_direction != .none and options.css_profile == .document) return Error.UnsupportedFloatLayout;
+        if (style.transform.len > 0 and options.css_profile == .document) return Error.UnsupportedTransform;
     }
     var tree = try box.Builder.build(arena, &document, styles, document.root);
     defer tree.deinit(arena);
@@ -183,6 +185,10 @@ test "reject positioned and floating layout instead of silently misrendering" {
         renderHtml(allocator, "<div style=\"display:flex\">no</div>", .{}),
     );
     try std.testing.expectError(
+        Error.UnsupportedTransform,
+        renderHtml(allocator, "<div style=\"transform:translateX(10px)\">no</div>", .{}),
+    );
+    try std.testing.expectError(
         Error.MissingGlyph,
         renderHtml(allocator, "<p>Unsupported emoji 😀</p>", .{}),
     );
@@ -198,6 +204,19 @@ test "render Web positioned layout as native PDF content" {
     );
     defer result.deinit(allocator);
     try std.testing.expect(std.mem.startsWith(u8, result.bytes, "%PDF-1.7"));
+}
+
+test "render Web 2D transforms as native PDF matrices" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<a href='https://example.com/transform' style='display:block;width:120px;height:40px;transform:translate(20px,10px) rotate(12deg);transform-origin:left top;background:#2563eb;color:white'>matrix</a>",
+        .{ .css_profile = .web },
+    );
+    defer result.deinit(allocator);
+    try std.testing.expect(std.mem.startsWith(u8, result.bytes, "%PDF-1.7"));
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Link") != null);
 }
 
 test "render Web floats and clear as native PDF content" {

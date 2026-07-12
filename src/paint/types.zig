@@ -80,7 +80,9 @@ pub const PageCommand = struct {
     command: Command,
     clip_rect: ?geometry.Rect = null,
     clip_radii: ?box.ResolvedBorderRadii = null,
+    clip_transform: geometry.AffineTransform = .identity,
     opacity: f32 = 1,
+    transform: geometry.AffineTransform = .identity,
 };
 
 pub const DisplayList = struct {

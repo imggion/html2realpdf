@@ -324,7 +324,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     for (list.commands.items) |page_command| {
         if (page_command.command != .link) continue;
         try beginObject(&output, offsets, first_annotation_id + annotation_index);
-        try writeLinkAnnotation(writer, list, page_command.command.link);
+        try writeLinkAnnotation(writer, list, page_command.command.link, page_command.transform);
         try writer.writeAll("\nendobj\n");
         annotation_index += 1;
     }
@@ -380,7 +380,9 @@ fn pageContent(
         const page_command = list.commands.items[command_index];
         defer command_index += 1;
         if (page_command.page_index != page_index) continue;
-        if (page_command.clip_rect) |clip| try writeClipRect(writer, list, clip, page_command.clip_radii);
+        const has_transform = !page_command.transform.isIdentity();
+        if (page_command.clip_rect) |clip| try writeClipRect(writer, list, clip, page_command.clip_radii, page_command.clip_transform);
+        if (has_transform) try writeTransformState(writer, list, page_command.transform);
 
         switch (page_command.command) {
             .fill_rect => |fill| {
@@ -460,6 +462,8 @@ fn pageContent(
                         baseline,
                         scale,
                     );
+                    if (has_transform) try writer.writeAll("Q\n");
+                    if (page_command.clip_rect != null) try writer.writeAll("Q\n");
                     continue;
                 }
                 try writer.print("BT /F{d} {d:.3} Tf {d:.3} Tc 1 0 0 1 {d:.3} {d:.3} Tm ", .{
@@ -485,6 +489,8 @@ fn pageContent(
                         font_usage.indexForRun(next_run) != used_font_index or
                         !clipRectsEqual(next_command.clip_rect, page_command.clip_rect) or
                         !clipRadiiEqual(next_command.clip_radii, page_command.clip_radii) or
+                        !next_command.clip_transform.approxEqual(page_command.clip_transform, 0.0001) or
+                        !next_command.transform.approxEqual(page_command.transform, 0.0001) or
                         @abs(next_command.opacity - page_command.opacity) > 0.0001 or
                         !colorsEqual(next_run.color, run.color) or
                         @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) > 0.1) break;
@@ -518,11 +524,34 @@ fn pageContent(
                 });
             },
         }
+        if (has_transform) try writer.writeAll("Q\n");
         if (page_command.clip_rect != null) try writer.writeAll("Q\n");
     }
     try writer.writeAll("Q");
 
     return content.toOwnedSlice();
+}
+
+fn writeTransformState(writer: *std.Io.Writer, list: *const display_list.DisplayList, transform: geometry.AffineTransform) !void {
+    const scale = geometry.css_px_to_pdf_points;
+    const margins = list.page_spec.margins_points;
+    const top = list.page_spec.height_points - margins.top;
+    const pdf_transform = geometry.AffineTransform{
+        .a = transform.a,
+        .b = -transform.b,
+        .c = -transform.c,
+        .d = transform.d,
+        .e = margins.left + scale * transform.e - transform.a * margins.left + transform.c * top,
+        .f = top - scale * transform.f + transform.b * margins.left - transform.d * top,
+    };
+    try writer.print("q {d:.6} {d:.6} {d:.6} {d:.6} {d:.3} {d:.3} cm\n", .{
+        pdf_transform.a,
+        pdf_transform.b,
+        pdf_transform.c,
+        pdf_transform.d,
+        pdf_transform.e,
+        pdf_transform.f,
+    });
 }
 
 fn fittedImageRect(command: display_list.Image) geometry.Rect {
@@ -558,7 +587,14 @@ fn writeClipRect(
     list: *const display_list.DisplayList,
     clip: geometry.Rect,
     radii: ?@import("box.zig").ResolvedBorderRadii,
+    transform: geometry.AffineTransform,
 ) !void {
+    if (!transform.isIdentity()) {
+        try writer.writeAll("q ");
+        try writeTransformedClipPath(writer, list, clip, radii orelse .{}, transform);
+        try writer.writeAll("W n\n");
+        return;
+    }
     const scale = geometry.css_px_to_pdf_points;
     const margins = list.page_spec.margins_points;
     const x = margins.left + clip.x * scale;
@@ -575,6 +611,75 @@ fn writeClipRect(
             @max(clip.height * scale, 0),
         });
     }
+}
+
+fn writeTransformedClipPath(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    rect: geometry.Rect,
+    radii: @import("box.zig").ResolvedBorderRadii,
+    transform: geometry.AffineTransform,
+) !void {
+    const right = rect.x + rect.width;
+    const bottom = rect.y + rect.height;
+    if (!radii.hasRadius()) {
+        try writeTransformedPoint(writer, list, transform, .{ .x = rect.x, .y = rect.y }, "m");
+        try writeTransformedPoint(writer, list, transform, .{ .x = right, .y = rect.y }, "l");
+        try writeTransformedPoint(writer, list, transform, .{ .x = right, .y = bottom }, "l");
+        try writeTransformedPoint(writer, list, transform, .{ .x = rect.x, .y = bottom }, "l");
+        try writer.writeAll("h\n");
+        return;
+    }
+
+    const control: f32 = 0.55228475;
+    const top_left = radii.top_left;
+    const top_right = radii.top_right;
+    const bottom_right = radii.bottom_right;
+    const bottom_left = radii.bottom_left;
+    try writeTransformedPoint(writer, list, transform, .{ .x = rect.x + top_left.x, .y = rect.y }, "m");
+    try writeTransformedPoint(writer, list, transform, .{ .x = right - top_right.x, .y = rect.y }, "l");
+    try writeTransformedCurve(writer, list, transform, .{ .x = right - top_right.x + top_right.x * control, .y = rect.y }, .{ .x = right, .y = rect.y + top_right.y - top_right.y * control }, .{ .x = right, .y = rect.y + top_right.y });
+    try writeTransformedPoint(writer, list, transform, .{ .x = right, .y = bottom - bottom_right.y }, "l");
+    try writeTransformedCurve(writer, list, transform, .{ .x = right, .y = bottom - bottom_right.y + bottom_right.y * control }, .{ .x = right - bottom_right.x + bottom_right.x * control, .y = bottom }, .{ .x = right - bottom_right.x, .y = bottom });
+    try writeTransformedPoint(writer, list, transform, .{ .x = rect.x + bottom_left.x, .y = bottom }, "l");
+    try writeTransformedCurve(writer, list, transform, .{ .x = rect.x + bottom_left.x - bottom_left.x * control, .y = bottom }, .{ .x = rect.x, .y = bottom - bottom_left.y + bottom_left.y * control }, .{ .x = rect.x, .y = bottom - bottom_left.y });
+    try writeTransformedPoint(writer, list, transform, .{ .x = rect.x, .y = rect.y + top_left.y }, "l");
+    try writeTransformedCurve(writer, list, transform, .{ .x = rect.x, .y = rect.y + top_left.y - top_left.y * control }, .{ .x = rect.x + top_left.x - top_left.x * control, .y = rect.y }, .{ .x = rect.x + top_left.x, .y = rect.y });
+    try writer.writeAll("h\n");
+}
+
+fn writeTransformedPoint(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    transform: geometry.AffineTransform,
+    point: geometry.Point,
+    operator: []const u8,
+) !void {
+    const mapped = cssPointToPdf(list, transform.applyPoint(point));
+    try writer.print("{d:.3} {d:.3} {s}\n", .{ mapped.x, mapped.y, operator });
+}
+
+fn writeTransformedCurve(
+    writer: *std.Io.Writer,
+    list: *const display_list.DisplayList,
+    transform: geometry.AffineTransform,
+    first: geometry.Point,
+    second: geometry.Point,
+    end: geometry.Point,
+) !void {
+    const first_pdf = cssPointToPdf(list, transform.applyPoint(first));
+    const second_pdf = cssPointToPdf(list, transform.applyPoint(second));
+    const end_pdf = cssPointToPdf(list, transform.applyPoint(end));
+    try writer.print("{d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} c\n", .{
+        first_pdf.x, first_pdf.y, second_pdf.x, second_pdf.y, end_pdf.x, end_pdf.y,
+    });
+}
+
+fn cssPointToPdf(list: *const display_list.DisplayList, point: geometry.Point) geometry.Point {
+    return .{
+        .x = list.page_spec.margins_points.left + point.x * geometry.css_px_to_pdf_points,
+        .y = list.page_spec.height_points - list.page_spec.margins_points.top - point.y * geometry.css_px_to_pdf_points,
+    };
 }
 
 fn clipRectsEqual(left: ?geometry.Rect, right: ?geometry.Rect) bool {
@@ -754,13 +859,15 @@ fn writeLinkAnnotation(
     writer: *std.Io.Writer,
     list: *const display_list.DisplayList,
     annotation: display_list.LinkAnnotation,
+    transform: geometry.AffineTransform,
 ) !void {
     const scale = geometry.css_px_to_pdf_points;
     const margins = list.page_spec.margins_points;
-    const x1 = margins.left + annotation.rect.x * scale;
-    const x2 = x1 + annotation.rect.width * scale;
-    const y2 = list.page_spec.height_points - margins.top - annotation.rect.y * scale;
-    const y1 = y2 - annotation.rect.height * scale;
+    const rect = transform.bounds(annotation.rect);
+    const x1 = margins.left + rect.x * scale;
+    const x2 = x1 + rect.width * scale;
+    const y2 = list.page_spec.height_points - margins.top - rect.y * scale;
+    const y1 = y2 - rect.height * scale;
     try writer.print(
         "<< /Type /Annot /Subtype /Link /Rect [{d:.3} {d:.3} {d:.3} {d:.3}] /Border [0 0 0] /A << /S /URI /URI (",
         .{ x1, y1, x2, y2 },
@@ -1410,6 +1517,49 @@ test "serialize elliptical rounded paths and rounded clipping as PDF curves" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, content, "W n\n"));
     try std.testing.expect(std.mem.indexOf(u8, content, " re W n\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "f\nQ\nQ") != null);
+}
+
+test "serialize CSS transforms as PDF matrices and transform link bounds" {
+    const pagination = @import("pagination.zig");
+    const allocator = std.testing.allocator;
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 2);
+    defer commands.deinit(allocator);
+    const transform = geometry.AffineTransform.translation(10, 20);
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .transform = transform,
+        .command = .{ .fill_rect = .{
+            .rect = .{ .x = 5, .y = 5, .width = 20, .height = 10 },
+            .color = geometry.Color.black,
+        } },
+    });
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .transform = transform,
+        .command = .{ .link = .{
+            .rect = .{ .x = 5, .y = 5, .width = 20, .height = 10 },
+            .url = "https://example.com/transformed",
+        } },
+    });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec{ .width_points = 150, .height_points = 150 },
+    };
+    var font_usage = try FontUsage.init(allocator, null);
+    defer font_usage.deinit(allocator);
+    try font_usage.collect(&list);
+    var alpha_usage = try AlphaUsage.init(allocator);
+    defer alpha_usage.deinit(allocator);
+    try alpha_usage.collect(allocator, &list);
+    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage);
+    defer allocator.free(content);
+    try std.testing.expect(std.mem.indexOf(u8, content, "1.000000 -0.000000 -0.000000 1.000000 7.500 -15.000 cm") != null);
+
+    var annotation_output = std.Io.Writer.Allocating.init(allocator);
+    defer annotation_output.deinit();
+    try writeLinkAnnotation(&annotation_output.writer, &list, commands.items[1].command.link, transform);
+    try std.testing.expect(std.mem.indexOf(u8, annotation_output.written(), "/Rect [11.250 123.750 26.250 131.250]") != null);
 }
 
 test "fit and position native images inside their content box" {
