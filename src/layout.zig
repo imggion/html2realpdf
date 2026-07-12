@@ -8,6 +8,7 @@ const box = @import("box.zig");
 const dom = @import("dom.zig");
 const font = @import("font.zig");
 const geometry = @import("geometry.zig");
+const page_geometry = @import("layout/page_geometry.zig");
 
 pub const types = @import("layout/types.zig");
 pub const intrinsic = @import("layout/intrinsic.zig");
@@ -38,10 +39,7 @@ pub const ListMarker = struct {
     position: box.ListStylePosition,
 };
 
-const PageNameTransition = struct {
-    page_index: usize,
-    name: []const u8,
-};
+const PageNameTransition = page_geometry.PageNameTransition;
 
 const InlineCursor = inline_context.Cursor(State);
 
@@ -71,6 +69,8 @@ pub fn layout(
         .margin_cache = margin_cache,
         .pending_positioned = &pending_positioned,
         .page_name_transitions = &page_name_transitions,
+        .page_spec = options.page_spec,
+        .page_rules = options.page_rules,
     };
     errdefer state.fragments.deinit(allocator);
 
@@ -112,6 +112,8 @@ const State = struct {
     margin_cache: []?block.MarginInfo,
     pending_positioned: *std.ArrayList(positioned.Pending),
     page_name_transitions: *std.ArrayList(PageNameTransition),
+    page_spec: ?page_geometry.PageSpec,
+    page_rules: []const page_geometry.PageRule,
     next_line_id: usize = 0,
 
     const BlockLayoutOptions = struct {
@@ -226,6 +228,12 @@ const State = struct {
             .right_to_left
         else
             .left_to_right;
+        if (self.page_spec) |base| return fragmentation.Context.initPaged(.{
+            .base = base,
+            .rules = self.page_rules,
+            .initial_name = fragmentation.startPageName(self.tree, self.tree.root),
+            .transitions = self.page_name_transitions.items,
+        }, progression);
         return fragmentation.Context.init(page_height, progression);
     }
 
@@ -252,9 +260,14 @@ const State = struct {
         });
     }
 
+    pub fn pageExtentForName(self: *const State, page_index: usize, name: []const u8) f32 {
+        const base = self.page_spec orelse return self.page_height orelse 1;
+        return page_geometry.resolvePageSpec(base, self.page_rules, name, page_index, false).contentHeightCssPx();
+    }
+
     fn buildPageNames(self: *const State, content_height: f32) !std.ArrayList([]const u8) {
         const page_count = if (self.fragmentainer()) |context|
-            @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(@max(content_height, 0.0001) / context.extent))))
+            context.pageIndex(@max(content_height - 0.0001, 0)) + 1
         else
             1;
         var result = try std.ArrayList([]const u8).initCapacity(self.allocator, page_count);
@@ -285,7 +298,7 @@ const State = struct {
     ) !void {
         if (!self.web_sizing) return self.enforceLegacyLineConstraints(fragment_start, outer_y, outer_height, orphans, widows);
         const context = self.fragmentainer() orelse return;
-        const page_height = context.extent;
+        const page_height = context.extentAt(outer_y.*);
         const LineInfo = struct { id: usize, y: f32 };
         var lines = try std.ArrayList(LineInfo).initCapacity(self.allocator, 0);
         defer lines.deinit(self.allocator);
@@ -1196,6 +1209,57 @@ test "Web named page changes propagate through table Flex and Grid fragmentation
             "<div style='page:Report;background:#ff0000'>report</div>" ++
             "<div style='page:Summary;background:#0000ff'>summary</div></div>",
     );
+}
+
+test "Web named page height controls later fragmentainer placement" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:20px;page:Report'></div>" ++
+        "<section style='page:Summary'>" ++
+        "<div style='height:70px;break-inside:avoid;background:#ff0000'></div>" ++
+        "<div style='height:70px;break-inside:avoid;background:#00ff00'></div>" ++
+        "<div style='height:70px;break-inside:avoid;background:#0000ff'></div></section>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    const base = page_geometry.PageSpec{ .width_points = 75, .height_points = 75 };
+    const rules = [_]page_geometry.PageRule{
+        .{ .selector = .{ .name = "Summary" }, .width_points = 75, .height_points = 112.5 },
+    };
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+        .page_spec = base,
+        .page_rules = &rules,
+    });
+    defer result.deinit(allocator);
+
+    var red_y: ?f32 = null;
+    var green_y: ?f32 = null;
+    var blue_y: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.green == 0 and color.blue == 0) red_y = fragment.rect.y;
+        if (color.red == 0 and color.green == 1 and color.blue == 0) green_y = fragment.rect.y;
+        if (color.red == 0 and color.green == 0 and color.blue == 1) blue_y = fragment.rect.y;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), red_y.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 170), green_y.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 250), blue_y.?, 0.01);
+    try std.testing.expectEqual(@as(usize, 3), result.page_names.items.len);
+    try std.testing.expectEqualStrings("Report", result.page_names.items[0]);
+    try std.testing.expectEqualStrings("Summary", result.page_names.items[1]);
+    try std.testing.expectEqualStrings("Summary", result.page_names.items[2]);
 }
 
 fn expectNamedFormatterTransition(source: []const u8) !void {

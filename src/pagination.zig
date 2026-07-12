@@ -3,142 +3,55 @@
 const std = @import("std");
 const geometry = @import("geometry.zig");
 const layout = @import("layout.zig");
+const page_geometry = @import("layout/page_geometry.zig");
 
-pub const PageFormat = enum {
-    a4,
-    letter,
-};
+pub const PageFormat = page_geometry.PageFormat;
+pub const Orientation = page_geometry.Orientation;
+pub const Margins = page_geometry.Margins;
+pub const PageSpec = page_geometry.PageSpec;
+pub const PageSelector = page_geometry.PageSelector;
+pub const PageRule = page_geometry.PageRule;
+pub const resolvePageSpec = page_geometry.resolvePageSpec;
 
-pub const Orientation = enum {
-    portrait,
-    landscape,
-};
+const epsilon: f32 = 0.0001;
 
-pub const Margins = struct {
-    top: f32 = 0,
-    right: f32 = 0,
-    bottom: f32 = 0,
-    left: f32 = 0,
-};
+const PageSequence = struct {
+    document: *const layout.LayoutDocument,
+    base: PageSpec,
+    rules: []const PageRule,
 
-pub const PageSpec = struct {
-    width_points: f32,
-    height_points: f32,
-    margins_points: Margins = .{},
-
-    pub fn standard(format: PageFormat, orientation: Orientation, margins: Margins) PageSpec {
-        const portrait = switch (format) {
-            .a4 => geometry.Size{ .width = 595.2756, .height = 841.8898 },
-            .letter => geometry.Size{ .width = 612, .height = 792 },
-        };
-        const size = if (orientation == .portrait)
-            portrait
-        else
-            geometry.Size{ .width = portrait.height, .height = portrait.width };
-
-        return .{
-            .width_points = size.width,
-            .height_points = size.height,
-            .margins_points = margins,
-        };
+    fn pageName(self: PageSequence, page_index: usize) []const u8 {
+        if (page_index < self.document.page_names.items.len) return self.document.page_names.items[page_index];
+        if (self.document.page_names.items.len > 0) return self.document.page_names.items[self.document.page_names.items.len - 1];
+        return "";
     }
 
-    pub fn contentWidthCssPx(self: PageSpec) f32 {
-        const points = self.width_points - self.margins_points.left - self.margins_points.right;
-        return @max(points / geometry.css_px_to_pdf_points, 1);
+    fn spec(self: PageSequence, page_index: usize) PageSpec {
+        return resolvePageSpec(self.base, self.rules, self.pageName(page_index), page_index, false);
     }
 
-    pub fn contentHeightCssPx(self: PageSpec) f32 {
-        const points = self.height_points - self.margins_points.top - self.margins_points.bottom;
-        return @max(points / geometry.css_px_to_pdf_points, 1);
-    }
-};
-
-pub const PageSelector = struct {
-    name: []const u8 = "",
-    first: bool = false,
-    left: bool = false,
-    right: bool = false,
-    blank: bool = false,
-
-    fn matches(self: PageSelector, page_name: []const u8, page_index: usize, is_blank: bool) bool {
-        if (self.name.len > 0 and !std.mem.eql(u8, self.name, page_name)) return false;
-        if (self.first and page_index != 0) return false;
-        if (self.left and page_index % 2 == 0) return false;
-        if (self.right and page_index % 2 != 0) return false;
-        if (self.blank and !is_blank) return false;
-        return true;
+    fn extent(self: PageSequence, page_index: usize) f32 {
+        return self.spec(page_index).contentHeightCssPx();
     }
 
-    fn specificity(self: PageSelector) [3]u8 {
-        return .{
-            @intFromBool(self.name.len > 0),
-            @intFromBool(self.first) + @intFromBool(self.blank),
-            @intFromBool(self.left) + @intFromBool(self.right),
-        };
+    fn start(self: PageSequence, page_index: usize) f32 {
+        var result: f32 = 0;
+        for (0..page_index) |index| result += self.extent(index);
+        return result;
     }
-};
 
-pub const PageRule = struct {
-    selector: PageSelector = .{},
-    width_points: ?f32 = null,
-    height_points: ?f32 = null,
-    margin_top_points: ?f32 = null,
-    margin_right_points: ?f32 = null,
-    margin_bottom_points: ?f32 = null,
-    margin_left_points: ?f32 = null,
-    size_important: bool = false,
-    margin_top_important: bool = false,
-    margin_right_important: bool = false,
-    margin_bottom_important: bool = false,
-    margin_left_important: bool = false,
-};
-
-const Winner = struct {
-    set: bool = false,
-    important: bool = false,
-    specificity: [3]u8 = .{ 0, 0, 0 },
-    order: usize = 0,
-
-    fn accepts(self: Winner, important: bool, specificity: [3]u8, order: usize) bool {
-        if (!self.set) return true;
-        if (self.important != important) return important;
-        const comparison = std.mem.order(u8, &specificity, &self.specificity);
-        return comparison == .gt or (comparison == .eq and order >= self.order);
-    }
-};
-
-pub fn resolvePageSpec(base: PageSpec, rules: []const PageRule, page_name: []const u8, page_index: usize, is_blank: bool) PageSpec {
-    var result = base;
-    var size_winner = Winner{};
-    var margin_winners = [_]Winner{.{}} ** 4;
-    for (rules, 0..) |rule, order| {
-        if (!rule.selector.matches(page_name, page_index, is_blank)) continue;
-        const specificity = rule.selector.specificity();
-        if (rule.width_points != null and rule.height_points != null and size_winner.accepts(rule.size_important, specificity, order)) {
-            result.width_points = @max(rule.width_points.?, 1);
-            result.height_points = @max(rule.height_points.?, 1);
-            size_winner = .{ .set = true, .important = rule.size_important, .specificity = specificity, .order = order };
+    fn pageIndex(self: PageSequence, position: f32) usize {
+        const target = @max(position, 0);
+        var index: usize = 0;
+        var page_start: f32 = 0;
+        while (true) : (index += 1) {
+            const next = page_start + self.extent(index);
+            if (target < next - epsilon) return index;
+            if (@abs(target - next) <= epsilon) return index + 1;
+            page_start = next;
         }
-        applyMarginWinner(&result.margins_points.top, &margin_winners[0], rule.margin_top_points, rule.margin_top_important, specificity, order);
-        applyMarginWinner(&result.margins_points.right, &margin_winners[1], rule.margin_right_points, rule.margin_right_important, specificity, order);
-        applyMarginWinner(&result.margins_points.bottom, &margin_winners[2], rule.margin_bottom_points, rule.margin_bottom_important, specificity, order);
-        applyMarginWinner(&result.margins_points.left, &margin_winners[3], rule.margin_left_points, rule.margin_left_important, specificity, order);
     }
-    if (result.margins_points.top + result.margins_points.bottom >= result.height_points or
-        result.margins_points.left + result.margins_points.right >= result.width_points)
-    {
-        return base;
-    }
-    return result;
-}
-
-fn applyMarginWinner(target: *f32, winner: *Winner, candidate: ?f32, important: bool, specificity: [3]u8, order: usize) void {
-    const value = candidate orelse return;
-    if (!winner.accepts(important, specificity, order)) return;
-    target.* = @max(value, 0);
-    winner.* = .{ .set = true, .important = important, .specificity = specificity, .order = order };
-}
+};
 
 pub const PagedFragment = struct {
     page_index: usize,
@@ -176,20 +89,24 @@ pub fn paginateWithRules(
     var fragments = try std.ArrayList(PagedFragment).initCapacity(allocator, document.fragments.items.len);
     errdefer fragments.deinit(allocator);
 
-    const content_height = page_spec.contentHeightCssPx();
+    const sequence = PageSequence{ .document = document, .base = page_spec, .rules = page_rules };
     var page_count: usize = 1;
 
     for (document.fragments.items) |fragment| {
         if (fragment.fixed) {
             try fragments.append(allocator, .{ .page_index = 0, .fragment = fragment });
         } else if (fragment.kind == .box and fragment.rect.height > 0) {
-            try appendSplitBox(allocator, &fragments, fragment, content_height, &page_count);
+            try appendSplitBox(allocator, &fragments, fragment, sequence, &page_count);
         } else {
-            var page_index: usize = @intFromFloat(@floor(@max(fragment.rect.y, 0) / content_height));
-            var page_y = fragment.rect.y - @as(f32, @floatFromInt(page_index)) * content_height;
+            var page_index = sequence.pageIndex(fragment.rect.y);
+            var page_start = sequence.start(page_index);
+            var content_height = sequence.extent(page_index);
+            var page_y = fragment.rect.y - page_start;
 
-            if (page_y > 0 and page_y + fragment.rect.height > content_height and fragment.rect.height <= content_height) {
+            if (page_y > 0 and page_y + fragment.rect.height > content_height and fragment.rect.height <= sequence.extent(page_index + 1)) {
                 page_index += 1;
+                page_start = sequence.start(page_index);
+                content_height = sequence.extent(page_index);
                 page_y = 0;
             }
 
@@ -197,8 +114,8 @@ pub fn paginateWithRules(
             page_fragment.rect.y = page_y;
             page_fragment.transform = shiftedTransform(fragment.transform, 0, page_y - fragment.rect.y);
             page_fragment.clip_transform = shiftedTransform(fragment.clip_transform, 0, page_y - fragment.rect.y);
-            page_fragment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
-            page_fragment.image_content_rect = rectForPage(fragment.image_content_rect, page_index, content_height);
+            page_fragment.clip_rect = clipForPage(fragment.clip_rect, page_start, content_height);
+            page_fragment.image_content_rect = rectForPage(fragment.image_content_rect, page_start);
             try fragments.append(allocator, .{ .page_index = page_index, .fragment = page_fragment });
             page_count = @max(page_count, page_index + 1);
         }
@@ -224,13 +141,7 @@ pub fn paginateWithRules(
     var page_specs = try std.ArrayList(PageSpec).initCapacity(allocator, page_count);
     errdefer page_specs.deinit(allocator);
     for (0..page_count) |page_index| {
-        const page_name = if (page_index < document.page_names.items.len)
-            document.page_names.items[page_index]
-        else if (document.page_names.items.len > 0)
-            document.page_names.items[document.page_names.items.len - 1]
-        else
-            "";
-        try page_specs.append(allocator, resolvePageSpec(page_spec, page_rules, page_name, page_index, false));
+        try page_specs.append(allocator, sequence.spec(page_index));
     }
 
     return .{
@@ -239,24 +150,6 @@ pub fn paginateWithRules(
         .page_count = page_count,
         .page_spec = page_spec,
     };
-}
-
-test "named and pseudo page rules cascade by importance specificity and order" {
-    const base = PageSpec{ .width_points = 600, .height_points = 800, .margins_points = .{ .top = 10 } };
-    const rules = [_]PageRule{
-        .{ .selector = .{ .left = true }, .margin_top_points = 20 },
-        .{ .selector = .{ .name = "Report" }, .width_points = 800, .height_points = 600, .margin_top_points = 30 },
-        .{ .selector = .{ .name = "report" }, .margin_top_points = 90 },
-        .{ .selector = .{ .name = "Report", .left = true }, .margin_top_points = 40 },
-        .{ .selector = .{ .name = "Report" }, .margin_top_points = 50, .margin_top_important = true },
-    };
-
-    const report_left = resolvePageSpec(base, &rules, "Report", 1, false);
-    try std.testing.expectEqual(@as(f32, 800), report_left.width_points);
-    try std.testing.expectEqual(@as(f32, 600), report_left.height_points);
-    try std.testing.expectEqual(@as(f32, 50), report_left.margins_points.top);
-    const lower_case = resolvePageSpec(base, &rules, "report", 0, false);
-    try std.testing.expectEqual(@as(f32, 90), lower_case.margins_points.top);
 }
 
 test "fixed fragments repeat at page-relative coordinates" {
@@ -322,28 +215,32 @@ fn appendSplitBox(
     allocator: std.mem.Allocator,
     output: *std.ArrayList(PagedFragment),
     fragment: layout.Fragment,
-    content_height: f32,
+    sequence: PageSequence,
     page_count: *usize,
 ) !void {
     var remaining = fragment.rect.height;
     var absolute_y = fragment.rect.y;
-    const first_page_index: usize = @intFromFloat(@floor(@max(absolute_y, 0) / content_height));
-    const first_page_y = absolute_y - @as(f32, @floatFromInt(first_page_index)) * content_height;
-    const is_split = fragment.rect.height > content_height - first_page_y;
+    const first_page_index = sequence.pageIndex(absolute_y);
+    const first_page_start = sequence.start(first_page_index);
+    const first_page_height = sequence.extent(first_page_index);
+    const first_page_y = absolute_y - first_page_start;
+    const is_split = fragment.rect.height > first_page_height - first_page_y;
     var is_first = true;
 
     while (remaining > 0) {
-        const page_index: usize = @intFromFloat(@floor(@max(absolute_y, 0) / content_height));
-        const page_y = absolute_y - @as(f32, @floatFromInt(page_index)) * content_height;
+        const page_index = sequence.pageIndex(absolute_y);
+        const page_start = sequence.start(page_index);
+        const content_height = sequence.extent(page_index);
+        const page_y = absolute_y - page_start;
         const segment_height = @min(remaining, content_height - page_y);
 
         var segment = fragment;
         segment.rect.y = page_y;
         segment.rect.height = segment_height;
-        segment.transform = shiftedTransform(fragment.transform, 0, -@as(f32, @floatFromInt(page_index)) * content_height);
-        segment.clip_transform = shiftedTransform(fragment.clip_transform, 0, -@as(f32, @floatFromInt(page_index)) * content_height);
-        segment.clip_rect = clipForPage(fragment.clip_rect, page_index, content_height);
-        segment.image_content_rect = rectForPage(fragment.image_content_rect, page_index, content_height);
+        segment.transform = shiftedTransform(fragment.transform, 0, -page_start);
+        segment.clip_transform = shiftedTransform(fragment.clip_transform, 0, -page_start);
+        segment.clip_rect = clipForPage(fragment.clip_rect, page_start, content_height);
+        segment.image_content_rect = rectForPage(fragment.image_content_rect, page_start);
         const is_last = segment_height >= remaining;
         if (is_split) {
             if (fragment.legacy_fragment_borders) {
@@ -378,10 +275,10 @@ fn shiftedTransform(transform: geometry.AffineTransform, shift_x: f32, shift_y: 
         .multiply(geometry.AffineTransform.translation(-shift_x, -shift_y));
 }
 
-fn clipForPage(absolute_clip: ?geometry.Rect, page_index: usize, content_height: f32) ?geometry.Rect {
+fn clipForPage(absolute_clip: ?geometry.Rect, page_start: f32, content_height: f32) ?geometry.Rect {
     const source = absolute_clip orelse return null;
     var local = source;
-    local.y -= @as(f32, @floatFromInt(page_index)) * content_height;
+    local.y -= page_start;
     const top = @max(local.y, 0);
     const bottom = @min(local.bottom(), content_height);
     if (bottom <= top or local.width <= 0) return geometry.Rect{ .x = local.x, .y = top };
@@ -390,9 +287,9 @@ fn clipForPage(absolute_clip: ?geometry.Rect, page_index: usize, content_height:
     return local;
 }
 
-fn rectForPage(absolute_rect: ?geometry.Rect, page_index: usize, content_height: f32) ?geometry.Rect {
+fn rectForPage(absolute_rect: ?geometry.Rect, page_start: f32) ?geometry.Rect {
     var rect = absolute_rect orelse return null;
-    rect.y -= @as(f32, @floatFromInt(page_index)) * content_height;
+    rect.y -= page_start;
     return rect;
 }
 

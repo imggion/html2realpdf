@@ -5,6 +5,7 @@
 //! extent, atomic-placement, and forced-page-side decisions.
 
 const std = @import("std");
+const page_geometry = @import("page_geometry.zig");
 
 const epsilon: f32 = 0.0001;
 
@@ -97,41 +98,81 @@ fn pageNameApplies(source: anytype) bool {
 pub const Context = struct {
     extent: f32,
     progression: PageProgression = .left_to_right,
+    sequence: ?page_geometry.Sequence = null,
 
     pub fn init(extent: f32, progression: PageProgression) ?Context {
         if (extent <= 0) return null;
         return .{ .extent = @max(extent, 1), .progression = progression };
     }
 
+    pub fn initPaged(sequence: page_geometry.Sequence, progression: PageProgression) ?Context {
+        const extent = sequence.contentExtent(0);
+        if (extent <= 0) return null;
+        return .{ .extent = @max(extent, 1), .progression = progression, .sequence = sequence };
+    }
+
     pub fn pageIndex(self: Context, position: f32) usize {
-        return @intFromFloat(@floor(@max(position, 0) / self.extent));
+        const target = @max(position, 0);
+        if (self.sequence == null) return @intFromFloat(@floor(target / self.extent));
+        var page_index: usize = 0;
+        var start: f32 = 0;
+        while (true) : (page_index += 1) {
+            const next = start + self.extentForPage(page_index);
+            if (target < next - epsilon) return page_index;
+            if (@abs(target - next) <= epsilon) return page_index + 1;
+            start = next;
+        }
     }
 
     pub fn pageStart(self: Context, position: f32) f32 {
-        return @as(f32, @floatFromInt(self.pageIndex(position))) * self.extent;
+        return self.pageStartForIndex(self.pageIndex(position));
+    }
+
+    pub fn pageStartForIndex(self: Context, page_index: usize) f32 {
+        if (self.sequence == null) return @as(f32, @floatFromInt(page_index)) * self.extent;
+        var start: f32 = 0;
+        for (0..page_index) |index| start += self.extentForPage(index);
+        return start;
+    }
+
+    pub fn extentForPage(self: Context, page_index: usize) f32 {
+        return if (self.sequence) |sequence| @max(sequence.contentExtent(page_index), 1) else self.extent;
+    }
+
+    pub fn extentAt(self: Context, position: f32) f32 {
+        return self.extentForPage(self.pageIndex(position));
+    }
+
+    pub fn pageEnd(self: Context, position: f32) f32 {
+        const page_index = self.pageIndex(position);
+        return self.pageStartForIndex(page_index) + self.extentForPage(page_index);
     }
 
     pub fn offset(self: Context, position: f32) f32 {
-        const raw = @mod(@max(position, 0), self.extent);
-        return if (@abs(raw) <= epsilon or @abs(raw - self.extent) <= epsilon) 0 else raw;
+        const target = @max(position, 0);
+        const page_index = self.pageIndex(target);
+        const raw = target - self.pageStartForIndex(page_index);
+        const extent = self.extentForPage(page_index);
+        return if (@abs(raw) <= epsilon or @abs(raw - extent) <= epsilon) 0 else raw;
     }
 
     pub fn remaining(self: Context, position: f32) f32 {
         const page_offset = self.offset(position);
-        return if (page_offset == 0) self.extent else self.extent - page_offset;
+        const extent = self.extentAt(position);
+        return if (page_offset == 0) extent else extent - page_offset;
     }
 
     pub fn crossesBoundary(self: Context, position: f32, block_size: f32) bool {
         if (block_size <= 0) return false;
         const page_offset = self.offset(position);
-        return page_offset > 0 and block_size > self.extent - page_offset + epsilon;
+        return page_offset > 0 and block_size > self.extentAt(position) - page_offset + epsilon;
     }
 
     /// Returns the boundary at or after `position`. An existing natural page
     /// boundary already satisfies a generic forced page break.
     pub fn boundaryAtOrAfter(self: Context, position: f32) f32 {
         const page_offset = self.offset(position);
-        return if (page_offset == 0) @max(position, 0) else position + (self.extent - page_offset);
+        return if (page_offset == 0) @max(position, 0) else self.pageEnd(position);
     }
 
     pub fn sideForPageIndex(_: Context, page_index: usize) PageSide {
@@ -153,7 +194,8 @@ pub const Context = struct {
             .auto, .avoid => unreachable,
         };
         if (desired_side) |side| {
-            if (self.sideForPageIndex(self.pageIndex(target)) != side) target += self.extent;
+            const target_page = self.pageIndex(target);
+            if (self.sideForPageIndex(target_page) != side) target = self.pageStartForIndex(target_page + 1);
         }
         return target;
     }
@@ -162,11 +204,12 @@ pub const Context = struct {
     /// items stay in place so layout keeps making progress and pagination may
     /// fragment or slice them later.
     pub fn atomicShift(self: Context, position: f32, block_size: f32) f32 {
-        if (block_size > self.extent + epsilon or !self.crossesBoundary(position, block_size)) return 0;
+        const extent = self.extentAt(position);
+        if (block_size > extent + epsilon or !self.crossesBoundary(position, block_size)) return 0;
         // Keep this as the direct remaining-extent expression. Besides avoiding
         // cancellation, it preserves the document profile's historical f32
         // coordinates byte-for-byte.
-        return self.extent - self.offset(position);
+        return extent - self.offset(position);
     }
 
     /// Keeps an atomic item above page-end furniture such as a repeated table
@@ -174,12 +217,13 @@ pub const Context = struct {
     /// An item larger than the usable extent stays in place so layout can keep
     /// making progress and later fragmentation can split it if appropriate.
     pub fn atomicShiftBeforeEndInset(self: Context, position: f32, block_size: f32, end_inset: f32) f32 {
-        const inset = std.math.clamp(end_inset, 0, self.extent);
-        const usable_extent = self.extent - inset;
+        const extent = self.extentAt(position);
+        const inset = std.math.clamp(end_inset, 0, extent);
+        const usable_extent = extent - inset;
         if (block_size > usable_extent + epsilon or block_size <= 0) return 0;
         const page_offset = self.offset(position);
         if (page_offset + block_size <= usable_extent + epsilon) return 0;
-        return self.extent - page_offset;
+        return extent - page_offset;
     }
 };
 
@@ -315,6 +359,30 @@ test "fragmentainer geometry reports remaining extent and atomic placement" {
     try std.testing.expectEqual(@as(f32, 0), context.atomicShift(125, 101));
     try std.testing.expectEqual(@as(f32, 75), context.atomicShiftBeforeEndInset(25, 70, 10));
     try std.testing.expectEqual(@as(f32, 0), context.atomicShiftBeforeEndInset(10, 95, 10));
+}
+
+test "fragmentainer sequence uses named and pseudo page extents" {
+    const rules = [_]page_geometry.PageRule{
+        .{ .selector = .{ .name = "Summary" }, .width_points = 150, .height_points = 112.5 },
+        .{ .selector = .{ .name = "Summary", .right = true }, .width_points = 150, .height_points = 187.5 },
+    };
+    const transitions = [_]page_geometry.PageNameTransition{
+        .{ .page_index = 1, .name = "Summary" },
+    };
+    const context = Context.initPaged(.{
+        .base = .{ .width_points = 150, .height_points = 75 },
+        .rules = &rules,
+        .initial_name = "Report",
+        .transitions = &transitions,
+    }, .left_to_right).?;
+
+    try std.testing.expectEqual(@as(f32, 100), context.extentForPage(0));
+    try std.testing.expectEqual(@as(f32, 150), context.extentForPage(1));
+    try std.testing.expectEqual(@as(f32, 250), context.extentForPage(2));
+    try std.testing.expectEqual(@as(f32, 250), context.pageStartForIndex(2));
+    try std.testing.expectEqual(@as(usize, 1), context.pageIndex(240));
+    try std.testing.expectEqual(@as(usize, 2), context.pageIndex(250));
+    try std.testing.expectEqual(@as(f32, 10), context.atomicShift(240, 20));
 }
 
 test "forced page sides honor page parity and progression" {

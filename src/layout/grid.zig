@@ -574,7 +574,7 @@ fn fragmentRows(state: anytype, items: []const Item, tracks: []const Track, posi
         if (boundary_break.isAvoid() and group_start != null) {
             const group_end = absolute_y + track.base;
             const group_size = group_end - group_start.?;
-            retain_group = group_size <= context.extent + 0.0001;
+            retain_group = group_size <= context.extentAt(group_start.?) + 0.0001;
             const group_shift = context.atomicShift(group_start.?, group_size);
             if (group_shift > 0) {
                 shiftPositionedRows(positions, index, content_y, group_start.?, group_shift);

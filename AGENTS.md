@@ -19,13 +19,13 @@ Read these local docs before changing code:
 - `tests/web/` covers structural dumps plus real PDF generation, the embedded canvas viewer, complex invoice/report fixtures, download, DOM/ref rendering, SVG charts, and transparent canvas resources.
 - `tests/web/e2e/` runs the browser harness and built React fixture through Playwright on Chromium, Firefox, and WebKit.
 - `docs/css-support.md` is the public, versioned CSS support contract; `src/css/properties.zig` is its machine-readable property inventory.
-- `src/layout/fragmentation.zig` owns page-boundary geometry, facing-page resolution, break arbitration, and block-child propagation. Block, inline, table, Flex, and Grid formatters must use that shared fragmentainer model instead of duplicating modulo arithmetic.
+- `src/layout/page_geometry.zig` owns typed page boxes, page-selector cascade, and named-page sequences. `src/layout/fragmentation.zig` consumes those sequences for variable-height page boundaries, facing-page resolution, break arbitration, and block-child propagation. Block, inline, table, Flex, and Grid formatters must use that shared fragmentainer model instead of duplicating modulo arithmetic.
 - `src/paged_media.zig` adds default `@page` margin-box text only after pagination establishes the final page count. Keep page counters, margin-slot geometry, and generated text commands there; do not synthesize DOM boxes or consume content flow.
 - Web table fragmentation measures `<tfoot>` groups before final placement, reserves their page-end extent, and repeats both `<thead>` and `<tfoot>` only on pages occupied by the table. Keep the rollback measurement scoped to table fragments, positioned descendants, and line identifiers.
 - Browser snapshots must preserve which positioned inset sides were authored; computed `top`/`left` used values derived from `bottom`/`right` cannot be reinterpreted against PDF page geometry. Pagination copies fixed templates before appending repeats so array reallocation cannot drop later fixed furniture.
 - `tests/baselines/0.1.0-alpha.0/` freezes deterministic PDFs, first-page Poppler PNGs, metrics, and digests from the document profile.
-- Rounded box painting uses a uniform `border-radius` propagated through layout and display-list commands into native PDF Bézier paths; keep per-corner and clipping behavior out until tested explicitly.
-- Overflow clipping is rectangular at the padding edge. Preserve `clip_rect` through pagination and every display-list command, and isolate each PDF clip with `q`/`Q`; rounded clipping remains pending.
+- Rounded box painting and clipping preserve independently resolved elliptical radii for every corner through layout, display-list commands, and native PDF Bézier paths.
+- Preserve `clip_rect`, elliptical clip radii, and clip transforms through pagination and every display-list command, and isolate each PDF clip with `q`/`Q`.
 - Replaced elements preserve browser-captured intrinsic dimensions. Resolve their used size from CSS width/height and `aspect-ratio`, then apply `object-fit`/`object-position` as a clipped native PDF image transform.
 - Inline CSS Text support includes percentage `text-indent`, ASCII case transforms, emergency codepoint wrapping, mixed-font baseline alignment, `vertical-align`, and `word-spacing`; preserve word spacing through fragment/display-list state and PDF Type 0 `TJ` adjustments so geometry and selectable text remain aligned.
 - Text decorations retain combined line flags, color, thickness, and style through layout; double and wavy decorations remain vector stroke commands rather than raster effects.
@@ -39,9 +39,10 @@ Read these local docs before changing code:
 - Browser rendering resolves default, named, and `:first`/`:left`/`:right`/`:blank`
   `@page` geometry through a typed page-rule cascade unless explicit API page
   options override it. Pagination, display-list commands, and PDF coordinate
-  conversion carry a per-page `PageSpec`; generated margin text currently uses
-  the default rule set, while named margin boxes and variable-height reflow are
-  separate staged work.
+  conversion carry a per-page `PageSpec`; layout fragmentainers consume the
+  same sequence for variable-height reflow. Generated margin text currently
+  uses the default rule set, while named margin boxes and variable-width
+  reflow remain separate staged work.
 - Browser snapshots support deterministic screen/print media, explicit viewports, computed pseudo-elements, and opt-in open Shadow DOM flattening; native/WASM warnings use owned structured diagnostics.
 - HTML-string stylesheets are inert and must resolve through `resourceResolver`; Element/ref alternate-media snapshots preserve ancestor selectors, live controls, canvas pixels, and open shadow roots.
 - CSS rgba/hex-alpha colors remain native vectors and use PDF ExtGState rather than flattening; supported shorthands expand into physical longhands before computed-value application.

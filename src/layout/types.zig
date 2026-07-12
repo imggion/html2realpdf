@@ -3,6 +3,7 @@
 const std = @import("std");
 const box = @import("../box.zig");
 const font = @import("../font.zig");
+const page_geometry = @import("page_geometry.zig");
 const geometry = @import("../geometry.zig");
 
 pub const FragmentId = usize;
@@ -109,6 +110,8 @@ pub const Options = struct {
     shaping_mode: font.ShapingMode = .identity,
     atomic_inline_baselines: bool = false,
     web_sizing: bool = false,
+    page_spec: ?page_geometry.PageSpec = null,
+    page_rules: []const page_geometry.PageRule = &.{},
 };
 
 pub fn borderPaint(style: box.Style) BorderPaint {

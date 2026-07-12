@@ -116,6 +116,8 @@ pub fn renderHtml(
         .shaping_mode = if (options.css_profile == .document) .identity else .harfbuzz,
         .atomic_inline_baselines = options.css_profile != .document,
         .web_sizing = options.css_profile != .document,
+        .page_spec = page_spec,
+        .page_rules = options.page_rules,
     });
     defer laid_out.deinit(arena);
 
@@ -497,4 +499,30 @@ test "render named pages with distinct PDF media boxes" {
     try std.testing.expectEqual(@as(usize, 2), result.page_count);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/MediaBox [0 0 150.000 75.000]") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/MediaBox [0 0 225.000 90.000]") != null);
+}
+
+test "render named page height as the layout fragmentainer extent" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        "<div style='height:20px;page:Report'>REPORT</div>" ++
+            "<section style='page:Summary'>" ++
+            "<div style='height:70px;break-inside:avoid'>SUMMARY ONE</div>" ++
+            "<div style='height:70px;break-inside:avoid'>SUMMARY TWO</div>" ++
+            "<div style='height:70px;break-inside:avoid'>SUMMARY THREE</div></section>",
+        .{
+            .css_profile = .web,
+            .custom_page_width_points = 150,
+            .custom_page_height_points = 75,
+            .page_rules = &.{
+                .{ .selector = .{ .name = "Report" }, .width_points = 150, .height_points = 75 },
+                .{ .selector = .{ .name = "Summary" }, .width_points = 225, .height_points = 120 },
+            },
+        },
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), result.page_count);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.bytes, "/MediaBox [0 0 150.000 75.000]"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, result.bytes, "/MediaBox [0 0 225.000 120.000]"));
 }

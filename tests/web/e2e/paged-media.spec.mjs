@@ -161,11 +161,16 @@ test("named @page selectors drive per-page PDF geometry and margins", async ({ p
     const html = `<style>
       @page { size: 200px 100px; margin: 0; }
       @page Report { size: 200px 100px; margin-left: 10px; }
-      @page Summary { size: 300px 120px; margin-left: 20px; }
+      @page Summary { size: 300px 160px; margin-left: 20px; }
       html, body { margin: 0; }
       .report { page: Report; height: 20px; }
-      .summary { page: Summary; height: 20px; }
-    </style><div class="report">REPORT</div><div class="summary">SUMMARY</div>`;
+      .summary { page: Summary; }
+      .summary-item { height: 70px; break-inside: avoid; }
+    </style><div class="report">REPORT</div><section class="summary">
+      <div class="summary-item">SUMMARY ONE</div>
+      <div class="summary-item">SUMMARY TWO</div>
+      <div class="summary-item">SUMMARY THREE</div>
+    </section>`;
     const pdf = await renderer.render(html, { cssProfile: "web", mediaType: "print", unsupportedCss: "error" });
     const diagnostics = pdf.diagnostics;
     const documentHandle = await pdfjs.getDocument({ data: pdf.toUint8Array() }).promise;
@@ -174,10 +179,11 @@ test("named @page selectors drive per-page PDF geometry and margins", async ({ p
       const current = await documentHandle.getPage(pageNumber);
       const viewport = current.getViewport({ scale: 1 });
       const text = await current.getTextContent();
-      const item = text.items.find((candidate) => "str" in candidate && (candidate.str.includes("REPORT") || candidate.str.includes("SUMMARY")));
+      const items = text.items.filter((candidate) => "str" in candidate && (candidate.str.includes("REPORT") || candidate.str.includes("SUMMARY")));
+      const item = items[0];
       pages.push({
         viewport: [viewport.width, viewport.height],
-        text: item && "str" in item ? item.str : "",
+        text: items.flatMap((candidate) => "str" in candidate ? [candidate.str] : []).join(" "),
         x: item && "transform" in item ? item.transform[4] : null,
       });
     }
@@ -188,13 +194,18 @@ test("named @page selectors drive per-page PDF geometry and margins", async ({ p
   });
 
   expect(result.diagnostics).toEqual([]);
-  expect(result.pages).toHaveLength(2);
+  expect(result.pages).toHaveLength(3);
   expect(result.pages[0].viewport[0]).toBeCloseTo(150, 2);
   expect(result.pages[0].viewport[1]).toBeCloseTo(75, 2);
   expect(result.pages[0].text).toContain("REPORT");
   expect(result.pages[0].x).toBeCloseTo(7.5, 2);
   expect(result.pages[1].viewport[0]).toBeCloseTo(225, 2);
-  expect(result.pages[1].viewport[1]).toBeCloseTo(90, 2);
-  expect(result.pages[1].text).toContain("SUMMARY");
+  expect(result.pages[1].viewport[1]).toBeCloseTo(120, 2);
+  expect(result.pages[1].text).toContain("SUMMARY ONE");
+  expect(result.pages[1].text).toContain("SUMMARY TWO");
   expect(result.pages[1].x).toBeCloseTo(15, 2);
+  expect(result.pages[2].viewport[0]).toBeCloseTo(225, 2);
+  expect(result.pages[2].viewport[1]).toBeCloseTo(120, 2);
+  expect(result.pages[2].text).toContain("SUMMARY THREE");
+  expect(result.pages[2].x).toBeCloseTo(15, 2);
 });

@@ -412,7 +412,7 @@ fn fragmentRowLines(state: anytype, items: []const Item, lines: []Line, content_
         if (boundary_break.isAvoid() and group_start != null) {
             const group_end = absolute_y + line.cross_size;
             const group_size = group_end - group_start.?;
-            retain_group = group_size <= context.extent + 0.0001;
+            retain_group = group_size <= context.extentAt(group_start.?) + 0.0001;
             const group_shift = context.atomicShift(group_start.?, group_size);
             if (group_shift > 0) {
                 shiftPositionedLines(lines, content_y, group_start.?, group_shift);
@@ -605,7 +605,7 @@ fn fragmentColumnItems(state: anytype, items: []Item, content_y: f32, context: f
         if (boundary_break.isAvoid() and group_start != null) {
             const group_end = absolute_y + item.rect.height + item.main_margin_end;
             const group_size = group_end - group_start.?;
-            retain_group = group_size <= context.extent + 0.0001;
+            retain_group = group_size <= context.extentAt(group_start.?) + 0.0001;
             const group_shift = context.atomicShift(group_start.?, group_size);
             if (group_shift > 0) {
                 shiftPositionedItems(items, content_y, group_start.?, group_shift);

@@ -53,7 +53,7 @@ pub fn layout(
     state.next_line_id = next_line_id;
 
     const footer_reservation = if (state.fragmentainer()) |context|
-        if (measured.footer_height > 0 and measured.footer_height < context.extent)
+        if (measured.footer_height > 0 and measured.footer_height < context.extentAt(start_y))
             measured.footer_height
         else
             0
@@ -130,7 +130,7 @@ fn layoutPass(
                 const first_page = context.pageIndex(start_y);
                 const current_page = context.pageIndex(row_y);
                 if (current_page > first_page) {
-                    row_y = context.pageStart(row_y) + context.extent - footer_reservation;
+                    row_y = context.pageEnd(row_y) - footer_reservation;
                 }
             }
         }
@@ -146,7 +146,7 @@ fn layoutPass(
                     const target_page = context.pageIndex(target_page_start);
                     const should_repeat_header = !is_header_row and
                         header_template_start != null and
-                        header_height < context.extent and
+                        header_height < state.pageExtentForName(target_page, fragmentation.startPageName(state.tree, row_id)) and
                         last_repeated_page != target_page;
                     row_y = target_page_start + (if (should_repeat_header) header_height else 0);
                     if (should_repeat_header) {
@@ -294,8 +294,8 @@ fn layoutPass(
                 const group_size = group_end - sibling_group_y;
                 const can_repeat_for_group = !is_header_row and
                     header_template_start != null and
-                    header_height + group_size + footer_reservation <= context.extent;
-                retain_group = group_size + footer_reservation <= context.extent + 0.0001;
+                    header_height + group_size + footer_reservation <= context.extentAt(sibling_group_y);
+                retain_group = group_size + footer_reservation <= context.extentAt(sibling_group_y) + 0.0001;
                 const group_shift = context.atomicShiftBeforeEndInset(sibling_group_y, group_size, footer_reservation);
                 if (group_shift > 0) {
                     const target_page_start = context.boundaryAtOrAfter(sibling_group_y);
@@ -325,7 +325,7 @@ fn layoutPass(
                 const target_page = context.pageIndex(target_page_start);
                 const should_repeat_header = !is_header_row and
                     header_template_start != null and
-                    header_height + row_height + footer_reservation <= context.extent and
+                    header_height + row_height + footer_reservation <= context.extentForPage(target_page) and
                     last_repeated_page != target_page;
                 const shift = automatic_shift + (if (should_repeat_header) header_height else 0);
                 for (state.fragments.items[row_start_fragment..]) |*fragment| shiftFragmentY(fragment, shift);
@@ -410,7 +410,7 @@ fn layoutPass(
             const final_page = context.pageIndex(footer_start_y);
             for (content_pages.items) |page_index| {
                 if (page_index == final_page) continue;
-                const target_y = @as(f32, @floatFromInt(page_index + 1)) * context.extent - footer_height;
+                const target_y = context.pageStartForIndex(page_index + 1) - footer_height;
                 try cloneTableSection(
                     state,
                     footer_template_start.?,
