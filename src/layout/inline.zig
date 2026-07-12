@@ -61,7 +61,7 @@ pub fn Cursor(comptime State: type) type {
             var effective_source = source;
             effective_source.style.vertical_align = effective_vertical_align;
             const link_url = self.state.linkForBox(box_id) orelse inherited_link;
-            if (source.style.page_break_before == .always) self.forcePageBreak();
+            if (source.style.page_break_before.isForced()) self.forcePageBreak(source.style.page_break_before);
             switch (source.kind) {
                 .text => if (source.text) |text| try self.layoutText(box_id, text, source.language, effective_source.style, link_url),
                 .lineBreak => self.newLine(),
@@ -79,20 +79,19 @@ pub fn Cursor(comptime State: type) type {
             if (self.state.web_sizing and (source.style.position == .relative or source.style.position == .sticky) and source.kind != .inlineBlock) {
                 self.state.shiftRelativeFragments(box_id, fragment_start, self.width, self.state.page_height orelse 0);
             }
-            if (source.style.page_break_after == .always) self.forcePageBreak();
+            if (source.style.page_break_after.isForced()) self.forcePageBreak(source.style.page_break_after);
         }
 
         /// Finish the current inline line and place the next fragment at the top of
         /// the following page. Selector-driven page break rules must work for
         /// replaced and inline elements as well as block boxes.
-        fn forcePageBreak(self: *Self) void {
-            const page_height = self.state.page_height orelse return;
+        fn forcePageBreak(self: *Self, value: box.PageBreak) void {
+            if (self.state.page_height == null) return;
             if (self.has_content) {
                 self.alignCurrentLine(false);
                 self.line_y += if (self.line_height > 0) self.line_height else 18;
             }
-            const page_y = @mod(self.line_y, page_height);
-            if (page_y > 0) self.line_y += page_height - page_y;
+            self.state.applyForcedBreak(&self.line_y, value);
             self.x = self.start_x;
             self.line_height = 0;
             self.line_start_fragment = self.state.fragments.items.len;

@@ -560,10 +560,19 @@ pub fn parseBorderCollapse(value: []const u8) ?box.BorderCollapse {
 pub fn parsePageBreak(value: []const u8) ?box.PageBreak {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (eqlProp(v, "auto")) return .auto;
-    if (eqlProp(v, "always")) return .always;
-    if (eqlProp(v, "page") or eqlProp(v, "left") or eqlProp(v, "right")) return .always;
-    if (eqlProp(v, "avoid")) return .avoid;
-    if (eqlProp(v, "avoid-page")) return .avoid;
+    if (eqlProp(v, "always") or eqlProp(v, "page")) return .page;
+    if (eqlProp(v, "left")) return .left;
+    if (eqlProp(v, "right")) return .right;
+    if (eqlProp(v, "recto")) return .recto;
+    if (eqlProp(v, "verso")) return .verso;
+    if (eqlProp(v, "avoid") or eqlProp(v, "avoid-page")) return .avoid;
+    return null;
+}
+
+pub fn parsePageBreakInside(value: []const u8) ?box.PageBreak {
+    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
+    if (eqlProp(v, "auto")) return .auto;
+    if (eqlProp(v, "avoid") or eqlProp(v, "avoid-page")) return .avoid;
     return null;
 }
 

@@ -758,9 +758,13 @@ test "parse value: box-sizing" {
 
 test "parse value: page-break" {
     try std.testing.expectEqual(box.PageBreak.auto, parsePageBreak("auto").?);
-    try std.testing.expectEqual(box.PageBreak.always, parsePageBreak("always").?);
+    try std.testing.expectEqual(box.PageBreak.page, parsePageBreak("always").?);
     try std.testing.expectEqual(box.PageBreak.avoid, parsePageBreak("avoid").?);
-    try std.testing.expectEqual(box.PageBreak.always, parsePageBreak("page").?);
+    try std.testing.expectEqual(box.PageBreak.page, parsePageBreak("page").?);
+    try std.testing.expectEqual(box.PageBreak.left, parsePageBreak("left").?);
+    try std.testing.expectEqual(box.PageBreak.right, parsePageBreak("right").?);
+    try std.testing.expectEqual(box.PageBreak.recto, parsePageBreak("recto").?);
+    try std.testing.expectEqual(box.PageBreak.verso, parsePageBreak("verso").?);
     try std.testing.expectEqual(box.PageBreak.avoid, parsePageBreak("avoid-page").?);
 }
 
@@ -1166,7 +1170,7 @@ test "cascade: page-break and orphans/widows" {
     defer ct.deinit(allocator);
     const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
     const div_id = ct.document.nodes.items[style_id].next_sibling.?;
-    try std.testing.expectEqual(box.PageBreak.always, ct.styles[div_id].page_break_before);
+    try std.testing.expectEqual(box.PageBreak.page, ct.styles[div_id].page_break_before);
     try std.testing.expectEqual(box.PageBreak.avoid, ct.styles[div_id].page_break_after);
     try std.testing.expectEqual(box.PageBreak.avoid, ct.styles[div_id].page_break_inside);
     try std.testing.expectEqual(@as(u32, 3), ct.styles[div_id].orphans);

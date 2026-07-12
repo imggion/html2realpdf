@@ -7,6 +7,7 @@ const std = @import("std");
 const box = @import("../box.zig");
 const font = @import("../font.zig");
 const geometry = @import("../geometry.zig");
+const fragmentation = @import("fragmentation.zig");
 const intrinsic = @import("intrinsic.zig");
 const types = @import("types.zig");
 
@@ -53,6 +54,9 @@ pub fn layout(
     var header_start_y: f32 = 0;
     var header_height: f32 = 0;
     var last_repeated_page: ?usize = null;
+    var previous_break_after = box.PageBreak.auto;
+    var sibling_group_fragment_start: ?usize = null;
+    var sibling_group_y: f32 = 0;
     const ActiveSpan = struct { remaining: usize = 0, cell: ?CellLayout = null };
     const NewSpan = struct { first_column: usize, column_span: usize, cell: CellLayout };
     const active_spans = try state.allocator.alloc(ActiveSpan, column_count);
@@ -64,8 +68,32 @@ pub fn layout(
     const collapse_borders = state.tree.boxes.items[table_id].style.border_collapse == .collapse;
     for (rows.items, 0..) |row_id, row_index| {
         const is_header_row = isTableHeaderRow(state, row_id);
-        const row_start_fragment = state.fragments.items.len;
         const row_source = state.tree.boxes.items[row_id];
+        const boundary_break = fragmentation.resolveBoundary(previous_break_after, row_source.style.page_break_before);
+        if (state.web_sizing and boundary_break.isForced()) {
+            if (state.fragmentainer()) |context| {
+                const target_page_start = context.forcedBreakStart(row_y, boundary_break);
+                if (target_page_start > row_y) {
+                    const target_page = context.pageIndex(target_page_start);
+                    const should_repeat_header = !is_header_row and
+                        header_template_start != null and
+                        header_height < context.extent and
+                        last_repeated_page != target_page;
+                    row_y = target_page_start + (if (should_repeat_header) header_height else 0);
+                    if (should_repeat_header) {
+                        try cloneTableHeader(
+                            state,
+                            header_template_start.?,
+                            header_template_end,
+                            header_start_y,
+                            target_page_start,
+                        );
+                        last_repeated_page = target_page;
+                    }
+                }
+            }
+        }
+        const row_start_fragment = state.fragments.items.len;
         const row_fragment_id = state.fragments.items.len;
         try state.fragments.append(state.allocator, .{
             .kind = .box,
@@ -162,7 +190,8 @@ pub fn layout(
             fragment.is_table_header = is_header_row;
         }
 
-        if (state.page_height) |page_height| {
+        if (!state.web_sizing and state.page_height != null) {
+            const page_height = state.page_height.?;
             const page_y = @mod(row_y, page_height);
             if (row_height <= page_height and page_y > 0 and page_y + row_height > page_height) {
                 const target_page_start = row_y + page_height - page_y;
@@ -184,6 +213,65 @@ pub fn layout(
                     );
                     last_repeated_page = target_page;
                 }
+            }
+        } else if (state.fragmentainer()) |context| {
+            var kept_group = false;
+            var retain_group = false;
+            if (boundary_break.isAvoid() and sibling_group_fragment_start != null) {
+                const group_end = row_y + row_height;
+                const group_size = group_end - sibling_group_y;
+                const can_repeat_for_group = !is_header_row and
+                    header_template_start != null and
+                    header_height + group_size <= context.extent;
+                retain_group = group_size <= context.extent + 0.0001;
+                const group_shift = context.atomicShift(sibling_group_y, group_size);
+                if (group_shift > 0) {
+                    const target_page_start = context.boundaryAtOrAfter(sibling_group_y);
+                    const target_page = context.pageIndex(target_page_start);
+                    const should_repeat_header = can_repeat_for_group and last_repeated_page != target_page;
+                    const shift = group_shift + (if (should_repeat_header) header_height else 0);
+                    for (state.fragments.items[sibling_group_fragment_start.?..]) |*fragment| shiftFragmentY(fragment, shift);
+                    row_y += shift;
+                    sibling_group_y += shift;
+                    kept_group = true;
+                    if (should_repeat_header) {
+                        try cloneTableHeader(
+                            state,
+                            header_template_start.?,
+                            header_template_end,
+                            header_start_y,
+                            target_page_start,
+                        );
+                        last_repeated_page = target_page;
+                    }
+                }
+            }
+
+            const automatic_shift = if (kept_group) 0 else context.atomicShift(row_y, row_height);
+            if (automatic_shift > 0) {
+                const target_page_start = row_y + automatic_shift;
+                const target_page = context.pageIndex(target_page_start);
+                const should_repeat_header = !is_header_row and
+                    header_template_start != null and
+                    header_height + row_height <= context.extent and
+                    last_repeated_page != target_page;
+                const shift = automatic_shift + (if (should_repeat_header) header_height else 0);
+                for (state.fragments.items[row_start_fragment..]) |*fragment| shiftFragmentY(fragment, shift);
+                row_y += shift;
+                if (should_repeat_header) {
+                    try cloneTableHeader(
+                        state,
+                        header_template_start.?,
+                        header_template_end,
+                        header_start_y,
+                        target_page_start,
+                    );
+                    last_repeated_page = target_page;
+                }
+            }
+            if (!retain_group) {
+                sibling_group_fragment_start = row_start_fragment;
+                sibling_group_y = row_y;
             }
         }
 
@@ -227,7 +315,10 @@ pub fn layout(
         }
 
         row_y += row_height;
+        previous_break_after = row_source.style.page_break_after;
     }
+
+    if (state.web_sizing and previous_break_after.isForced()) state.applyForcedBreak(&row_y, previous_break_after);
 
     try layoutCaptions(state, table_id, bottom_captions.items, start_x, &row_y, table_width);
 

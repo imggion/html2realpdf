@@ -100,6 +100,10 @@ transparent PNG, per-corner elliptical rounded fills/borders and rounded
 overflow clipping, Noto Sans Latin/Arabic/Hebrew, and registered embeddable TTF
 fonts. A default `@page` rule can set CSS absolute page size/orientation and
 margins when the API does not provide `page`; explicit API page options win.
+Paged layout combines adjacent `break-before`/`break-after` controls, propagates
+first/last child breaks through block containers, honors facing-page and
+recto/verso values, and applies `avoid` across block siblings, table rows, Flex
+lines/items, and Grid rows. Forced descendant breaks override ancestor avoid.
 The Web profile also supports Flexbox, Grid, floats, positioned layout,
 native 2D transforms, layered URL/gradient backgrounds, shadows, and isolated
 opacity groups, plus vector-preserved SVG `path`, `rect`, circle/ellipse, line,

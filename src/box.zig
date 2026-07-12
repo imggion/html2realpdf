@@ -582,17 +582,36 @@ pub const BorderCollapse = enum {
     }
 };
 
-/// Controls page breaks before/after a box.
+/// Controls page fragmentation before, after, or inside a box.
 pub const PageBreak = enum {
     auto,
-    always,
     avoid,
+    page,
+    left,
+    right,
+    recto,
+    verso,
+
+    pub fn isForced(self: @This()) bool {
+        return switch (self) {
+            .page, .left, .right, .recto, .verso => true,
+            .auto, .avoid => false,
+        };
+    }
+
+    pub fn isAvoid(self: @This()) bool {
+        return self == .avoid;
+    }
 
     pub fn toString(self: @This()) []const u8 {
         return switch (self) {
             .auto => "auto",
-            .always => "always",
             .avoid => "avoid",
+            .page => "page",
+            .left => "left",
+            .right => "right",
+            .recto => "recto",
+            .verso => "verso",
         };
     }
 };

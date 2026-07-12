@@ -7,6 +7,7 @@ const std = @import("std");
 const box = @import("../box.zig");
 const geometry = @import("../geometry.zig");
 const floats = @import("floats.zig");
+const fragmentation = @import("fragmentation.zig");
 const intrinsic = @import("intrinsic.zig");
 const types = @import("types.zig");
 
@@ -18,6 +19,8 @@ pub const Options = struct {
     forced_content_height: ?f32 = null,
     suppress_margin_top: bool = false,
     suppress_margin_bottom: bool = false,
+    suppress_break_before: bool = false,
+    suppress_break_after: bool = false,
 };
 
 pub fn layout(
@@ -45,8 +48,20 @@ pub fn layoutWithOptions(
     const margin_info = if (state.web_sizing) state.marginInfo(box_id) else MarginInfo.fromEdges(margin.top, margin.bottom);
     const used_margin_top = if (state.web_sizing and options.suppress_margin_top) 0 else margin_info.start.value();
     const used_margin_bottom = if (state.web_sizing and options.suppress_margin_bottom) 0 else margin_info.end.value();
+    const break_before = if (state.web_sizing and !options.suppress_break_before)
+        fragmentation.propagatedBefore(state.tree, box_id)
+    else if (options.suppress_break_before)
+        box.PageBreak.auto
+    else
+        style.page_break_before;
+    const break_after = if (state.web_sizing and !options.suppress_break_after)
+        fragmentation.propagatedAfter(state.tree, box_id)
+    else if (options.suppress_break_after)
+        box.PageBreak.auto
+    else
+        style.page_break_after;
 
-    if (style.page_break_before == .always) state.advanceToNextPage(cursor_y);
+    if (break_before.isForced()) state.applyForcedBreak(cursor_y, break_before);
 
     const fragment_start = state.fragments.items.len;
     const outer_x = containing.x + margin.left;
@@ -116,8 +131,8 @@ pub fn layoutWithOptions(
         .border_radii = style.border_radii,
         .box_decoration_break = style.box_decoration_break,
         .legacy_fragment_borders = !state.web_sizing,
-        .page_break_before = style.page_break_before,
-        .page_break_after = style.page_break_after,
+        .page_break_before = break_before,
+        .page_break_after = break_after,
         .page_break_inside = style.page_break_inside,
         .image_source = if (source.kind == .replaced) state.attributeForBox(box_id, "src") else null,
         .intrinsic_width = source.intrinsic_width,
@@ -232,12 +247,17 @@ pub fn layoutWithOptions(
             var pending_margin = MarginStrut{};
             var parent_start_open = state.web_sizing and canCollapseStartWithChildren(state.tree, box_id);
             var last_in_flow_was_block = false;
+            var previous_break_after = box.PageBreak.auto;
+            var sibling_group_fragment_start: ?usize = null;
+            var sibling_group_y: f32 = 0;
             var child = source.first_child;
             while (child) |child_id| {
                 const child_box = state.tree.boxes.items[child_id];
                 if (state.web_sizing and (child_box.style.position == .absolute or child_box.style.position == .fixed)) {
                     try state.deferPositioned(child_id, .{ .x = content_x, .y = child_cursor_y });
                 } else if (state.web_sizing and child_box.style.float_direction != .none) {
+                    sibling_group_fragment_start = null;
+                    previous_break_after = .auto;
                     const required_width = try floatOuterWidth(state, child_id, content_width);
                     const float_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
                     const band = float_context.bandAt(float_y);
@@ -264,9 +284,15 @@ pub fn layoutWithOptions(
                     });
                 } else if (isBlockLevel(child_box.kind) or (state.web_sizing and child_box.style.clear_direction != .none)) {
                     if (state.web_sizing) {
+                        const child_break_before = fragmentation.propagatedBefore(state.tree, child_id);
+                        const boundary_break = if (sibling_group_fragment_start != null)
+                            fragmentation.resolveBoundary(previous_break_after, child_break_before)
+                        else
+                            box.PageBreak.auto;
                         const child_margin = state.marginInfo(child_id);
                         if (child_margin.through and child_box.style.clear_direction == .none) {
                             pending_margin.combine(child_margin.start);
+                            if (boundary_break.isForced()) state.applyForcedBreak(&child_cursor_y, boundary_break);
                             var empty_cursor = child_cursor_y;
                             _ = try state.layoutBlockWithOptions(
                                 child_id,
@@ -276,8 +302,11 @@ pub fn layoutWithOptions(
                                     .containing_block_height = specified_content_height,
                                     .suppress_margin_top = true,
                                     .suppress_margin_bottom = true,
+                                    .suppress_break_before = true,
+                                    .suppress_break_after = true,
                                 },
                             );
+                            previous_break_after = fragmentation.propagatedAfter(state.tree, child_id);
                             child = child_box.next_sibling;
                             continue;
                         }
@@ -292,8 +321,10 @@ pub fn layoutWithOptions(
                         pending_margin = .{};
                         const required_width = try minimumOuterWidth(state, child_id);
                         child_cursor_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
+                        if (boundary_break.isForced()) state.applyForcedBreak(&child_cursor_y, boundary_break);
                         const band = float_context.bandAt(child_cursor_y);
-                        _ = try state.layoutBlockWithOptions(
+                        const child_fragment_start = state.fragments.items.len;
+                        const child_rect = try state.layoutBlockWithOptions(
                             child_id,
                             .{ .x = band.x, .y = content_y, .width = @max(band.width, 1) },
                             &child_cursor_y,
@@ -301,8 +332,25 @@ pub fn layoutWithOptions(
                                 .containing_block_height = specified_content_height,
                                 .suppress_margin_top = true,
                                 .suppress_margin_bottom = true,
+                                .suppress_break_before = true,
+                                .suppress_break_after = true,
                             },
                         );
+                        applyAvoidSiblingBoundary(
+                            state,
+                            boundary_break,
+                            sibling_group_fragment_start,
+                            &sibling_group_y,
+                            &child_cursor_y,
+                        );
+                        updateSiblingGroup(
+                            boundary_break,
+                            &sibling_group_fragment_start,
+                            &sibling_group_y,
+                            child_fragment_start,
+                            child_rect.y,
+                        );
+                        previous_break_after = fragmentation.propagatedAfter(state.tree, child_id);
                         pending_margin = child_margin.end;
                         parent_start_open = false;
                         last_in_flow_was_block = true;
@@ -313,7 +361,11 @@ pub fn layoutWithOptions(
                             child_id,
                             .{ .x = content_x, .y = content_y, .width = content_width },
                             &child_cursor_y,
-                            .{ .containing_block_height = containing.height },
+                            .{
+                                .containing_block_height = containing.height,
+                                .suppress_break_before = false,
+                                .suppress_break_after = false,
+                            },
                         );
                         previous_bottom_margin = child_box.margin.bottom;
                     }
@@ -323,6 +375,8 @@ pub fn layoutWithOptions(
                         pending_margin = .{};
                         parent_start_open = false;
                         last_in_flow_was_block = false;
+                        sibling_group_fragment_start = null;
+                        previous_break_after = .auto;
                     }
                     const run_height = try state.layoutInlineRun(child_id, content_x, child_cursor_y, content_width, style.text_align);
                     child_cursor_y += run_height;
@@ -369,7 +423,7 @@ pub fn layoutWithOptions(
         try state.enforceLineConstraints(fragment_start, &outer_y, &outer_height, style.orphans, style.widows);
     }
 
-    if (style.page_break_inside == .avoid) {
+    if (!state.web_sizing and style.page_break_inside == .avoid) {
         if (state.page_height) |page_height| {
             const page_y = @mod(outer_y, page_height);
             if (outer_height <= page_height and page_y > 0 and page_y + outer_height > page_height) {
@@ -377,6 +431,12 @@ pub fn layoutWithOptions(
                 for (state.fragments.items[fragment_start..]) |*fragment| fragment.rect.y += shift;
                 outer_y += shift;
             }
+        }
+    } else if (style.page_break_inside == .avoid and !fragmentation.subtreeHasForcedBreak(state.tree, box_id)) {
+        const shift = state.atomicFragmentainerShift(outer_y, outer_height);
+        if (shift > 0) {
+            floats.shiftFragments(state.fragments.items[fragment_start..], 0, shift);
+            outer_y += shift;
         }
     }
 
@@ -391,8 +451,36 @@ pub fn layoutWithOptions(
     }
 
     cursor_y.* = outer_y + outer_height + used_margin_bottom;
-    if (style.page_break_after == .always) state.advanceToNextPage(cursor_y);
+    if (break_after.isForced()) state.applyForcedBreak(cursor_y, break_after);
     return state.fragments.items[fragment_id].rect;
+}
+
+fn applyAvoidSiblingBoundary(
+    state: anytype,
+    boundary_break: box.PageBreak,
+    group_fragment_start: ?usize,
+    group_y: *f32,
+    cursor_y: *f32,
+) void {
+    if (!boundary_break.isAvoid()) return;
+    const fragment_start = group_fragment_start orelse return;
+    const shift = state.atomicFragmentainerShift(group_y.*, @max(cursor_y.* - group_y.*, 0));
+    if (shift <= 0) return;
+    floats.shiftFragments(state.fragments.items[fragment_start..], 0, shift);
+    group_y.* += shift;
+    cursor_y.* += shift;
+}
+
+fn updateSiblingGroup(
+    boundary_break: box.PageBreak,
+    group_fragment_start: *?usize,
+    group_y: *f32,
+    child_fragment_start: usize,
+    child_y: f32,
+) void {
+    if (boundary_break.isAvoid() and group_fragment_start.* != null) return;
+    group_fragment_start.* = child_fragment_start;
+    group_y.* = child_y;
 }
 
 pub fn isBlockLevel(kind: box.BoxType) bool {

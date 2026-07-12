@@ -207,13 +207,98 @@ const State = struct {
         }
     }
 
-    pub fn advanceToNextPage(self: *const State, cursor_y: *f32) void {
-        const page_height = self.page_height orelse return;
-        const page_y = @mod(cursor_y.*, page_height);
-        if (page_y > 0) cursor_y.* += page_height - page_y;
+    pub fn fragmentainer(self: *const State) ?fragmentation.Context {
+        const page_height = self.page_height orelse return null;
+        const progression: fragmentation.PageProgression = if (self.rootFlowDirection() == .rtl)
+            .right_to_left
+        else
+            .left_to_right;
+        return fragmentation.Context.init(page_height, progression);
+    }
+
+    fn rootFlowDirection(self: *const State) box.Direction {
+        var current: ?box.BoxId = self.tree.root;
+        while (current) |box_id| {
+            const source = self.tree.boxes.items[box_id];
+            if (source.node != null) return source.style.direction;
+            current = source.first_child;
+        }
+        return self.tree.boxes.items[self.tree.root].style.direction;
+    }
+
+    pub fn applyForcedBreak(self: *const State, cursor_y: *f32, value: box.PageBreak) void {
+        const context = self.fragmentainer() orelse return;
+        cursor_y.* = context.forcedBreakStart(cursor_y.*, value);
+    }
+
+    pub fn atomicFragmentainerShift(self: *const State, position: f32, block_size: f32) f32 {
+        const context = self.fragmentainer() orelse return 0;
+        return context.atomicShift(position, block_size);
     }
 
     pub fn enforceLineConstraints(
+        self: *State,
+        fragment_start: usize,
+        outer_y: *f32,
+        outer_height: *f32,
+        orphans: u32,
+        widows: u32,
+    ) !void {
+        if (!self.web_sizing) return self.enforceLegacyLineConstraints(fragment_start, outer_y, outer_height, orphans, widows);
+        const context = self.fragmentainer() orelse return;
+        const page_height = context.extent;
+        const LineInfo = struct { id: usize, y: f32 };
+        var lines = try std.ArrayList(LineInfo).initCapacity(self.allocator, 0);
+        defer lines.deinit(self.allocator);
+
+        var previous_line: ?usize = null;
+        for (self.fragments.items[fragment_start..]) |fragment| {
+            const line_id = fragment.line_id orelse continue;
+            if (previous_line == line_id) continue;
+            try lines.append(self.allocator, .{ .id = line_id, .y = fragment.rect.y });
+            previous_line = line_id;
+        }
+        if (lines.items.len < 2) return;
+
+        const first_page = context.pageIndex(lines.items[0].y);
+        const last_page = context.pageIndex(lines.items[lines.items.len - 1].y);
+        if (first_page == last_page) return;
+
+        var first_page_lines: usize = 0;
+        var last_page_lines: usize = 0;
+        for (lines.items) |line| {
+            const page = context.pageIndex(line.y);
+            if (page == first_page) first_page_lines += 1;
+            if (page == last_page) last_page_lines += 1;
+        }
+
+        if (first_page_lines < orphans) {
+            const shift = context.atomicShift(outer_y.*, @min(outer_height.*, page_height));
+            if (shift > 0) {
+                floats.shiftFragments(self.fragments.items[fragment_start..], 0, shift);
+                outer_y.* += shift;
+            }
+            return;
+        }
+
+        if (last_page_lines >= widows) return;
+        const required = @as(usize, @intCast(widows)) - last_page_lines;
+        if (lines.items.len <= last_page_lines + required) return;
+        const split_index = lines.items.len - last_page_lines - required;
+        if (split_index < orphans) return;
+
+        const split_y = lines.items[split_index].y;
+        const last_page_start = context.pageStart(lines.items[lines.items.len - 1].y);
+        const shift = last_page_start - split_y;
+        if (shift <= 0) return;
+
+        for (self.fragments.items[fragment_start..]) |*fragment| {
+            if (fragment.rect.y >= split_y) floats.shiftFragment(fragment, 0, shift);
+        }
+        outer_height.* += shift;
+    }
+
+    fn enforceLegacyLineConstraints(
         self: *State,
         fragment_start: usize,
         outer_y: *f32,
@@ -991,6 +1076,171 @@ test "forced page break advances following content to the next page" {
     try std.testing.expect(second_y.? >= 100);
 }
 
+test "Web facing-page breaks arbitrate adjacent before and after values" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:10px;break-after:right'></div>" ++
+        "<div style='height:10px;break-before:left;background:#ff0000'>left</div>" ++
+        "<div style='height:10px;break-before:right;background:#0000ff'>right</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var left: ?geometry.Rect = null;
+    var right: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) left = fragment.rect;
+        if (color.blue == 1 and color.red == 0) right = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), left.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 200), right.?.y, 0.01);
+}
+
+test "Web recto and verso follow the DOM root direction" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='direction:rtl'>" ++
+        "<div style='height:10px'></div>" ++
+        "<div style='height:10px;break-before:recto;background:#ff0000'>recto</div>" ++
+        "<div style='height:10px;break-before:verso;background:#0000ff'>verso</div></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var recto: ?geometry.Rect = null;
+    var verso: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) recto = fragment.rect;
+        if (color.blue == 1 and color.red == 0) verso = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), recto.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 200), verso.?.y, 0.01);
+}
+
+test "Web first-child forced break propagates before the parent decorations" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:20px'></div>" ++
+        "<div style='padding-top:10px;background:#ff0000'>" ++
+        "<div style='height:10px;break-before:page'>target</div></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var parent: ?geometry.Rect = null;
+    var target_y: ?f32 = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.background) |color| {
+            if (color.red == 1 and color.blue == 0) parent = fragment.rect;
+        }
+        if (fragment.text) |text| {
+            if (std.mem.eql(u8, text, "target")) target_y = fragment.rect.y;
+        }
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), parent.?.y, 0.01);
+    try std.testing.expect(target_y.? >= 110);
+}
+
+test "Web avoid boundary moves an adjacent sibling group intact" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:20px'></div>" ++
+        "<div style='height:35px;break-after:avoid;background:#ff0000'>first</div>" ++
+        "<div style='height:20px;background:#0000ff'>second</div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 60, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 60), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 95), second.?.y, 0.01);
+}
+
+test "Web descendant forced break overrides ancestor break-inside avoid" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:40px'></div>" ++
+        "<div style='break-inside:avoid;background:#ff0000'>" ++
+        "<div style='height:10px'></div>" ++
+        "<div style='height:10px;break-before:page;background:#0000ff'>target</div></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 60, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var parent: ?geometry.Rect = null;
+    var target: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) parent = fragment.rect;
+        if (color.blue == 1 and color.red == 0) target = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 40), parent.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), target.?.y, 0.01);
+}
+
 test "forced page break applies to inline replaced elements" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -1385,6 +1635,48 @@ test "repeat table headers when rows continue on another page" {
     try std.testing.expectEqual(@as(usize, 2), header_count);
     try std.testing.expectApproxEqAbs(@as(f32, 61), repeated_header_y, 0.01);
     try std.testing.expect(second_y >= 80);
+}
+
+test "Web table keeps avoid-linked rows with their repeated header" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:10px'></div>" ++
+        "<table style='width:100px;border-collapse:collapse'>" ++
+        "<thead><tr style='height:20px;background:#00ff00'><th>Header</th></tr></thead>" ++
+        "<tbody><tr style='height:20px;break-after:avoid;background:#ff0000'><td>first</td></tr>" ++
+        "<tr style='height:20px;background:#0000ff'><td>second</td></tr></tbody></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 60, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var repeated_header_y: f32 = 0;
+    var header_count: usize = 0;
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.green == 1 and color.red == 0 and fragment.source_box != tree.root) {
+            header_count += 1;
+            repeated_header_y = @max(repeated_header_y, fragment.rect.y);
+        }
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+    }
+    try std.testing.expectEqual(@as(usize, 2), header_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), repeated_header_y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 80), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), second.?.y, 0.01);
 }
 
 test "border-box dimensions include padding and borders" {
@@ -2476,6 +2768,42 @@ test "Web column flex advances atomic items across fragmentainers" {
     try std.testing.expectApproxEqAbs(@as(f32, 150), after.?.y, 0.01);
 }
 
+test "Web Flex arbitrates avoid and facing-page breaks in order-modified flow" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:70px'></div>" ++
+        "<div style='display:flex;flex-direction:column;width:100px'>" ++
+        "<div style='flex:0 0 20px;break-after:avoid;background:#ff0000'>first</div>" ++
+        "<div style='flex:0 0 20px;background:#0000ff'>second</div>" ++
+        "<div style='flex:0 0 20px;break-before:right;background:#00ff00'>third</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    var third: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0 and color.green == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+        if (color.green == 1 and color.red == 0 and color.blue == 0) third = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), second.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 200), third.?.y, 0.01);
+}
+
 test "Web Grid lays out named areas fixed and flexible tracks" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -2623,6 +2951,38 @@ test "Web Grid advances intact rows across fragmentainers" {
     try std.testing.expectApproxEqAbs(@as(f32, 60), first.?.y, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 120), second.?.y, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 150), after.?.y, 0.01);
+}
+
+test "Web Grid keeps avoid-linked rows together" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:30px'></div>" ++
+        "<div style='display:grid;width:100px;grid-template-columns:1fr;grid-auto-rows:20px'>" ++
+        "<div style='break-after:avoid;background:#ff0000'>first</div>" ++
+        "<div style='background:#0000ff'>second</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 60, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var first: ?geometry.Rect = null;
+    var second: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) first = fragment.rect;
+        if (color.blue == 1 and color.red == 0) second = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 60), first.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 80), second.?.y, 0.01);
 }
 
 test "orphans move a paragraph that would leave one line at page bottom" {

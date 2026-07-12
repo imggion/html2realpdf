@@ -91,17 +91,19 @@ pub fn marginRect(rect: geometry.Rect, margins: box.EdgeSizes) geometry.Rect {
 }
 
 pub fn shiftFragments(fragments: []types.Fragment, dx: f32, dy: f32) void {
-    for (fragments) |*fragment| {
-        fragment.rect.x += dx;
-        fragment.rect.y += dy;
-        if (fragment.clip_rect) |*clip| {
-            clip.x += dx;
-            clip.y += dy;
-        }
-        if (fragment.image_content_rect) |*content| {
-            content.x += dx;
-            content.y += dy;
-        }
+    for (fragments) |*fragment| shiftFragment(fragment, dx, dy);
+}
+
+pub fn shiftFragment(fragment: *types.Fragment, dx: f32, dy: f32) void {
+    fragment.rect.x += dx;
+    fragment.rect.y += dy;
+    if (fragment.clip_rect) |*clip| {
+        clip.x += dx;
+        clip.y += dy;
+    }
+    if (fragment.image_content_rect) |*content| {
+        content.x += dx;
+        content.y += dy;
     }
 }
 

@@ -8,6 +8,7 @@ const std = @import("std");
 const box = @import("../box.zig");
 const geometry = @import("../geometry.zig");
 const floats = @import("floats.zig");
+const fragmentation = @import("fragmentation.zig");
 const intrinsic = @import("intrinsic.zig");
 
 pub const supported = true;
@@ -112,8 +113,8 @@ pub fn layout(
     } else {
         positionLines(lines.items, cross_size, natural_cross, cross_gap, style.align_content, style.flex_wrap == .wrapReverse);
     }
-    const fragmented_cross = if (row_axis and state.page_height != null)
-        fragmentRowLines(lines.items, content.y, state.page_height.?)
+    const fragmented_cross = if (row_axis and state.fragmentainer() != null)
+        fragmentRowLines(state, items.items, lines.items, content.y, state.fragmentainer().?)
     else
         cross_size;
 
@@ -373,10 +374,12 @@ fn positionLines(lines: []Line, cross_size: f32, natural_cross: f32, gap: f32, a
 /// fragmentainer space. Lines are visited by physical cross position so
 /// `wrap-reverse` receives the same page-boundary behavior without changing
 /// order-modified painting order.
-fn fragmentRowLines(lines: []Line, content_y: f32, page_height: f32) f32 {
+fn fragmentRowLines(state: anytype, items: []const Item, lines: []Line, content_y: f32, context: fragmentation.Context) f32 {
     var cumulative_shift: f32 = 0;
     var extent: f32 = 0;
     var positioned: usize = 0;
+    var previous_break_after = box.PageBreak.auto;
+    var group_start: ?f32 = null;
     while (positioned < lines.len) : (positioned += 1) {
         var next_index: ?usize = null;
         for (lines, 0..) |line, index| {
@@ -385,17 +388,75 @@ fn fragmentRowLines(lines: []Line, content_y: f32, page_height: f32) f32 {
         }
         const line = &lines[next_index.?];
         line.cross_position += cumulative_shift;
-        const absolute_y = content_y + line.cross_position;
-        const page_y = @mod(absolute_y, page_height);
-        if (page_y > 0 and line.cross_size <= page_height and page_y + line.cross_size > page_height) {
-            const shift = page_height - page_y;
-            line.cross_position += shift;
-            cumulative_shift += shift;
+        var absolute_y = content_y + line.cross_position;
+        const line_items = items[line.start .. line.start + line.count];
+        const break_before = parallelBreakBefore(state, line_items);
+        const boundary_break = if (group_start != null)
+            fragmentation.resolveBoundary(previous_break_after, break_before)
+        else
+            box.PageBreak.auto;
+        if (boundary_break.isForced()) {
+            const forced_start = context.forcedBreakStart(absolute_y, boundary_break);
+            const forced_shift = forced_start - absolute_y;
+            line.cross_position += forced_shift;
+            cumulative_shift += forced_shift;
+            absolute_y = forced_start;
+        }
+        var kept_group = false;
+        var retain_group = false;
+        if (boundary_break.isAvoid() and group_start != null) {
+            const group_end = absolute_y + line.cross_size;
+            const group_size = group_end - group_start.?;
+            retain_group = group_size <= context.extent + 0.0001;
+            const group_shift = context.atomicShift(group_start.?, group_size);
+            if (group_shift > 0) {
+                shiftPositionedLines(lines, content_y, group_start.?, group_shift);
+                line.cross_position += group_shift;
+                cumulative_shift += group_shift;
+                absolute_y += group_shift;
+                group_start.? += group_shift;
+                kept_group = true;
+            }
+        }
+        if (!kept_group) {
+            const automatic_shift = context.atomicShift(absolute_y, line.cross_size);
+            if (automatic_shift > 0) {
+                line.cross_position += automatic_shift;
+                cumulative_shift += automatic_shift;
+                absolute_y += automatic_shift;
+            }
         }
         line.fragmentation_positioned = true;
+        if (!retain_group) {
+            group_start = absolute_y;
+        }
+        previous_break_after = parallelBreakAfter(state, line_items);
         extent = @max(extent, line.cross_position + line.cross_size);
     }
+    if (previous_break_after.isForced()) {
+        extent = @max(extent, context.forcedBreakStart(content_y + extent, previous_break_after) - content_y);
+    }
     return extent;
+}
+
+fn parallelBreakBefore(state: anytype, items: []const Item) box.PageBreak {
+    var result = box.PageBreak.auto;
+    for (items) |item| result = fragmentation.resolveBoundary(result, state.tree.boxes.items[item.box_id].style.page_break_before);
+    return result;
+}
+
+fn parallelBreakAfter(state: anytype, items: []const Item) box.PageBreak {
+    var result = box.PageBreak.auto;
+    for (items) |item| result = fragmentation.resolveBoundary(result, state.tree.boxes.items[item.box_id].style.page_break_after);
+    return result;
+}
+
+fn shiftPositionedLines(lines: []Line, content_y: f32, group_start: f32, shift: f32) void {
+    for (lines) |*line| {
+        if (!line.fragmentation_positioned) continue;
+        if (content_y + line.cross_position + 0.0001 < group_start) continue;
+        line.cross_position += shift;
+    }
 }
 
 fn positionLineItems(
@@ -426,8 +487,8 @@ fn positionLineItems(
         cursor += if (reverse_main) -between else between;
     }
 
-    const fragmented_main = if (!row_axis and state.page_height != null)
-        fragmentColumnItems(items, content.y, state.page_height.?)
+    const fragmented_main = if (!row_axis and state.fragmentainer() != null)
+        fragmentColumnItems(state, items, content.y, state.fragmentainer().?)
     else
         main_size;
 
@@ -501,10 +562,12 @@ fn clampCrossSize(state: anytype, box_id: box.BoxId, proposed: f32, reference: f
     return @max(target, 0);
 }
 
-fn fragmentColumnItems(items: []Item, content_y: f32, page_height: f32) f32 {
+fn fragmentColumnItems(state: anytype, items: []Item, content_y: f32, context: fragmentation.Context) f32 {
     var cumulative_shift: f32 = 0;
     var extent: f32 = 0;
     var positioned: usize = 0;
+    var previous_break_after = box.PageBreak.auto;
+    var group_start: ?f32 = null;
     while (positioned < items.len) : (positioned += 1) {
         var next_index: ?usize = null;
         for (items, 0..) |item, index| {
@@ -513,17 +576,62 @@ fn fragmentColumnItems(items: []Item, content_y: f32, page_height: f32) f32 {
         }
         const item = &items[next_index.?];
         item.main_position += cumulative_shift;
-        const absolute_y = content_y + item.main_position;
-        const page_y = @mod(absolute_y, page_height);
-        if (page_y > 0 and item.rect.height <= page_height and page_y + item.rect.height > page_height) {
-            const shift = page_height - page_y;
-            item.main_position += shift;
-            cumulative_shift += shift;
+        var absolute_y = content_y + item.main_position;
+        const style = state.tree.boxes.items[item.box_id].style;
+        const boundary_break = if (group_start != null)
+            fragmentation.resolveBoundary(previous_break_after, style.page_break_before)
+        else
+            box.PageBreak.auto;
+        if (boundary_break.isForced()) {
+            const forced_start = context.forcedBreakStart(absolute_y, boundary_break);
+            const forced_shift = forced_start - absolute_y;
+            item.main_position += forced_shift;
+            cumulative_shift += forced_shift;
+            absolute_y = forced_start;
+        }
+        var kept_group = false;
+        var retain_group = false;
+        if (boundary_break.isAvoid() and group_start != null) {
+            const group_end = absolute_y + item.rect.height + item.main_margin_end;
+            const group_size = group_end - group_start.?;
+            retain_group = group_size <= context.extent + 0.0001;
+            const group_shift = context.atomicShift(group_start.?, group_size);
+            if (group_shift > 0) {
+                shiftPositionedItems(items, content_y, group_start.?, group_shift);
+                item.main_position += group_shift;
+                cumulative_shift += group_shift;
+                absolute_y += group_shift;
+                group_start.? += group_shift;
+                kept_group = true;
+            }
+        }
+        if (!kept_group) {
+            const automatic_shift = context.atomicShift(absolute_y, item.rect.height);
+            if (automatic_shift > 0) {
+                item.main_position += automatic_shift;
+                cumulative_shift += automatic_shift;
+                absolute_y += automatic_shift;
+            }
         }
         item.fragmentation_positioned = true;
+        if (!retain_group) {
+            group_start = absolute_y;
+        }
+        previous_break_after = style.page_break_after;
         extent = @max(extent, item.main_position + item.rect.height + item.main_margin_end);
     }
+    if (previous_break_after.isForced()) {
+        extent = @max(extent, context.forcedBreakStart(content_y + extent, previous_break_after) - content_y);
+    }
     return extent;
+}
+
+fn shiftPositionedItems(items: []Item, content_y: f32, group_start: f32, shift: f32) void {
+    for (items) |*item| {
+        if (!item.fragmentation_positioned) continue;
+        if (content_y + item.main_position + 0.0001 < group_start) continue;
+        item.main_position += shift;
+    }
 }
 
 fn resolvedAlignment(self: box.AlignSelf, parent: box.AlignItems) box.AlignItems {

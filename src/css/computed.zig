@@ -52,6 +52,7 @@ const parseGridLine = values.parseGridLine;
 const parseNonNegativeNumber = values.parseNonNegativeNumber;
 const parseOrder = values.parseOrder;
 const parsePageBreak = values.parsePageBreak;
+const parsePageBreakInside = values.parsePageBreakInside;
 const parseBorderStyle = values.parseBorderStyle;
 const parseBorderWidth = values.parseBorderWidth;
 const parsePositiveInteger = values.parsePositiveInteger;
@@ -380,7 +381,7 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
     } else if (eqlProp(name, "page-break-after") or eqlProp(name, "break-after")) {
         if (parsePageBreak(value)) |pb| style.page_break_after = pb;
     } else if (eqlProp(name, "page-break-inside") or eqlProp(name, "break-inside")) {
-        if (parsePageBreak(value)) |pb| style.page_break_inside = pb;
+        if (parsePageBreakInside(value)) |pb| style.page_break_inside = pb;
     } else if (eqlProp(name, "orphans")) {
         if (parsePositiveInteger(value)) |o| style.orphans = o;
     } else if (eqlProp(name, "widows")) {

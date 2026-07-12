@@ -9,6 +9,7 @@ const std = @import("std");
 const box = @import("../box.zig");
 const geometry = @import("../geometry.zig");
 const floats = @import("floats.zig");
+const fragmentation = @import("fragmentation.zig");
 const intrinsic = @import("intrinsic.zig");
 
 pub const supported = true;
@@ -143,7 +144,7 @@ pub fn layout(
 
     const column_positions = positionTracks(columns.tracks.items, content.width, column_gap, style.justify_content, true);
     var row_positions = positionRows(rows.tracks.items, specified_content_height, row_gap, style.align_content);
-    if (state.page_height) |page_height| fragmentRows(rows.tracks.items, &row_positions, content.y, page_height);
+    if (state.fragmentainer()) |context| fragmentRows(state, items.items, rows.tracks.items, &row_positions, content.y, context);
 
     for (items.items) |*item| {
         const column = item.column orelse 0;
@@ -538,19 +539,83 @@ fn distributionForAlign(alignment: box.AlignContent, free: f32, count: usize) Di
     };
 }
 
-fn fragmentRows(tracks: []const Track, positions: *AxisPositions, content_y: f32, page_height: f32) void {
+fn fragmentRows(state: anytype, items: []const Item, tracks: []const Track, positions: *AxisPositions, content_y: f32, context: fragmentation.Context) void {
     var cumulative_shift: f32 = 0;
+    var previous_break_after = box.PageBreak.auto;
+    var group_start: ?f32 = null;
     for (tracks, 0..) |track, index| {
         positions.starts[index] += cumulative_shift;
-        const absolute_y = content_y + positions.starts[index];
-        const page_y = @mod(absolute_y, page_height);
-        if (page_y > 0 and track.base <= page_height and page_y + track.base > page_height) {
-            const shift = page_height - page_y;
-            positions.starts[index] += shift;
-            cumulative_shift += shift;
+        var absolute_y = content_y + positions.starts[index];
+        const break_before = gridRowBreakBefore(state, items, index);
+        const boundary_break = if (group_start != null)
+            fragmentation.resolveBoundary(previous_break_after, break_before)
+        else
+            box.PageBreak.auto;
+        if (boundary_break.isForced()) {
+            const forced_start = context.forcedBreakStart(absolute_y, boundary_break);
+            const forced_shift = forced_start - absolute_y;
+            positions.starts[index] += forced_shift;
+            cumulative_shift += forced_shift;
+            absolute_y = forced_start;
         }
+
+        var kept_group = false;
+        var retain_group = false;
+        if (boundary_break.isAvoid() and group_start != null) {
+            const group_end = absolute_y + track.base;
+            const group_size = group_end - group_start.?;
+            retain_group = group_size <= context.extent + 0.0001;
+            const group_shift = context.atomicShift(group_start.?, group_size);
+            if (group_shift > 0) {
+                shiftPositionedRows(positions, index, content_y, group_start.?, group_shift);
+                positions.starts[index] += group_shift;
+                cumulative_shift += group_shift;
+                absolute_y += group_shift;
+                group_start.? += group_shift;
+                kept_group = true;
+            }
+        }
+        if (!kept_group) {
+            const automatic_shift = context.atomicShift(absolute_y, track.base);
+            if (automatic_shift > 0) {
+                positions.starts[index] += automatic_shift;
+                cumulative_shift += automatic_shift;
+                absolute_y += automatic_shift;
+            }
+        }
+        if (!retain_group) group_start = absolute_y;
+        previous_break_after = gridRowBreakAfter(state, items, index);
     }
     if (tracks.len > 0) positions.extent = positions.starts[tracks.len - 1] + tracks[tracks.len - 1].base;
+    if (previous_break_after.isForced()) {
+        positions.extent = @max(positions.extent, context.forcedBreakStart(content_y + positions.extent, previous_break_after) - content_y);
+    }
+}
+
+fn gridRowBreakBefore(state: anytype, items: []const Item, row: usize) box.PageBreak {
+    var result = box.PageBreak.auto;
+    for (items) |item| {
+        if ((item.row orelse 0) != row) continue;
+        result = fragmentation.resolveBoundary(result, state.tree.boxes.items[item.box_id].style.page_break_before);
+    }
+    return result;
+}
+
+fn gridRowBreakAfter(state: anytype, items: []const Item, row: usize) box.PageBreak {
+    var result = box.PageBreak.auto;
+    for (items) |item| {
+        const item_row = item.row orelse 0;
+        if (item_row + item.row_span - 1 != row) continue;
+        result = fragmentation.resolveBoundary(result, state.tree.boxes.items[item.box_id].style.page_break_after);
+    }
+    return result;
+}
+
+fn shiftPositionedRows(positions: *AxisPositions, positioned_count: usize, content_y: f32, group_start: f32, shift: f32) void {
+    for (positions.starts[0..positioned_count]) |*start| {
+        if (content_y + start.* + 0.0001 < group_start) continue;
+        start.* += shift;
+    }
 }
 
 fn layoutItem(state: anytype, item: *Item, container_style: box.Style, area: geometry.Rect) !void {
