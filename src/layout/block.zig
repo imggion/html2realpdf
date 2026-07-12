@@ -45,6 +45,7 @@ pub fn layoutWithOptions(
     const margin = source.margin;
     const border = source.border;
     const padding = source.padding;
+    const fill_available_width = options.fill_available_width;
     const margin_info = if (state.web_sizing) state.marginInfo(box_id) else MarginInfo.fromEdges(margin.top, margin.bottom);
     const used_margin_top = if (state.web_sizing and options.suppress_margin_top) 0 else margin_info.start.value();
     const used_margin_bottom = if (state.web_sizing and options.suppress_margin_bottom) 0 else margin_info.end.value();
@@ -93,7 +94,7 @@ pub fn layoutWithOptions(
     ) else null;
     var requested_content_width = if (options.forced_content_width) |forced|
         forced
-    else if (options.fill_available_width)
+    else if (fill_available_width)
         @max(available_outer_width - horizontal_non_content, 1)
     else if (replaced_size) |size|
         size.width
@@ -101,7 +102,7 @@ pub fn layoutWithOptions(
         @min(inline_sizes.max_content, @max(inline_sizes.min_content, available_outer_width - horizontal_non_content))
     else
         intrinsic.resolveContentInlineDimension(style.width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes) orelse @max(available_outer_width - horizontal_non_content, 1);
-    if (!options.fill_available_width and options.forced_content_width == null) {
+    if (!fill_available_width and options.forced_content_width == null) {
         const minimum = intrinsic.resolveContentInlineDimension(style.min_width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes);
         const maximum = intrinsic.resolveContentInlineDimension(style.max_width, available_outer_width, horizontal_non_content, style.box_sizing, inline_sizes);
         if (state.web_sizing) {
@@ -112,7 +113,7 @@ pub fn layoutWithOptions(
             if (maximum) |value| requested_content_width = @min(requested_content_width, value);
         }
     }
-    const may_overflow_inline = state.web_sizing and !options.fill_available_width and (!style.width.isAuto() or !style.min_width.isAuto());
+    const may_overflow_inline = state.web_sizing and !fill_available_width and (!style.width.isAuto() or !style.min_width.isAuto());
     const content_width = if (may_overflow_inline)
         @max(requested_content_width, 1)
     else

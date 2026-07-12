@@ -30,7 +30,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`/`min()`/`max()`/`clamp()`, `min-content`/`max-content`/`fit-content()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
 | `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic fallback for replaced elements; web/strict transfer the preferred ratio into auto block size for normal boxes |
 | `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
-| inline/data URL SVG | Y | Y | Y | Y | Y | Y | Y | `path`, rect, circle/ellipse, line, polyline/polygon, nested groups, affine transforms, arcs, rounded rects, solid fill/stroke, dash/cap/join, viewBox and preserveAspectRatio become clipped PDF Form XObjects; SVG text, paint servers, masks, filters and unsupported elements use a diagnostic scoped fallback |
+| inline/data URL SVG | Y | Y | Y | Y | Y | Y | Y | `path`, rect, circle/ellipse, line, polyline/polygon, nested groups, affine transforms, arcs, rounded rects, solid fill/stroke, dash/cap/join, selectable `text`/`tspan`, bounded linear/radial gradient fills, local `clipPath`, viewBox and preserveAspectRatio become clipped PDF Form XObjects; masks, filters, gradient stroke/text, inherited gradients and unsupported elements use a diagnostic scoped fallback |
 | margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; web/strict collapse sibling, parent/child, empty-block, and mixed positive/negative margin groups across eligible block formatting contexts; flex items consume main/cross `auto` margins |
 | logical sizing/margin/padding/border | Y | Y | Y | Y | Y | Y | Y | `*-block`/`*-inline` longhands and axis shorthands map with final `direction`, share cascade priority with physical peers, and preserve logical `inherit`; horizontal-tb writing mode |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
@@ -109,9 +109,12 @@ Playwright E2E make the matrix verifiable.
   placement, and named/pseudo rules already produce per-page PDF geometry.
 
 These features are not silently represented as whole-page screenshots. Canvas
-and unsupported SVG subtrees remain scoped image resources; supported SVG is a
+remains a scoped image resource unless `canvasToSvg` supplies a valid SVG
+replacement; unsupported SVG subtrees also remain scoped. Supported SVG is a
 native PDF Form XObject, while normal text, links, backgrounds, gradients,
-shadows, borders, and fills remain native PDF content.
+shadows, borders, and fills remain native PDF content. `canvasFallback:
+"rasterize"` emits `CANVAS_SUBTREE_RASTERIZED`; `canvasFallback: "error"`
+rejects a missing, malformed, or unsupported adapter result.
 
 Unsupported declarations found by the Zig/native path are returned through the
 WASM result handle as owned structured diagnostics. Browser snapshots attach
@@ -139,8 +142,9 @@ is `fallback: "error"`; whole-page rasterization is never used.
   opacity, stacking order, fixed-page repetition, and absence of raster
   fallback. All three engines verify compiled CSS Modules, styled-components,
   and escaped Tailwind-style selectors as native selectable content. Chromium
-  also verifies that supported SVG yields vector PDF paths without image
-  objects and that unsupported SVG fallback remains scoped and diagnostic.
+  also verifies that supported SVG and `canvasToSvg` yield vector PDF paths and
+  selectable text without image objects, while unsupported SVG and canvas
+  fallback remain scoped and diagnostic.
 - `make test-baseline` regenerates the versioned PDF fixtures in memory and
   compares their SHA-256 digests with the committed visual baseline manifest.
 - `make test-release` runs all of the above plus package and React builds.

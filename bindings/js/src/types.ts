@@ -9,6 +9,22 @@ export type CssProfile = "document" | "web" | "strict";
 export type MediaType = "screen" | "print";
 export type UnsupportedCssPolicy = "warn" | "error" | "ignore";
 export type FallbackPolicy = "error" | "rasterize-subtree";
+export type CanvasFallbackPolicy = "error" | "rasterize";
+
+export type CanvasSvgSource = string | Blob | SVGSVGElement;
+
+export interface CanvasToSvgRequest {
+  canvas: HTMLCanvasElement;
+  nodePath: string;
+  cssWidth: number;
+  cssHeight: number;
+  bitmapWidth: number;
+  bitmapHeight: number;
+}
+
+export type CanvasToSvg = (
+  request: CanvasToSvgRequest,
+) => CanvasSvgSource | null | Promise<CanvasSvgSource | null>;
 
 export interface ViewportOptions {
   width: number;
@@ -73,6 +89,8 @@ export interface RenderOptions {
   viewport?: ViewportOptions;
   unsupportedCss?: UnsupportedCssPolicy;
   fallback?: FallbackPolicy;
+  canvasToSvg?: CanvasToSvg;
+  canvasFallback?: CanvasFallbackPolicy;
   includeShadowDom?: boolean;
   baseUrl?: string | URL;
   resourcePolicy?: "error" | "omit";

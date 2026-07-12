@@ -11,10 +11,18 @@ test("supported inline SVG remains vector PDF geometry", async ({ page, browserN
     fixture.style.cssText = "width:240px;height:140px";
     fixture.innerHTML = `
       <svg id="vector-chart" width="220" height="120" viewBox="0 0 220 120" aria-label="Vector chart">
+        <defs>
+          <linearGradient id="chart-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#16a34a"/>
+            <stop offset="100%" stop-color="#2563eb" stop-opacity=".55"/>
+          </linearGradient>
+          <clipPath id="chart-clip"><rect x="4" y="4" width="212" height="112" rx="18"/></clipPath>
+        </defs>
         <rect x="4" y="4" width="212" height="112" rx="18" fill="#eff6ff" stroke="#2563eb" stroke-width="4"/>
-        <g transform="translate(20 15)">
-          <circle cx="42" cy="45" r="28" fill="#16a34a"/>
+        <g transform="translate(20 15)" clip-path="url(#chart-clip)">
+          <circle cx="42" cy="45" r="28" fill="url(#chart-gradient)"/>
           <path d="M85 75 C110 15 145 95 180 30" fill="none" stroke="#7c3aed" stroke-width="8" stroke-linecap="round"/>
+          <text x="110" y="28" text-anchor="middle" font-size="14" fill="#172033">Revenue <tspan dx="4" font-weight="bold">€4.82M</tspan></text>
         </g>
       </svg>
       <div id="vector-background" style="width:160px;height:24px;margin-top:4px;background-size:40px 20px;background-repeat:repeat-x"></div>
@@ -50,6 +58,7 @@ test("supported inline SVG remains vector PDF geometry", async ({ page, browserN
     const documentHandle = await loadingTask.promise;
     const pdfPage = await documentHandle.getPage(1);
     const operators = await pdfPage.getOperatorList();
+    const textContent = await pdfPage.getTextContent();
     const count = (operator) => operators.fnArray.filter((candidate) => candidate === operator).length;
     const summary = {
       diagnostics,
@@ -59,6 +68,7 @@ test("supported inline SVG remains vector PDF geometry", async ({ page, browserN
       forms: count(pdfjs.OPS.paintFormXObjectBegin),
       rasterImages: count(pdfjs.OPS.paintImageXObject) + count(pdfjs.OPS.paintInlineImageXObject),
       paths: count(pdfjs.OPS.constructPath),
+      text: textContent.items.map((item) => item.str).join(" "),
     };
     await documentHandle.destroy();
     return summary;
@@ -71,6 +81,8 @@ test("supported inline SVG remains vector PDF geometry", async ({ page, browserN
   expect(result.forms).toBeGreaterThanOrEqual(3);
   expect(result.rasterImages).toBe(0);
   expect(result.paths).toBeGreaterThanOrEqual(4);
+  expect(result.text).toContain("Revenue");
+  expect(result.text).toContain("€4.82M");
 });
 
 test("unsupported SVG rasterizes only its subtree and reports the fallback", async ({ page, browserName }) => {
@@ -84,8 +96,9 @@ test("unsupported SVG rasterizes only its subtree and reports the fallback", asy
     fixture.innerHTML = `
       <p>Selectable sibling</p>
       <svg id="fallback-chart" width="160" height="70" viewBox="0 0 160 70">
+        <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
         <rect width="160" height="70" rx="12" fill="#111827"/>
-        <text x="18" y="42" fill="white" font-size="24">Raster-only SVG text</text>
+        <circle cx="80" cy="35" r="24" fill="#2563eb" filter="url(#blur)"/>
       </svg>`;
     document.body.append(fixture);
     const renderer = await pkg.createRenderer({ execution: "main" });
@@ -147,7 +160,7 @@ test("unsupported SVG rasterizes only its subtree and reports the fallback", asy
     }),
   ]);
   expect(result.explicitError).toContain("Inline SVG requires subtree rasterization");
-  expect(result.explicitError).toContain("<text>");
+  expect(result.explicitError).toContain("<filter>");
   expect(result.defaultError).toContain("Inline SVG requires subtree rasterization");
-  expect(result.defaultError).toContain("<text>");
+  expect(result.defaultError).toContain("<filter>");
 });

@@ -11,6 +11,7 @@ const geometry = @import("geometry.zig");
 const image_decoder = @import("image.zig");
 const pagination = @import("pagination.zig");
 const svg = @import("svg.zig");
+const box = @import("box.zig");
 
 const font_object_span = 5;
 
@@ -29,7 +30,169 @@ pub const Metadata = struct {
 pub const Options = struct {
     metadata: Metadata = .{},
     font_registry: ?*const font.Registry = null,
+    shaping_mode: font.ShapingMode = .identity,
 };
+
+const PreparedSvgRun = struct {
+    text: []const u8,
+    resolved: font.ResolvedFont,
+    shaped: font.ShapedRun,
+    width: f32,
+};
+
+const PreparedSvgText = struct {
+    item_index: usize,
+    first_run: usize,
+    run_count: usize,
+    width: f32,
+};
+
+const PreparedSvg = struct {
+    command_index: usize,
+    document: svg.Document,
+    texts: std.ArrayList(PreparedSvgText),
+    runs: std.ArrayList(PreparedSvgRun),
+
+    fn deinit(self: *PreparedSvg, allocator: std.mem.Allocator) void {
+        for (self.runs.items) |run| allocator.free(run.shaped.glyphs);
+        self.runs.deinit(allocator);
+        self.texts.deinit(allocator);
+        self.document.deinit(allocator);
+    }
+
+    fn textForItem(self: *const PreparedSvg, item_index: usize) ?PreparedSvgText {
+        for (self.texts.items) |text| if (text.item_index == item_index) return text;
+        return null;
+    }
+};
+
+const SvgCatalog = struct {
+    resources: std.ArrayList(PreparedSvg),
+
+    fn init(
+        allocator: std.mem.Allocator,
+        list: *const display_list.DisplayList,
+        registry: ?*const font.Registry,
+        shaping_mode: font.ShapingMode,
+    ) !SvgCatalog {
+        var resources = try std.ArrayList(PreparedSvg).initCapacity(allocator, 0);
+        errdefer {
+            for (resources.items) |*resource| resource.deinit(allocator);
+            resources.deinit(allocator);
+        }
+        for (list.commands.items, 0..) |page_command, command_index| {
+            if (page_command.command != .image or !svg.isDataUrl(page_command.command.image.source)) continue;
+            var document = try svg.parseDataUrl(allocator, page_command.command.image.source);
+            var owns_document = true;
+            errdefer if (owns_document) document.deinit(allocator);
+            var prepared_texts = try std.ArrayList(PreparedSvgText).initCapacity(allocator, document.texts.items.len);
+            var owns_prepared_texts = true;
+            errdefer if (owns_prepared_texts) prepared_texts.deinit(allocator);
+            var prepared_runs = try std.ArrayList(PreparedSvgRun).initCapacity(allocator, document.texts.items.len);
+            var owns_prepared_runs = true;
+            errdefer if (owns_prepared_runs) prepared_runs.deinit(allocator);
+            var prepared = PreparedSvg{
+                .command_index = command_index,
+                .document = document,
+                .texts = prepared_texts,
+                .runs = prepared_runs,
+            };
+            owns_document = false;
+            owns_prepared_texts = false;
+            owns_prepared_runs = false;
+            var owns_prepared = true;
+            errdefer if (owns_prepared) prepared.deinit(allocator);
+            for (document.texts.items, 0..) |text_item, text_index| {
+                const first_run = prepared.runs.items.len;
+                try prepareSvgTextRuns(allocator, &prepared, text_item, registry, shaping_mode);
+                var width: f32 = 0;
+                for (prepared.runs.items[first_run..]) |run| width += run.width;
+                try prepared.texts.append(allocator, .{
+                    .item_index = text_index,
+                    .first_run = first_run,
+                    .run_count = prepared.runs.items.len - first_run,
+                    .width = width,
+                });
+            }
+            try resources.append(allocator, prepared);
+            owns_prepared = false;
+        }
+        return .{ .resources = resources };
+    }
+
+    fn deinit(self: *SvgCatalog, allocator: std.mem.Allocator) void {
+        for (self.resources.items) |*resource| resource.deinit(allocator);
+        self.resources.deinit(allocator);
+    }
+
+    fn forCommand(self: *const SvgCatalog, command_index: usize) ?*const PreparedSvg {
+        for (self.resources.items) |*resource| if (resource.command_index == command_index) return resource;
+        return null;
+    }
+};
+
+fn prepareSvgTextRuns(
+    allocator: std.mem.Allocator,
+    prepared: *PreparedSvg,
+    text_item: svg.Text,
+    registry: ?*const font.Registry,
+    shaping_mode: font.ShapingMode,
+) !void {
+    const text = prepared.document.textSlice(text_item);
+    const weight: box.FontWeight = if (text_item.style.font_weight == .bold) .bold else .normal;
+    const style: box.FontStyle = if (text_item.style.font_style == .italic) .italic else .normal;
+    const direction: font.Direction = if (text_item.style.direction == .rtl) .rtl else .ltr;
+    if (direction == .rtl) {
+        const resolved = font.resolve(registry, text_item.style.font_family.slice(), weight, style);
+        try appendPreparedSvgRun(allocator, prepared, text_item, text, resolved, direction, shaping_mode);
+        return;
+    }
+
+    var iterator = font.Utf8Iterator{ .bytes = text };
+    var run_start: usize = 0;
+    var run_font: ?font.ResolvedFont = null;
+    while (true) {
+        const codepoint_start = iterator.index;
+        const codepoint = try iterator.next() orelse break;
+        const resolved = font.resolveForCodepoint(registry, text_item.style.font_family.slice(), weight, style, codepoint) orelse
+            font.resolve(registry, text_item.style.font_family.slice(), weight, style);
+        if (run_font) |current| {
+            if (current.id != resolved.id) {
+                try appendPreparedSvgRun(allocator, prepared, text_item, text[run_start..codepoint_start], current, direction, shaping_mode);
+                run_start = codepoint_start;
+                run_font = resolved;
+            }
+        } else run_font = resolved;
+    }
+    if (run_font) |resolved| try appendPreparedSvgRun(allocator, prepared, text_item, text[run_start..], resolved, direction, shaping_mode);
+}
+
+fn appendPreparedSvgRun(
+    allocator: std.mem.Allocator,
+    prepared: *PreparedSvg,
+    text_item: svg.Text,
+    text: []const u8,
+    resolved: font.ResolvedFont,
+    direction: font.Direction,
+    shaping_mode: font.ShapingMode,
+) !void {
+    if (text.len == 0) return;
+    const shaped = try font.shapeWithMode(allocator, resolved, text, direction, shaping_mode);
+    errdefer allocator.free(shaped.glyphs);
+    try prepared.runs.append(allocator, .{
+        .text = text,
+        .resolved = resolved,
+        .shaped = shaped,
+        .width = font.shapedWidthCssPx(
+            shaped,
+            text,
+            resolved.metrics().units_per_em,
+            text_item.style.font_size,
+            text_item.style.letter_spacing,
+            text_item.style.word_spacing,
+        ),
+    });
+}
 
 const GlyphMapping = struct {
     cid: u16,
@@ -84,8 +247,23 @@ const FontUsage = struct {
         }
     }
 
+    fn collectSvg(self: *FontUsage, svg_catalog: *const SvgCatalog) !void {
+        for (svg_catalog.resources.items) |resource| {
+            for (resource.runs.items) |run| {
+                const used_index = try self.ensureResolvedFont(run.resolved);
+                for (run.shaped.glyphs) |glyph| {
+                    _ = try self.add(used_index, glyph.glyph_id, glyphUnicode(run.text, glyph));
+                }
+            }
+        }
+    }
+
     fn ensureFont(self: *FontUsage, run: display_list.TextRun) !usize {
         const resolved = font.resolve(self.registry, run.font_family, run.font_weight, run.font_style);
+        return self.ensureResolvedFont(resolved);
+    }
+
+    fn ensureResolvedFont(self: *FontUsage, resolved: font.ResolvedFont) !usize {
         for (self.fonts.items, 0..) |used, index| if (used.resolved.id == resolved.id) return index;
         var glyphs = try std.ArrayList(GlyphMapping).initCapacity(self.allocator, 32);
         errdefer glyphs.deinit(self.allocator);
@@ -99,6 +277,10 @@ const FontUsage = struct {
 
     fn indexForRun(self: *const FontUsage, run: display_list.TextRun) usize {
         const resolved = font.resolve(self.registry, run.font_family, run.font_weight, run.font_style);
+        return self.indexForResolvedFont(resolved);
+    }
+
+    fn indexForResolvedFont(self: *const FontUsage, resolved: font.ResolvedFont) usize {
         for (self.fonts.items, 0..) |used, index| if (used.resolved.id == resolved.id) return index;
         unreachable;
     }
@@ -240,9 +422,12 @@ pub fn write(allocator: std.mem.Allocator, list: *const display_list.DisplayList
 pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.DisplayList, options: Options) ![]u8 {
     if (list.page_count == 0) return Error.InvalidPageCount;
 
+    var svg_catalog = try SvgCatalog.init(allocator, list, options.font_registry, options.shaping_mode);
+    defer svg_catalog.deinit(allocator);
     var font_usage = try FontUsage.init(allocator, options.font_registry);
     defer font_usage.deinit(allocator);
     try font_usage.collect(list);
+    try font_usage.collectSvg(&svg_catalog);
     var alpha_usage = try AlphaUsage.init(allocator);
     defer alpha_usage.deinit(allocator);
     try alpha_usage.collect(allocator, list);
@@ -388,7 +573,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     }
 
     var image_index: usize = 0;
-    for (list.commands.items) |page_command| {
+    for (list.commands.items, 0..) |page_command, command_index| {
         if (page_command.command != .image) continue;
         try writeImageObjects(
             allocator,
@@ -396,6 +581,8 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
             offsets,
             first_image_id + image_index * 2,
             page_command.command.image,
+            svg_catalog.forCommand(command_index),
+            &font_usage,
         );
         image_index += 1;
     }
@@ -1419,20 +1606,27 @@ fn writeImageObjects(
     offsets: []usize,
     object_id: usize,
     image_command: display_list.Image,
+    prepared_svg: ?*const PreparedSvg,
+    font_usage: *const FontUsage,
 ) !void {
     const writer = &output.writer;
     if (svg.isDataUrl(image_command.source)) {
-        var document = try svg.parseDataUrl(allocator, image_command.source);
-        defer document.deinit(allocator);
-        const content = try svgFormContent(allocator, document, image_command);
+        const prepared = prepared_svg orelse return svg.Error.InvalidSvg;
+        const content = try svgFormContent(allocator, prepared, image_command, font_usage);
         defer allocator.free(content);
         const compressed = try image_decoder.compressZlib(allocator, content);
         defer allocator.free(compressed);
         try beginObject(output, offsets, object_id);
-        try writer.print(
-            "<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 1 1] /Resources << >> /Length {d} /Filter /FlateDecode >>\nstream\n",
-            .{compressed.len},
-        );
+        try writer.writeAll("<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 1 1] /Resources << /Font <<");
+        for (font_usage.fonts.items, 0..) |_, used_index| {
+            try writer.print(" /F{d} {d} 0 R", .{ used_index + 1, type0FontObjectId(used_index) });
+        }
+        try writer.writeAll(" >> /ExtGState <<");
+        for (0..101) |alpha_index| {
+            const alpha = @as(f32, @floatFromInt(alpha_index)) / 100;
+            try writer.print(" /SG{d} << /Type /ExtGState /ca {d:.2} /CA {d:.2} >>", .{ alpha_index, alpha, alpha });
+        }
+        try writer.print(" >> >> /Length {d} /Filter /FlateDecode >>\nstream\n", .{compressed.len});
         try writer.writeAll(compressed);
         try writer.writeAll("\nendstream\nendobj\n");
         try beginObject(output, offsets, object_id + 1);
@@ -1490,48 +1684,349 @@ fn writeImageObjects(
     try writer.writeAll("null\nendobj\n");
 }
 
-fn svgFormContent(allocator: std.mem.Allocator, document: svg.Document, image_command: display_list.Image) ![]u8 {
+fn svgFormContent(
+    allocator: std.mem.Allocator,
+    prepared: *const PreparedSvg,
+    image_command: display_list.Image,
+    font_usage: *const FontUsage,
+) ![]u8 {
     var content = std.Io.Writer.Allocating.init(allocator);
     errdefer content.deinit();
     const writer = &content.writer;
     const fitted = fittedImageRect(image_command);
+    const document = &prepared.document;
     const root_transform = document.formTransform(fitted.width, fitted.height);
-    try writer.writeAll("q 0 0 1 1 re W n\n");
-    for (document.shapes.items) |shape| {
-        if (shape.style.fill == null and (shape.style.stroke == null or shape.style.stroke_width <= 0)) continue;
-        const transform = root_transform.multiply(shape.transform);
-        try writer.print("q {d:.8} {d:.8} {d:.8} {d:.8} {d:.8} {d:.8} cm\n", .{
-            transform.a,
-            transform.b,
-            transform.c,
-            transform.d,
-            transform.e,
-            transform.f,
-        });
-        if (shape.style.fill) |fill| try writeFillColor(writer, fill);
-        if (shape.style.stroke) |stroke| {
-            try writeStrokeColor(writer, stroke);
-            try writer.print("{d:.5} w {d} J {d} j {d:.5} M [", .{
-                shape.style.stroke_width,
-                @intFromEnum(shape.style.line_cap),
-                @intFromEnum(shape.style.line_join),
-                shape.style.miter_limit,
-            });
-            for (shape.style.dash_values[0..shape.style.dash_len]) |value| try writer.print(" {d:.5}", .{value});
-            try writer.print(" ] {d:.5} d\n", .{shape.style.dash_offset});
-        }
-        try writeSvgPath(writer, document.ops.items[shape.first_op..][0..shape.op_count]);
-        if (shape.style.fill != null and shape.style.stroke != null and shape.style.stroke_width > 0) {
-            try writer.writeAll(if (shape.style.fill_rule == .evenodd) "B*\n" else "B\n");
-        } else if (shape.style.fill != null) {
-            try writer.writeAll(if (shape.style.fill_rule == .evenodd) "f*\n" else "f\n");
-        } else {
-            try writer.writeAll("S\n");
-        }
-        try writer.writeAll("Q\n");
-    }
+    try writer.print("q 0 0 1 1 re W n {d:.8} {d:.8} {d:.8} {d:.8} {d:.8} {d:.8} cm\n", .{
+        root_transform.a,
+        root_transform.b,
+        root_transform.c,
+        root_transform.d,
+        root_transform.e,
+        root_transform.f,
+    });
+    const cursor_count = @max(document.texts.items.len, 1);
+    const cursors = try allocator.alloc(geometry.Point, cursor_count);
+    defer allocator.free(cursors);
+    @memset(cursors, .{});
+    for (document.items.items) |item| switch (item) {
+        .shape => |shape_index| try writeSvgShapeItem(writer, document, document.shapes.items[shape_index]),
+        .text => |text_index| {
+            const prepared_text = prepared.textForItem(text_index) orelse continue;
+            try writeSvgTextItem(writer, document, prepared, document.texts.items[text_index], prepared_text, font_usage, cursors);
+        },
+    };
     try writer.writeAll("Q\n");
     return content.toOwnedSlice();
+}
+
+fn writeSvgShapeItem(writer: *std.Io.Writer, document: *const svg.Document, shape: svg.Shape) !void {
+    if (shape.style.fill == null and shape.style.fill_server == null and
+        (shape.style.stroke == null or shape.style.stroke_width <= 0) and shape.style.stroke_server == null) return;
+    const bounds = svgShapeBounds(document, shape);
+    try writer.writeAll("q\n");
+    try writeSvgClipChain(writer, document, shape.clips, shape.transform, bounds, 0);
+    try writeSvgTransform(writer, shape.transform);
+
+    if (shape.style.fill_server) |reference| {
+        const gradient = document.gradientFor(reference) orelse return svg.Error.InvalidSvg;
+        try writer.writeAll("q\n");
+        try writeSvgPath(writer, document.ops.items[shape.first_op..][0..shape.op_count]);
+        try writer.writeAll(if (shape.style.fill_rule == .evenodd) "W* n\n" else "W n\n");
+        try writeSvgGradientBands(writer, gradient, bounds, shape.style.opacity * shape.style.fill_opacity);
+        try writer.writeAll("Q\n");
+    } else if (shape.style.fill) |fill| {
+        try writeSvgAlphaState(writer, fill.alpha * shape.style.opacity * shape.style.fill_opacity);
+        try writeFillColor(writer, fill);
+        try writeSvgPath(writer, document.ops.items[shape.first_op..][0..shape.op_count]);
+        try writer.writeAll(if (shape.style.fill_rule == .evenodd) "f*\n" else "f\n");
+    }
+
+    if (shape.style.stroke_server != null) return svg.Error.UnsupportedSvg;
+    if (shape.style.stroke) |stroke| if (shape.style.stroke_width > 0) {
+        try writeSvgAlphaState(writer, stroke.alpha * shape.style.opacity * shape.style.stroke_opacity);
+        try writeStrokeColor(writer, stroke);
+        try writer.print("{d:.5} w {d} J {d} j {d:.5} M [", .{
+            shape.style.stroke_width,
+            @intFromEnum(shape.style.line_cap),
+            @intFromEnum(shape.style.line_join),
+            shape.style.miter_limit,
+        });
+        for (shape.style.dash_values[0..shape.style.dash_len]) |value| try writer.print(" {d:.5}", .{value});
+        try writer.print(" ] {d:.5} d\n", .{shape.style.dash_offset});
+        try writeSvgPath(writer, document.ops.items[shape.first_op..][0..shape.op_count]);
+        try writer.writeAll("S\n");
+    };
+    try writer.writeAll("Q\n");
+}
+
+fn writeSvgTextItem(
+    writer: *std.Io.Writer,
+    document: *const svg.Document,
+    prepared: *const PreparedSvg,
+    text_item: svg.Text,
+    prepared_text: PreparedSvgText,
+    font_usage: *const FontUsage,
+    cursors: []geometry.Point,
+) !void {
+    if (prepared_text.run_count == 0) return;
+    const cursor = &cursors[@min(text_item.group_id, cursors.len - 1)];
+    const logical_x = (text_item.x orelse cursor.x) + text_item.dx;
+    const logical_y = (text_item.y orelse cursor.y) + text_item.dy;
+    const anchor_offset: f32 = switch (text_item.style.text_anchor) {
+        .middle => -prepared_text.width / 2,
+        .start => if (text_item.style.direction == .rtl) -prepared_text.width else 0,
+        .end => if (text_item.style.direction == .rtl) 0 else -prepared_text.width,
+    };
+    const first_run = prepared.runs.items[prepared_text.first_run];
+    const metrics = first_run.resolved.metrics();
+    const baseline_adjustment: f32 = switch (text_item.style.dominant_baseline) {
+        .alphabetic => 0,
+        .middle, .central => text_item.style.font_size * (metrics.ascentRatio() - 0.5),
+        .hanging => text_item.style.font_size * metrics.ascentRatio() * 0.8,
+    };
+    const bounds = geometry.Rect{
+        .x = logical_x + anchor_offset,
+        .y = logical_y - text_item.style.font_size * metrics.ascentRatio(),
+        .width = prepared_text.width,
+        .height = text_item.style.font_size,
+    };
+    try writer.writeAll("q\n");
+    try writeSvgClipChain(writer, document, text_item.clips, text_item.transform, bounds, 0);
+    try writeSvgTransform(writer, text_item.transform);
+    const fill = text_item.style.fill orelse geometry.Color.black;
+    try writeSvgAlphaState(writer, fill.alpha * text_item.style.opacity * text_item.style.fill_opacity);
+    try writeFillColor(writer, fill);
+    if (text_item.style.stroke) |stroke| {
+        try writeStrokeColor(writer, stroke);
+        try writer.print("{d:.5} w\n", .{@max(text_item.style.stroke_width, 0.1)});
+    }
+    var x = logical_x + anchor_offset;
+    const baseline = logical_y + baseline_adjustment;
+    for (prepared.runs.items[prepared_text.first_run..][0..prepared_text.run_count]) |run| {
+        try writeSvgPreparedTextRun(writer, font_usage, text_item, run, x, baseline);
+        x += run.width;
+    }
+    try writer.writeAll("Q\n");
+    cursor.* = .{ .x = logical_x + prepared_text.width, .y = logical_y };
+}
+
+fn writeSvgPreparedTextRun(
+    writer: *std.Io.Writer,
+    font_usage: *const FontUsage,
+    text_item: svg.Text,
+    run: PreparedSvgRun,
+    origin_x: f32,
+    baseline: f32,
+) !void {
+    const used_index = font_usage.indexForResolvedFont(run.resolved);
+    const metrics = run.resolved.metrics();
+    const units_to_svg = text_item.style.font_size / @as(f32, @floatFromInt(metrics.units_per_em));
+    try writer.writeAll("/Span << /ActualText <FEFF");
+    try writeUnicodeTextHex(writer, run.text);
+    try writer.writeAll("> >> BDC\nBT ");
+    try writer.print("/F{d} {d:.5} Tf {d} Tr\n", .{
+        used_index + 1,
+        text_item.style.font_size,
+        if (text_item.style.stroke != null) @as(u8, 2) else @as(u8, 0),
+    });
+    var cursor_x: f32 = 0;
+    var cursor_y: f32 = 0;
+    for (run.shaped.glyphs) |glyph| {
+        const unicode = glyphUnicode(run.text, glyph);
+        const cid = font_usage.cidFor(used_index, glyph.glyph_id, unicode);
+        const glyph_x = origin_x + cursor_x + @as(f32, @floatFromInt(glyph.x_offset)) * units_to_svg;
+        const glyph_y = baseline - cursor_y - @as(f32, @floatFromInt(glyph.y_offset)) * units_to_svg;
+        try writer.print("1 0 0 -1 {d:.5} {d:.5} Tm <{X:0>4}> Tj\n", .{ glyph_x, glyph_y, cid });
+        cursor_x += @as(f32, @floatFromInt(glyph.x_advance)) * units_to_svg;
+        cursor_y += @as(f32, @floatFromInt(glyph.y_advance)) * units_to_svg;
+        if (glyph.maps_cluster) {
+            cursor_x += text_item.style.letter_spacing;
+            const start: usize = glyph.cluster_start;
+            const end: usize = glyph.cluster_end;
+            if (end == start + 1 and end <= run.text.len and run.text[start] == ' ') cursor_x += text_item.style.word_spacing;
+        }
+    }
+    try writer.writeAll("ET\nEMC\n");
+}
+
+fn writeSvgClipChain(
+    writer: *std.Io.Writer,
+    document: *const svg.Document,
+    chain: svg.ClipChain,
+    item_transform: geometry.AffineTransform,
+    target_bounds: geometry.Rect,
+    depth: usize,
+) !void {
+    if (depth > 8) return svg.Error.SvgTooComplex;
+    for (chain.slice()) |reference| {
+        const clip = document.clipFor(reference) orelse return svg.Error.InvalidSvg;
+        var evenodd = false;
+        for (document.shapes.items[clip.first_shape..][0..clip.shape_count]) |clip_shape| {
+            if (clip_shape.clips.len > 0) try writeSvgClipChain(writer, document, clip_shape.clips, item_transform, target_bounds, depth + 1);
+            var transform = item_transform;
+            if (clip.object_bounding_box) {
+                transform = transform.multiply(.{
+                    .a = target_bounds.width,
+                    .d = target_bounds.height,
+                    .e = target_bounds.x,
+                    .f = target_bounds.y,
+                });
+            }
+            transform = transform.multiply(clip_shape.transform);
+            try writeSvgTransformedPath(writer, document.ops.items[clip_shape.first_op..][0..clip_shape.op_count], transform);
+            evenodd = evenodd or clip_shape.style.fill_rule == .evenodd;
+        }
+        try writer.writeAll(if (evenodd) "W* n\n" else "W n\n");
+    }
+}
+
+fn writeSvgTransform(writer: *std.Io.Writer, transform: geometry.AffineTransform) !void {
+    try writer.print("{d:.8} {d:.8} {d:.8} {d:.8} {d:.8} {d:.8} cm\n", .{
+        transform.a, transform.b, transform.c, transform.d, transform.e, transform.f,
+    });
+}
+
+fn writeSvgTransformedPath(writer: *std.Io.Writer, ops: []const svg.PathOp, transform: geometry.AffineTransform) !void {
+    for (ops) |op| switch (op) {
+        .move_to => |point| {
+            const mapped = transform.applyPoint(point);
+            try writer.print("{d:.5} {d:.5} m\n", .{ mapped.x, mapped.y });
+        },
+        .line_to => |point| {
+            const mapped = transform.applyPoint(point);
+            try writer.print("{d:.5} {d:.5} l\n", .{ mapped.x, mapped.y });
+        },
+        .cubic_to => |curve| {
+            const first = transform.applyPoint(curve.control1);
+            const second = transform.applyPoint(curve.control2);
+            const end = transform.applyPoint(curve.end);
+            try writer.print("{d:.5} {d:.5} {d:.5} {d:.5} {d:.5} {d:.5} c\n", .{
+                first.x, first.y, second.x, second.y, end.x, end.y,
+            });
+        },
+        .close => try writer.writeAll("h\n"),
+    };
+}
+
+fn svgShapeBounds(document: *const svg.Document, shape: svg.Shape) geometry.Rect {
+    const ops = document.ops.items[shape.first_op..][0..shape.op_count];
+    var min_x: f32 = std.math.inf(f32);
+    var min_y: f32 = std.math.inf(f32);
+    var max_x: f32 = -std.math.inf(f32);
+    var max_y: f32 = -std.math.inf(f32);
+    for (ops) |op| switch (op) {
+        .move_to, .line_to => |point| includeSvgBoundsPoint(point, &min_x, &min_y, &max_x, &max_y),
+        .cubic_to => |curve| {
+            includeSvgBoundsPoint(curve.control1, &min_x, &min_y, &max_x, &max_y);
+            includeSvgBoundsPoint(curve.control2, &min_x, &min_y, &max_x, &max_y);
+            includeSvgBoundsPoint(curve.end, &min_x, &min_y, &max_x, &max_y);
+        },
+        .close => {},
+    };
+    if (!std.math.isFinite(min_x)) return .{};
+    return .{ .x = min_x, .y = min_y, .width = @max(max_x - min_x, 0), .height = @max(max_y - min_y, 0) };
+}
+
+fn includeSvgBoundsPoint(point: geometry.Point, min_x: *f32, min_y: *f32, max_x: *f32, max_y: *f32) void {
+    min_x.* = @min(min_x.*, point.x);
+    min_y.* = @min(min_y.*, point.y);
+    max_x.* = @max(max_x.*, point.x);
+    max_y.* = @max(max_y.*, point.y);
+}
+
+fn writeSvgGradientBands(writer: *std.Io.Writer, gradient: *const svg.Gradient, bounds: geometry.Rect, opacity: f32) !void {
+    if (gradient.kind == .linear) return writeSvgLinearGradientBands(writer, gradient, bounds, opacity);
+    return writeSvgRadialGradientBands(writer, gradient, bounds, opacity);
+}
+
+fn writeSvgLinearGradientBands(writer: *std.Io.Writer, gradient: *const svg.Gradient, bounds: geometry.Rect, opacity: f32) !void {
+    const start = gradient.transform.applyPoint(.{
+        .x = resolveSvgGradientLength(gradient.x1, bounds.x, bounds.width, gradient.object_bounding_box),
+        .y = resolveSvgGradientLength(gradient.y1, bounds.y, bounds.height, gradient.object_bounding_box),
+    });
+    const end = gradient.transform.applyPoint(.{
+        .x = resolveSvgGradientLength(gradient.x2, bounds.x, bounds.width, gradient.object_bounding_box),
+        .y = resolveSvgGradientLength(gradient.y2, bounds.y, bounds.height, gradient.object_bounding_box),
+    });
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = @max(@sqrt(dx * dx + dy * dy), 0.001);
+    const extent = @sqrt(bounds.width * bounds.width + bounds.height * bounds.height) * 2 + 1;
+    const nx = -dy / length * extent;
+    const ny = dx / length * extent;
+    const segments: usize = 96;
+    for (0..segments) |index| {
+        const from = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(segments));
+        const to = @as(f32, @floatFromInt(index + 1)) / @as(f32, @floatFromInt(segments));
+        const color = svgGradientColorAt(gradient, (from + to) / 2);
+        try writeSvgAlphaState(writer, color.alpha * opacity);
+        try writeFillColor(writer, color);
+        const p1 = geometry.Point{ .x = start.x + dx * from + nx, .y = start.y + dy * from + ny };
+        const p2 = geometry.Point{ .x = start.x + dx * to + nx, .y = start.y + dy * to + ny };
+        const p3 = geometry.Point{ .x = start.x + dx * to - nx, .y = start.y + dy * to - ny };
+        const p4 = geometry.Point{ .x = start.x + dx * from - nx, .y = start.y + dy * from - ny };
+        try writer.print("{d:.5} {d:.5} m {d:.5} {d:.5} l {d:.5} {d:.5} l {d:.5} {d:.5} l h f\n", .{
+            p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y,
+        });
+    }
+}
+
+fn writeSvgRadialGradientBands(writer: *std.Io.Writer, gradient: *const svg.Gradient, bounds: geometry.Rect, opacity: f32) !void {
+    const center = gradient.transform.applyPoint(.{
+        .x = resolveSvgGradientLength(gradient.cx, bounds.x, bounds.width, gradient.object_bounding_box),
+        .y = resolveSvgGradientLength(gradient.cy, bounds.y, bounds.height, gradient.object_bounding_box),
+    });
+    const radius_value = resolveSvgGradientRadius(gradient.radius, bounds, gradient.object_bounding_box);
+    const radius_x = @max(radius_value.x, 0.001);
+    const radius_y = @max(radius_value.y, 0.001);
+    const segments: usize = 72;
+    var index = segments;
+    while (index > 0) {
+        index -= 1;
+        const outer = @as(f32, @floatFromInt(index + 1)) / @as(f32, @floatFromInt(segments));
+        const inner = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(segments));
+        const color = svgGradientColorAt(gradient, (inner + outer) / 2);
+        try writeSvgAlphaState(writer, color.alpha * opacity);
+        try writeFillColor(writer, color);
+        try writeEllipsePath(writer, center, radius_x * outer, radius_y * outer);
+        if (inner > 0.0001) try writeEllipsePath(writer, center, radius_x * inner, radius_y * inner);
+        try writer.writeAll(if (inner > 0.0001) "f*\n" else "f\n");
+    }
+}
+
+fn resolveSvgGradientLength(length: svg.GradientLength, origin: f32, extent: f32, object_bbox: bool) f32 {
+    if (object_bbox) return origin + length.value * extent;
+    if (length.percent) return origin + length.value * extent;
+    return length.value;
+}
+
+fn resolveSvgGradientRadius(length: svg.GradientLength, bounds: geometry.Rect, object_bbox: bool) geometry.Point {
+    if (object_bbox or length.percent) return .{ .x = length.value * bounds.width, .y = length.value * bounds.height };
+    return .{ .x = length.value, .y = length.value };
+}
+
+fn svgGradientColorAt(gradient: *const svg.Gradient, offset: f32) geometry.Color {
+    const stops = gradient.stops[0..gradient.stop_len];
+    if (stops.len == 0) return geometry.Color.transparent;
+    const value = std.math.clamp(offset, 0, 1);
+    if (value <= stops[0].offset) return stops[0].color;
+    for (stops[0 .. stops.len - 1], stops[1..]) |left, right| {
+        if (value > right.offset) continue;
+        const span = @max(right.offset - left.offset, 0.00001);
+        const t = std.math.clamp((value - left.offset) / span, 0, 1);
+        return .{
+            .red = left.color.red + (right.color.red - left.color.red) * t,
+            .green = left.color.green + (right.color.green - left.color.green) * t,
+            .blue = left.color.blue + (right.color.blue - left.color.blue) * t,
+            .alpha = left.color.alpha + (right.color.alpha - left.color.alpha) * t,
+        };
+    }
+    return stops[stops.len - 1].color;
+}
+
+fn writeSvgAlphaState(writer: *std.Io.Writer, raw_alpha: f32) !void {
+    const index: u8 = @intFromFloat(@round(std.math.clamp(raw_alpha, 0, 1) * 100));
+    try writer.print("/SG{d} gs\n", .{index});
 }
 
 fn writeSvgPath(writer: *std.Io.Writer, ops: []const svg.PathOp) !void {
@@ -2390,4 +2885,39 @@ test "preserve supported SVG images as native PDF Form XObjects" {
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/Subtype /Image") == null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/Im1 ") != null);
     try std.testing.expect(std.mem.endsWith(u8, bytes, "%%EOF\n"));
+}
+
+test "preserve SVG chart text gradients and clips as native PDF resources" {
+    const allocator = std.testing.allocator;
+    const xml = "<svg viewBox='0 0 200 100'><defs><linearGradient id='bars'><stop offset='0%' stop-color='#2563eb'/><stop offset='100%' stop-color='#7c3aed' stop-opacity='.4'/></linearGradient><clipPath id='plot'><rect x='10' y='10' width='180' height='70'/></clipPath></defs><g clip-path='url(#plot)'><rect x='0' y='0' width='200' height='90' fill='url(#bars)'/><text x='100' y='55' text-anchor='middle' font-size='16'>€4.82M</text></g></svg>";
+    const encoded_len = std.base64.standard.Encoder.calcSize(xml.len);
+    const encoded = try allocator.alloc(u8, encoded_len);
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, xml);
+    const source = try std.fmt.allocPrint(allocator, "data:image/svg+xml;base64,{s}", .{encoded});
+    defer allocator.free(source);
+
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .command = .{ .image = .{
+            .rect = .{ .x = 10, .y = 20, .width = 400, .height = 200 },
+            .source = source,
+            .intrinsic_width = 200,
+            .intrinsic_height = 100,
+        } },
+    });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    const bytes = try writeWithOptions(allocator, &list, .{ .shaping_mode = .harfbuzz });
+    defer allocator.free(bytes);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/Subtype /Form") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/Subtype /Image") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ToUnicode") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/ExtGState") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "/Font << /F") != null);
 }

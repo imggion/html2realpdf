@@ -144,6 +144,7 @@ pub fn renderHtml(
     const temporary_pdf = try pdf.writeWithOptions(arena, &display, .{
         .metadata = options.metadata,
         .font_registry = options.font_registry,
+        .shaping_mode = if (options.css_profile == .document) .identity else .harfbuzz,
     });
     const owned_pdf = try output_allocator.dupe(u8, temporary_pdf);
     errdefer output_allocator.free(owned_pdf);

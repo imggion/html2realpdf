@@ -17,16 +17,81 @@ pub const Error = error{
 const max_shapes = 4096;
 const max_path_ops = 65_536;
 const max_depth = 64;
+const max_gradient_stops = 16;
+const max_clip_chain = 8;
 const kappa: f32 = 0.5522847498307936;
 
 pub const FillRule = enum { nonzero, evenodd };
 pub const LineCap = enum { butt, round, square };
 pub const LineJoin = enum { miter, round, bevel };
+pub const TextAnchor = enum { start, middle, end };
+pub const DominantBaseline = enum { alphabetic, middle, central, hanging };
+pub const FontWeight = enum { normal, bold };
+pub const FontStyle = enum { normal, italic };
+pub const TextDirection = enum { ltr, rtl };
+
+pub const Reference = struct {
+    bytes: [63]u8 = @splat(0),
+    len: u8 = 0,
+
+    pub fn init(raw: []const u8) !Reference {
+        const value = trim(raw);
+        if (value.len == 0 or value.len > 63) return Error.UnsupportedSvg;
+        var result = Reference{};
+        @memcpy(result.bytes[0..value.len], value);
+        result.len = @intCast(value.len);
+        return result;
+    }
+
+    pub fn slice(self: *const Reference) []const u8 {
+        return self.bytes[0..self.len];
+    }
+
+    pub fn eql(self: *const Reference, other: *const Reference) bool {
+        return std.mem.eql(u8, self.slice(), other.slice());
+    }
+};
+
+pub const FontFamily = struct {
+    bytes: [127]u8 = @splat(0),
+    len: u8 = 0,
+
+    fn set(self: *FontFamily, raw: []const u8) !void {
+        const value = trim(raw);
+        if (value.len == 0 or value.len > self.bytes.len) return Error.UnsupportedSvg;
+        @memcpy(self.bytes[0..value.len], value);
+        self.len = @intCast(value.len);
+    }
+
+    pub fn slice(self: *const FontFamily) []const u8 {
+        return if (self.len == 0) "Noto Sans" else self.bytes[0..self.len];
+    }
+};
+
+pub const ClipChain = struct {
+    values: [max_clip_chain]Reference = @splat(.{}),
+    len: u8 = 0,
+
+    fn append(self: *ClipChain, reference: Reference) !void {
+        if (self.len == self.values.len) return Error.SvgTooComplex;
+        self.values[self.len] = reference;
+        self.len += 1;
+    }
+
+    pub fn slice(self: *const ClipChain) []const Reference {
+        return self.values[0..self.len];
+    }
+};
 
 pub const Style = struct {
     fill: ?geometry.Color = geometry.Color.black,
+    fill_server: ?Reference = null,
     stroke: ?geometry.Color = null,
+    stroke_server: ?Reference = null,
     fill_rule: FillRule = .nonzero,
+    opacity: f32 = 1,
+    fill_opacity: f32 = 1,
+    stroke_opacity: f32 = 1,
     stroke_width: f32 = 1,
     line_cap: LineCap = .butt,
     line_join: LineJoin = .miter,
@@ -34,6 +99,16 @@ pub const Style = struct {
     dash_values: [16]f32 = @splat(0),
     dash_len: u8 = 0,
     dash_offset: f32 = 0,
+    color: geometry.Color = geometry.Color.black,
+    font_family: FontFamily = .{},
+    font_size: f32 = 16,
+    font_weight: FontWeight = .normal,
+    font_style: FontStyle = .normal,
+    letter_spacing: f32 = 0,
+    word_spacing: f32 = 0,
+    text_anchor: TextAnchor = .start,
+    dominant_baseline: DominantBaseline = .alphabetic,
+    direction: TextDirection = .ltr,
 };
 
 pub const Cubic = struct {
@@ -54,6 +129,61 @@ pub const Shape = struct {
     op_count: usize,
     transform: geometry.AffineTransform = .identity,
     style: Style,
+    clips: ClipChain = .{},
+};
+
+pub const Text = struct {
+    content_start: usize,
+    content_len: usize,
+    group_id: usize,
+    x: ?f32 = null,
+    y: ?f32 = null,
+    dx: f32 = 0,
+    dy: f32 = 0,
+    transform: geometry.AffineTransform = .identity,
+    style: Style,
+    clips: ClipChain = .{},
+};
+
+pub const PaintItem = union(enum) {
+    shape: usize,
+    text: usize,
+};
+
+pub const GradientLength = struct {
+    value: f32,
+    percent: bool = false,
+};
+
+pub const GradientStop = struct {
+    offset: f32,
+    color: geometry.Color,
+};
+
+pub const Gradient = struct {
+    id: Reference,
+    kind: enum { linear, radial },
+    object_bounding_box: bool = true,
+    transform: geometry.AffineTransform = .identity,
+    x1: GradientLength = .{ .value = 0, .percent = true },
+    y1: GradientLength = .{ .value = 0, .percent = true },
+    x2: GradientLength = .{ .value = 1, .percent = true },
+    y2: GradientLength = .{ .value = 0, .percent = true },
+    cx: GradientLength = .{ .value = 0.5, .percent = true },
+    cy: GradientLength = .{ .value = 0.5, .percent = true },
+    radius: GradientLength = .{ .value = 0.5, .percent = true },
+    fx: ?GradientLength = null,
+    fy: ?GradientLength = null,
+    stops: [max_gradient_stops]GradientStop = @splat(.{ .offset = 0, .color = geometry.Color.black }),
+    stop_len: u8 = 0,
+};
+
+pub const ClipPath = struct {
+    id: Reference,
+    object_bounding_box: bool = false,
+    transform: geometry.AffineTransform = .identity,
+    first_shape: usize,
+    shape_count: usize = 0,
 };
 
 const PreserveAspectRatio = struct {
@@ -66,13 +196,37 @@ const PreserveAspectRatio = struct {
 pub const Document = struct {
     ops: std.ArrayList(PathOp),
     shapes: std.ArrayList(Shape),
+    texts: std.ArrayList(Text),
+    text_bytes: std.ArrayList(u8),
+    items: std.ArrayList(PaintItem),
+    gradients: std.ArrayList(Gradient),
+    clips: std.ArrayList(ClipPath),
     view_box: geometry.Rect,
     preserve_aspect_ratio: PreserveAspectRatio = .{},
 
     pub fn deinit(self: *Document, allocator: std.mem.Allocator) void {
         self.ops.deinit(allocator);
         self.shapes.deinit(allocator);
+        self.texts.deinit(allocator);
+        self.text_bytes.deinit(allocator);
+        self.items.deinit(allocator);
+        self.gradients.deinit(allocator);
+        self.clips.deinit(allocator);
         self.* = undefined;
+    }
+
+    pub fn textSlice(self: *const Document, item: Text) []const u8 {
+        return self.text_bytes.items[item.content_start..][0..item.content_len];
+    }
+
+    pub fn gradientFor(self: *const Document, reference: Reference) ?*const Gradient {
+        for (self.gradients.items) |*gradient| if (gradient.id.eql(&reference)) return gradient;
+        return null;
+    }
+
+    pub fn clipFor(self: *const Document, reference: Reference) ?*const ClipPath {
+        for (self.clips.items) |*clip| if (clip.id.eql(&reference)) return clip;
+        return null;
     }
 
     /// Maps SVG user coordinates into a unit-square Form XObject whose Y axis
@@ -121,6 +275,18 @@ const NodeState = struct {
     transform: geometry.AffineTransform = .identity,
     style: Style = .{},
     hidden: bool = false,
+    in_defs: bool = false,
+    active_gradient: ?usize = null,
+    active_clip: ?usize = null,
+    started_clip: ?usize = null,
+    text_group: ?usize = null,
+    x: ?f32 = null,
+    y: ?f32 = null,
+    dx: f32 = 0,
+    dy: f32 = 0,
+    collect_text: bool = false,
+    ignore_text: bool = false,
+    clips: ClipChain = .{},
 };
 
 pub fn isDataUrl(source: []const u8) bool {
@@ -143,17 +309,27 @@ fn parseXml(allocator: std.mem.Allocator, xml: []const u8) !Document {
     var document = Document{
         .ops = try std.ArrayList(PathOp).initCapacity(allocator, 0),
         .shapes = try std.ArrayList(Shape).initCapacity(allocator, 0),
+        .texts = try std.ArrayList(Text).initCapacity(allocator, 0),
+        .text_bytes = try std.ArrayList(u8).initCapacity(allocator, 0),
+        .items = try std.ArrayList(PaintItem).initCapacity(allocator, 0),
+        .gradients = try std.ArrayList(Gradient).initCapacity(allocator, 0),
+        .clips = try std.ArrayList(ClipPath).initCapacity(allocator, 0),
         .view_box = .{ .width = 300, .height = 150 },
     };
     errdefer document.deinit(allocator);
 
     var states: [max_depth]NodeState = undefined;
+    var tag_names: [max_depth][]const u8 = undefined;
     states[0] = .{};
     var depth: usize = 1;
     var saw_root = false;
+    var next_text_group: usize = 0;
     var index: usize = 0;
     while (index < xml.len) {
         const open = std.mem.indexOfScalarPos(u8, xml, index, '<') orelse break;
+        if (open > index and states[depth - 1].collect_text and !states[depth - 1].hidden) {
+            try appendTextContent(allocator, &document, states[depth - 1], xml[index..open]);
+        }
         if (std.mem.startsWith(u8, xml[open..], "<!--")) {
             const close = std.mem.indexOfPos(u8, xml, open + 4, "-->") orelse return Error.InvalidSvg;
             index = close + 3;
@@ -162,9 +338,17 @@ fn parseXml(allocator: std.mem.Allocator, xml: []const u8) !Document {
         const close = findTagEnd(xml, open + 1) orelse return Error.InvalidSvg;
         var raw = trim(xml[open + 1 .. close]);
         index = close + 1;
-        if (raw.len == 0 or raw[0] == '?' or raw[0] == '!') continue;
+        if (raw.len == 0 or raw[0] == '?') continue;
+        if (raw[0] == '!') return Error.UnsupportedSvg;
         if (raw[0] == '/') {
-            if (depth > 1) depth -= 1 else return Error.InvalidSvg;
+            if (depth <= 1) return Error.InvalidSvg;
+            const closing_name = trim(raw[1..]);
+            if (!equals(tag_names[depth - 1], closing_name)) return Error.InvalidSvg;
+            const closing_state = states[depth - 1];
+            if (closing_state.started_clip) |clip_index| {
+                document.clips.items[clip_index].shape_count = document.shapes.items.len - document.clips.items[clip_index].first_shape;
+            }
+            depth -= 1;
             continue;
         }
 
@@ -175,10 +359,12 @@ fn parseXml(allocator: std.mem.Allocator, xml: []const u8) !Document {
         const attributes = raw[name_end..];
         const parent = states[depth - 1];
         var state = parent;
+        state.started_clip = null;
         state.hidden = parent.hidden or isHidden(attributes);
         const is_root = !saw_root;
-        try validateNode(attributes, is_root);
+        try validateNode(name, attributes, is_root);
         applyStyle(&state.style, attributes) catch return Error.UnsupportedSvg;
+        try applyClipReference(&state.clips, attributes);
 
         if (is_root) {
             if (!equals(name, "svg")) return Error.InvalidSvg;
@@ -193,32 +379,259 @@ fn parseXml(allocator: std.mem.Allocator, xml: []const u8) !Document {
             }
         }
 
-        if (!state.hidden) {
-            if (equals(name, "path")) {
-                try appendPathShape(allocator, &document, state, attribute(attributes, "d") orelse return Error.InvalidSvg);
-            } else if (equals(name, "rect")) {
-                try appendRectShape(allocator, &document, state, attributes);
-            } else if (equals(name, "circle")) {
-                try appendEllipseShape(allocator, &document, state, attributes, true);
-            } else if (equals(name, "ellipse")) {
-                try appendEllipseShape(allocator, &document, state, attributes, false);
-            } else if (equals(name, "line")) {
-                try appendLineShape(allocator, &document, state, attributes);
-            } else if (equals(name, "polyline") or equals(name, "polygon")) {
-                try appendPolyShape(allocator, &document, state, attributes, equals(name, "polygon"));
-            } else if (!equals(name, "svg") and !equals(name, "g") and !equals(name, "title") and !equals(name, "desc")) {
-                return Error.UnsupportedSvg;
+        if (equals(name, "defs")) {
+            state.in_defs = true;
+        } else if (equals(name, "linearGradient") or equals(name, "radialGradient")) {
+            if (!parent.in_defs or parent.active_gradient != null or parent.active_clip != null) return Error.UnsupportedSvg;
+            const gradient = try parseGradient(name, attributes);
+            try ensureUniqueDefinition(&document, gradient.id);
+            try document.gradients.append(allocator, gradient);
+            state.active_gradient = document.gradients.items.len - 1;
+            state.in_defs = true;
+        } else if (equals(name, "stop")) {
+            const gradient_index = parent.active_gradient orelse return Error.UnsupportedSvg;
+            try appendGradientStop(&document.gradients.items[gradient_index], attributes);
+        } else if (equals(name, "clipPath")) {
+            if (!parent.in_defs or parent.active_gradient != null or parent.active_clip != null) return Error.UnsupportedSvg;
+            const id = try Reference.init(attribute(attributes, "id") orelse return Error.InvalidSvg);
+            try ensureUniqueDefinition(&document, id);
+            const units = attribute(attributes, "clipPathUnits") orelse "userSpaceOnUse";
+            if (!equals(units, "userSpaceOnUse") and !equals(units, "objectBoundingBox")) return Error.UnsupportedSvg;
+            try document.clips.append(allocator, .{
+                .id = id,
+                .object_bounding_box = equals(units, "objectBoundingBox"),
+                .first_shape = document.shapes.items.len,
+            });
+            state.active_clip = document.clips.items.len - 1;
+            state.started_clip = state.active_clip;
+            state.in_defs = true;
+        } else if (equals(name, "text") or equals(name, "tspan")) {
+            if (state.in_defs) return Error.UnsupportedSvg;
+            if (equals(name, "text")) {
+                if (parent.text_group != null) return Error.UnsupportedSvg;
+                state.text_group = next_text_group;
+                next_text_group += 1;
+            } else if (parent.text_group == null) return Error.InvalidSvg;
+            state.collect_text = true;
+            state.ignore_text = false;
+            state.x = try parseOptionalTextLength(attribute(attributes, "x"), document.view_box.width, state.style.font_size);
+            state.y = try parseOptionalTextLength(attribute(attributes, "y"), document.view_box.height, state.style.font_size);
+            state.dx = try parseTextLength(attribute(attributes, "dx") orelse "0", document.view_box.width, state.style.font_size);
+            state.dy = try parseTextLength(attribute(attributes, "dy") orelse "0", document.view_box.height, state.style.font_size);
+        } else if (equals(name, "title") or equals(name, "desc")) {
+            state.collect_text = false;
+            state.ignore_text = true;
+        } else if (isShapeElement(name)) {
+            if (!state.hidden) {
+                const first_shape = document.shapes.items.len;
+                try appendGeometryElement(allocator, &document, state, name, attributes);
+                if (state.active_clip == null and !state.in_defs) {
+                    for (first_shape..document.shapes.items.len) |shape_index| {
+                        try document.items.append(allocator, .{ .shape = shape_index });
+                    }
+                }
             }
+        } else if (!equals(name, "svg") and !equals(name, "g")) {
+            return Error.UnsupportedSvg;
         }
 
         if (!self_closing) {
             if (depth == states.len) return Error.SvgTooComplex;
             states[depth] = state;
+            tag_names[depth] = name;
             depth += 1;
+        } else if (state.started_clip) |clip_index| {
+            document.clips.items[clip_index].shape_count = document.shapes.items.len - document.clips.items[clip_index].first_shape;
         }
     }
-    if (!saw_root or document.shapes.items.len == 0) return Error.InvalidSvg;
+    if (depth != 1 or !saw_root or document.items.items.len == 0) return Error.InvalidSvg;
+    try validateReferences(&document);
     return document;
+}
+
+fn appendGeometryElement(
+    allocator: std.mem.Allocator,
+    document: *Document,
+    state: NodeState,
+    name: []const u8,
+    attributes: []const u8,
+) !void {
+    if (equals(name, "path")) {
+        try appendPathShape(allocator, document, state, attribute(attributes, "d") orelse return Error.InvalidSvg);
+    } else if (equals(name, "rect")) {
+        try appendRectShape(allocator, document, state, attributes);
+    } else if (equals(name, "circle")) {
+        try appendEllipseShape(allocator, document, state, attributes, true);
+    } else if (equals(name, "ellipse")) {
+        try appendEllipseShape(allocator, document, state, attributes, false);
+    } else if (equals(name, "line")) {
+        try appendLineShape(allocator, document, state, attributes);
+    } else if (equals(name, "polyline") or equals(name, "polygon")) {
+        try appendPolyShape(allocator, document, state, attributes, equals(name, "polygon"));
+    } else return Error.UnsupportedSvg;
+}
+
+fn parseGradient(name: []const u8, attributes: []const u8) !Gradient {
+    if (attribute(attributes, "href") != null or attribute(attributes, "xlink:href") != null) return Error.UnsupportedSvg;
+    const spread = attribute(attributes, "spreadMethod") orelse "pad";
+    if (!equals(spread, "pad")) return Error.UnsupportedSvg;
+    const units = attribute(attributes, "gradientUnits") orelse "objectBoundingBox";
+    if (!equals(units, "objectBoundingBox") and !equals(units, "userSpaceOnUse")) return Error.UnsupportedSvg;
+    var gradient = Gradient{
+        .id = try Reference.init(attribute(attributes, "id") orelse return Error.InvalidSvg),
+        .kind = if (equals(name, "linearGradient")) .linear else .radial,
+        .object_bounding_box = equals(units, "objectBoundingBox"),
+    };
+    if (attribute(attributes, "gradientTransform")) |value| gradient.transform = parseTransform(value) catch return Error.UnsupportedSvg;
+    if (gradient.kind == .linear) {
+        if (attribute(attributes, "x1")) |value| gradient.x1 = try parseGradientLength(value);
+        if (attribute(attributes, "y1")) |value| gradient.y1 = try parseGradientLength(value);
+        if (attribute(attributes, "x2")) |value| gradient.x2 = try parseGradientLength(value);
+        if (attribute(attributes, "y2")) |value| gradient.y2 = try parseGradientLength(value);
+    } else {
+        if (attribute(attributes, "cx")) |value| gradient.cx = try parseGradientLength(value);
+        if (attribute(attributes, "cy")) |value| gradient.cy = try parseGradientLength(value);
+        if (attribute(attributes, "r")) |value| gradient.radius = try parseGradientLength(value);
+        if (attribute(attributes, "fx")) |value| gradient.fx = try parseGradientLength(value);
+        if (attribute(attributes, "fy")) |value| gradient.fy = try parseGradientLength(value);
+    }
+    return gradient;
+}
+
+fn parseGradientLength(raw: []const u8) !GradientLength {
+    const value = trim(raw);
+    if (std.mem.endsWith(u8, value, "%")) {
+        return .{
+            .value = (std.fmt.parseFloat(f32, value[0 .. value.len - 1]) catch return Error.UnsupportedSvg) / 100,
+            .percent = true,
+        };
+    }
+    return .{ .value = parseNumber(value) orelse return Error.UnsupportedSvg };
+}
+
+fn appendGradientStop(gradient: *Gradient, attributes: []const u8) !void {
+    if (gradient.stop_len == gradient.stops.len) return Error.SvgTooComplex;
+    const declaration = attribute(attributes, "style");
+    const raw_offset = attribute(attributes, "offset") orelse "0";
+    const parsed_offset = try parseGradientLength(raw_offset);
+    var offset = if (parsed_offset.percent) parsed_offset.value else parsed_offset.value;
+    offset = std.math.clamp(offset, 0, 1);
+    if (gradient.stop_len > 0) offset = @max(offset, gradient.stops[gradient.stop_len - 1].offset);
+    const raw_color = styleProperty(declaration, "stop-color") orelse attribute(attributes, "stop-color") orelse "black";
+    var color = geometry.parseColor(trim(raw_color)) orelse return Error.UnsupportedSvg;
+    const opacity = parseAlpha(styleProperty(declaration, "stop-opacity") orelse attribute(attributes, "stop-opacity") orelse "1") orelse return Error.UnsupportedSvg;
+    color.alpha *= opacity;
+    gradient.stops[gradient.stop_len] = .{ .offset = offset, .color = color };
+    gradient.stop_len += 1;
+}
+
+fn ensureUniqueDefinition(document: *const Document, id: Reference) !void {
+    for (document.gradients.items) |gradient| if (gradient.id.eql(&id)) return Error.InvalidSvg;
+    for (document.clips.items) |clip| if (clip.id.eql(&id)) return Error.InvalidSvg;
+}
+
+fn validateReferences(document: *const Document) !void {
+    for (document.gradients.items) |gradient| if (gradient.stop_len == 0) return Error.InvalidSvg;
+    for (document.clips.items) |clip| if (clip.shape_count == 0) return Error.InvalidSvg;
+    for (document.shapes.items) |shape| {
+        if (shape.style.fill_server) |reference| if (document.gradientFor(reference) == null) return Error.InvalidSvg;
+        if (shape.style.stroke_server) |reference| {
+            if (document.gradientFor(reference) == null) return Error.InvalidSvg;
+            return Error.UnsupportedSvg;
+        }
+        try validateClipChain(document, shape.clips, null, 0);
+    }
+    for (document.texts.items) |text| {
+        if (text.style.fill_server != null or text.style.stroke_server != null) return Error.UnsupportedSvg;
+        try validateClipChain(document, text.clips, null, 0);
+    }
+}
+
+fn validateClipChain(document: *const Document, chain: ClipChain, active: ?Reference, depth: usize) !void {
+    if (depth > max_clip_chain) return Error.SvgTooComplex;
+    for (chain.slice()) |reference| {
+        if (active) |current| if (current.eql(&reference)) return Error.InvalidSvg;
+        const clip = document.clipFor(reference) orelse return Error.InvalidSvg;
+        for (document.shapes.items[clip.first_shape..][0..clip.shape_count]) |shape| {
+            try validateClipChain(document, shape.clips, reference, depth + 1);
+        }
+    }
+}
+
+fn parseOptionalTextLength(raw: ?[]const u8, axis: f32, em: f32) !?f32 {
+    return if (raw) |value| try parseTextLength(value, axis, em) else null;
+}
+
+fn parseTextLength(raw: []const u8, axis: f32, em: f32) !f32 {
+    const value = trim(raw);
+    if (std.mem.endsWith(u8, value, "%")) {
+        return (std.fmt.parseFloat(f32, value[0 .. value.len - 1]) catch return Error.UnsupportedSvg) * axis / 100;
+    }
+    if (endsWithIgnoreCase(value, "em")) {
+        return (std.fmt.parseFloat(f32, value[0 .. value.len - 2]) catch return Error.UnsupportedSvg) * em;
+    }
+    return parseNumber(value) orelse return Error.UnsupportedSvg;
+}
+
+fn appendTextContent(
+    allocator: std.mem.Allocator,
+    document: *Document,
+    state: NodeState,
+    raw: []const u8,
+) !void {
+    const group_id = state.text_group orelse return;
+    var decoded = try std.ArrayList(u8).initCapacity(allocator, raw.len);
+    defer decoded.deinit(allocator);
+    try decodeAndCollapseXmlText(allocator, &decoded, raw);
+    if (decoded.items.len == 0) return;
+    if (document.items.items.len >= max_shapes) return Error.SvgTooComplex;
+    const content_start = document.text_bytes.items.len;
+    try document.text_bytes.appendSlice(allocator, decoded.items);
+    try document.texts.append(allocator, .{
+        .content_start = content_start,
+        .content_len = decoded.items.len,
+        .group_id = group_id,
+        .x = state.x,
+        .y = state.y,
+        .dx = state.dx,
+        .dy = state.dy,
+        .transform = state.transform,
+        .style = state.style,
+        .clips = state.clips,
+    });
+    try document.items.append(allocator, .{ .text = document.texts.items.len - 1 });
+}
+
+fn decodeAndCollapseXmlText(allocator: std.mem.Allocator, output: *std.ArrayList(u8), raw: []const u8) !void {
+    var index: usize = 0;
+    var pending_space = false;
+    while (index < raw.len) {
+        if (std.ascii.isWhitespace(raw[index])) {
+            pending_space = output.items.len > 0;
+            index += 1;
+            continue;
+        }
+        if (pending_space) {
+            try output.append(allocator, ' ');
+            pending_space = false;
+        }
+        if (raw[index] != '&') {
+            try output.append(allocator, raw[index]);
+            index += 1;
+            continue;
+        }
+        const semicolon = std.mem.indexOfScalarPos(u8, raw, index + 1, ';') orelse return Error.InvalidSvg;
+        const entity = raw[index + 1 .. semicolon];
+        if (std.mem.eql(u8, entity, "amp")) try output.append(allocator, '&') else if (std.mem.eql(u8, entity, "lt")) try output.append(allocator, '<') else if (std.mem.eql(u8, entity, "gt")) try output.append(allocator, '>') else if (std.mem.eql(u8, entity, "quot")) try output.append(allocator, '"') else if (std.mem.eql(u8, entity, "apos")) try output.append(allocator, '\'') else if (entity.len > 1 and entity[0] == '#') {
+            const hexadecimal = entity.len > 2 and (entity[1] == 'x' or entity[1] == 'X');
+            const digits = entity[if (hexadecimal) 2 else 1..];
+            const codepoint = std.fmt.parseInt(u21, digits, if (hexadecimal) 16 else 10) catch return Error.InvalidSvg;
+            var encoded: [4]u8 = undefined;
+            const count = std.unicode.utf8Encode(codepoint, &encoded) catch return Error.InvalidSvg;
+            try output.appendSlice(allocator, encoded[0..count]);
+        } else return Error.UnsupportedSvg;
+        index = semicolon + 1;
+    }
 }
 
 fn appendPathShape(allocator: std.mem.Allocator, document: *Document, state: NodeState, raw: []const u8) !void {
@@ -319,6 +732,7 @@ fn appendShape(allocator: std.mem.Allocator, document: *Document, state: NodeSta
         .op_count = count,
         .transform = state.transform,
         .style = state.style,
+        .clips = state.clips,
     });
 }
 
@@ -582,6 +996,9 @@ fn reflect(point: geometry.Point, around: geometry.Point) geometry.Point {
 
 fn applyStyle(style: *Style, attributes: []const u8) !void {
     const declaration = attribute(attributes, "style");
+    if (styleProperty(declaration, "color") orelse attribute(attributes, "color")) |value| {
+        style.color = geometry.parseColor(trim(value)) orelse return Error.UnsupportedSvg;
+    }
     try applyPaint(style, "fill", styleProperty(declaration, "fill") orelse attribute(attributes, "fill"));
     try applyPaint(style, "stroke", styleProperty(declaration, "stroke") orelse attribute(attributes, "stroke"));
     if (styleProperty(declaration, "fill-rule") orelse attribute(attributes, "fill-rule")) |value| {
@@ -613,14 +1030,56 @@ fn applyStyle(style: *Style, attributes: []const u8) !void {
             }
         }
     }
+    if (styleProperty(declaration, "opacity") orelse attribute(attributes, "opacity")) |value| {
+        style.opacity = parseAlpha(value) orelse return Error.UnsupportedSvg;
+    }
+    if (styleProperty(declaration, "fill-opacity") orelse attribute(attributes, "fill-opacity")) |value| {
+        style.fill_opacity = parseAlpha(value) orelse return Error.UnsupportedSvg;
+    }
+    if (styleProperty(declaration, "stroke-opacity") orelse attribute(attributes, "stroke-opacity")) |value| {
+        style.stroke_opacity = parseAlpha(value) orelse return Error.UnsupportedSvg;
+    }
+    if (styleProperty(declaration, "font-family") orelse attribute(attributes, "font-family")) |value| try style.font_family.set(value);
+    if (styleProperty(declaration, "font-size") orelse attribute(attributes, "font-size")) |value| {
+        style.font_size = @max(parseNumber(value) orelse return Error.UnsupportedSvg, 0.001);
+    }
+    if (styleProperty(declaration, "font-weight") orelse attribute(attributes, "font-weight")) |value| {
+        style.font_weight = if (equals(value, "bold") or (parseNumber(value) orelse 0) >= 600) .bold else .normal;
+    }
+    if (styleProperty(declaration, "font-style") orelse attribute(attributes, "font-style")) |value| {
+        style.font_style = if (equals(value, "italic") or equals(value, "oblique")) .italic else .normal;
+    }
+    if (styleProperty(declaration, "letter-spacing") orelse attribute(attributes, "letter-spacing")) |value| {
+        style.letter_spacing = if (equals(value, "normal")) 0 else parseNumber(value) orelse return Error.UnsupportedSvg;
+    }
+    if (styleProperty(declaration, "word-spacing") orelse attribute(attributes, "word-spacing")) |value| {
+        style.word_spacing = if (equals(value, "normal")) 0 else parseNumber(value) orelse return Error.UnsupportedSvg;
+    }
+    if (styleProperty(declaration, "text-anchor") orelse attribute(attributes, "text-anchor")) |value| {
+        style.text_anchor = if (equals(value, "middle")) .middle else if (equals(value, "end")) .end else if (equals(value, "start")) .start else return Error.UnsupportedSvg;
+    }
+    if (styleProperty(declaration, "dominant-baseline") orelse attribute(attributes, "dominant-baseline")) |value| {
+        style.dominant_baseline = if (equals(value, "auto") or equals(value, "alphabetic"))
+            .alphabetic
+        else if (equals(value, "middle"))
+            .middle
+        else if (equals(value, "central"))
+            .central
+        else if (equals(value, "hanging"))
+            .hanging
+        else
+            return Error.UnsupportedSvg;
+    }
+    if (styleProperty(declaration, "direction") orelse attribute(attributes, "direction")) |value| {
+        style.direction = if (equals(value, "rtl")) .rtl else if (equals(value, "ltr")) .ltr else return Error.UnsupportedSvg;
+    }
 }
 
-fn validateNode(attributes: []const u8, is_root: bool) !void {
+fn validateNode(name: []const u8, attributes: []const u8, is_root: bool) !void {
     const declaration = attribute(attributes, "style");
     const unsupported = [_][]const u8{
         "filter",
         "mix-blend-mode",
-        "clip-path",
         "mask",
         "mask-image",
         "marker-start",
@@ -634,14 +1093,10 @@ fn validateNode(attributes: []const u8, is_root: bool) !void {
         if (!equals(value, "none") and !equals(value, "auto") and
             !((equals(property, "mix-blend-mode") or equals(property, "paint-order")) and equals(value, "normal"))) return Error.UnsupportedSvg;
     }
-    const alpha_properties = [_][]const u8{ "fill-opacity", "stroke-opacity" };
-    for (alpha_properties) |property| {
-        const value = styleProperty(declaration, property) orelse attribute(attributes, property) orelse continue;
-        if (@abs((parseNumber(value) orelse return Error.UnsupportedSvg) - 1) > 0.0001) return Error.UnsupportedSvg;
-    }
     if (!is_root) {
         if (styleProperty(declaration, "opacity") orelse attribute(attributes, "opacity")) |value| {
-            if (@abs((parseNumber(value) orelse return Error.UnsupportedSvg) - 1) > 0.0001) return Error.UnsupportedSvg;
+            const opacity = parseAlpha(value) orelse return Error.UnsupportedSvg;
+            if ((equals(name, "g") or equals(name, "defs") or equals(name, "clipPath")) and opacity < 0.9999) return Error.UnsupportedSvg;
         }
         const transform = styleProperty(declaration, "transform") orelse attribute(attributes, "transform") orelse "none";
         if (!equals(transform, "none")) {
@@ -669,13 +1124,53 @@ fn allZeroLengths(raw: []const u8) bool {
 fn applyPaint(style: *Style, comptime property: []const u8, raw: ?[]const u8) !void {
     const value = raw orelse return;
     const destination = if (comptime std.mem.eql(u8, property, "fill")) &style.fill else &style.stroke;
+    const server = if (comptime std.mem.eql(u8, property, "fill")) &style.fill_server else &style.stroke_server;
     if (equals(value, "none")) {
         destination.* = null;
+        server.* = null;
         return;
     }
-    const color = geometry.parseColor(trim(value)) orelse return Error.UnsupportedSvg;
-    if (color.alpha < 0.9999) return Error.UnsupportedSvg;
-    destination.* = color;
+    if (parseLocalUrlReference(value)) |reference| {
+        destination.* = null;
+        server.* = reference;
+        return;
+    }
+    server.* = null;
+    destination.* = if (equals(value, "currentColor")) style.color else geometry.parseColor(trim(value)) orelse return Error.UnsupportedSvg;
+}
+
+fn parseAlpha(raw: []const u8) ?f32 {
+    const value = trim(raw);
+    if (std.mem.endsWith(u8, value, "%")) {
+        const percent = std.fmt.parseFloat(f32, value[0 .. value.len - 1]) catch return null;
+        return std.math.clamp(percent / 100, 0, 1);
+    }
+    return std.math.clamp(parseNumber(value) orelse return null, 0, 1);
+}
+
+fn parseLocalUrlReference(raw: []const u8) ?Reference {
+    const value = trim(raw);
+    if (!startsWithIgnoreCase(value, "url(")) return null;
+    if (value.len < 7 or value[value.len - 1] != ')') return null;
+    var inside = trim(value[4 .. value.len - 1]);
+    if (inside.len >= 2 and ((inside[0] == '"' and inside[inside.len - 1] == '"') or (inside[0] == '\'' and inside[inside.len - 1] == '\''))) {
+        inside = trim(inside[1 .. inside.len - 1]);
+    } else if (inside.len >= 12 and
+        ((std.mem.startsWith(u8, inside, "&quot;") and std.mem.endsWith(u8, inside, "&quot;")) or
+            (std.mem.startsWith(u8, inside, "&apos;") and std.mem.endsWith(u8, inside, "&apos;"))))
+    {
+        inside = trim(inside[6 .. inside.len - 6]);
+    }
+    if (inside.len < 2 or inside[0] != '#') return null;
+    return Reference.init(inside[1..]) catch null;
+}
+
+fn applyClipReference(clips: *ClipChain, attributes: []const u8) !void {
+    const declaration = attribute(attributes, "style");
+    const value = styleProperty(declaration, "clip-path") orelse attribute(attributes, "clip-path") orelse return;
+    if (equals(value, "none")) return;
+    const reference = parseLocalUrlReference(value) orelse return Error.UnsupportedSvg;
+    try clips.append(reference);
 }
 
 fn parseTransform(raw: []const u8) !geometry.AffineTransform {
@@ -905,6 +1400,25 @@ test "parse XMLSerializer-style closing tags and computed SVG stroke lengths" {
     try std.testing.expectApproxEqAbs(@as(f32, 6), document.shapes.items[0].style.miter_limit, 0.001);
 }
 
+test "parse selectable SVG text gradients and clipping in paint order" {
+    const allocator = std.testing.allocator;
+    var document = try parseXml(
+        allocator,
+        "<svg viewBox='0 0 200 100'><defs><linearGradient id='revenue' x1='0%' y1='0%' x2='100%' y2='0%'><stop offset='0%' stop-color='#2563eb'/><stop offset='100%' style='stop-color:#7c3aed;stop-opacity:.5'/></linearGradient><clipPath id='plot'><rect x='10' y='10' width='180' height='70'/></clipPath></defs><g clip-path='url(#plot)'><rect x='0' y='0' width='200' height='90' fill='url(#revenue)'/><text x='20' y='50' font-size='14' text-anchor='start'>Q2 &amp; <tspan dx='4' font-weight='bold'>€4.82M</tspan></text></g></svg>",
+    );
+    defer document.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), document.gradients.items.len);
+    try std.testing.expectEqual(@as(u8, 2), document.gradients.items[0].stop_len);
+    try std.testing.expectEqual(@as(usize, 1), document.clips.items.len);
+    try std.testing.expectEqual(@as(usize, 1), document.clips.items[0].shape_count);
+    try std.testing.expectEqual(@as(usize, 2), document.texts.items.len);
+    try std.testing.expectEqualStrings("Q2 &", document.textSlice(document.texts.items[0]));
+    try std.testing.expectEqualStrings("€4.82M", document.textSlice(document.texts.items[1]));
+    try std.testing.expectEqual(@as(usize, 3), document.items.items.len);
+    try std.testing.expect(document.shapes.items[1].style.fill_server != null);
+    try std.testing.expectEqual(@as(u8, 1), document.shapes.items[1].clips.len);
+}
+
 test "reject SVG constructs that need a scoped raster fallback" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(Error.UnsupportedSvg, parseXml(
@@ -913,10 +1427,14 @@ test "reject SVG constructs that need a scoped raster fallback" {
     ));
     try std.testing.expectError(Error.UnsupportedSvg, parseXml(
         allocator,
-        "<svg viewBox='0 0 10 10'><rect width='10' height='10' style='fill:url(#paint)'/></svg>",
+        "<svg viewBox='0 0 10 10'><rect width='10' height='10' filter='url(#blur)'/></svg>",
     ));
     try std.testing.expectError(Error.UnsupportedSvg, parseXml(
         allocator,
-        "<svg viewBox='0 0 10 10'><rect width='10' height='10' opacity='.5'/></svg>",
+        "<svg viewBox='0 0 10 10'><g opacity='.5'><rect width='10' height='10'/></g></svg>",
+    ));
+    try std.testing.expectError(Error.InvalidSvg, parseXml(
+        allocator,
+        "<svg viewBox='0 0 10 10'><rect width='10' height='10' fill='url(#missing)'/></svg>",
     ));
 }

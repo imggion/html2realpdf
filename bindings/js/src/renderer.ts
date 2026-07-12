@@ -147,6 +147,8 @@ export class Html2RealPdf {
     if (options.enableLinks !== undefined) snapshotOptions.enableLinks = options.enableLinks;
     if (options.viewport !== undefined) snapshotOptions.viewport = options.viewport;
     if (options.includeShadowDom !== undefined) snapshotOptions.includeShadowDom = options.includeShadowDom;
+    if (options.canvasToSvg !== undefined) snapshotOptions.canvasToSvg = options.canvasToSvg;
+    if (options.canvasFallback !== undefined) snapshotOptions.canvasFallback = options.canvasFallback;
     const snapshot = await snapshotSource(source, snapshotOptions);
     options.onProgress?.({ phase: "snapshot", completed: 1, total: 1 });
 

@@ -5,6 +5,24 @@ const wasmUrl = new URL("../../../bindings/js/dist/libhtml2realpdf.wasm", import
 
 const revenue = [42, 58, 51, 72, 84, 79, 96, 112, 108, 126, 139, 154];
 
+function revenueChartSvg() {
+  const min = Math.min(...revenue);
+  const max = Math.max(...revenue);
+  const points = revenue.map((value, index) => {
+    const x = 22 + (index * 576) / (revenue.length - 1);
+    const y = 142 - ((value - min) / (max - min)) * 118;
+    return [x, y];
+  });
+  const line = points.map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`).join(" ");
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 166">
+    <rect width="620" height="166" fill="#f8fafc"/>
+    <path d="M22 47 H598 M22 82 H598 M22 117 H598" fill="none" stroke="#dbeafe" stroke-width="1"/>
+    <path d="${line} L598 154 L22 154 Z" fill="#2563eb" fill-opacity=".18"/>
+    <path d="${line}" fill="none" stroke="#2563eb" stroke-width="4"/>
+    <text x="590" y="22" text-anchor="end" font-size="13" fill="#1e3a8a">Revenue €154k</text>
+  </svg>`;
+}
+
 function bytesToBase64(bytes) {
   let binary = "";
   for (let offset = 0; offset < bytes.length; offset += 16_384) {
@@ -86,7 +104,7 @@ const ReportDocument = forwardRef(function ReportDocument({ customer, period, no
 
       <section className="report-section">
         <h2>Revenue trend</h2>
-        <p>Monthly recognized revenue in thousands of euro. The canvas below is drawn after React mounts and must be captured from its live pixels.</p>
+        <p>Monthly recognized revenue in thousands of euro. The live canvas is exported through the canvas-to-SVG adapter for native PDF output.</p>
         <RevenueChart />
       </section>
 
@@ -160,6 +178,9 @@ export function App() {
       pdfRef.current = await rendererRef.current.render(reportRef, {
         page: { format: "a4", margin: [30, 36, 30, 36], unit: "pt" },
         metadata: { title: `${customer} ${period} performance report`, author: "Northstar Analytics" },
+        fallback: "error",
+        canvasFallback: "error",
+        canvasToSvg: ({ canvas }) => canvas.getAttribute("aria-label") === "Revenue chart" ? revenueChartSvg() : null,
       });
       const bytes = pdfRef.current.toUint8Array();
       pdfExportRef.current.setAttribute("data-pdf", bytesToBase64(bytes));

@@ -1,5 +1,5 @@
-import { InvalidSourceError, ResourceLoadError, UnsupportedCssError, UnsupportedEnvironmentError } from "./errors.js";
-import type { CssProfile, Diagnostic, FallbackPolicy, HtmlSource, MediaType, ResourceResolver, UnsupportedCssPolicy, ViewportOptions } from "./types.js";
+import { CanvasToSvgError, InvalidSourceError, ResourceLoadError, UnsupportedCssError, UnsupportedEnvironmentError } from "./errors.js";
+import type { CanvasFallbackPolicy, CanvasToSvg, CssProfile, Diagnostic, FallbackPolicy, HtmlSource, MediaType, ResourceResolver, UnsupportedCssPolicy, ViewportOptions } from "./types.js";
 import type { NormalizedPage } from "./page.js";
 
 export interface SnapshotOptions {
@@ -12,6 +12,8 @@ export interface SnapshotOptions {
   viewport?: ViewportOptions;
   unsupportedCss?: UnsupportedCssPolicy;
   fallback?: FallbackPolicy;
+  canvasToSvg?: CanvasToSvg;
+  canvasFallback?: CanvasFallbackPolicy;
   includeShadowDom?: boolean;
   enableLinks?: boolean;
 }
@@ -22,6 +24,11 @@ export interface SnapshotResult {
   page?: NormalizedPage;
   pageMarginBoxes?: readonly SnapshotPageMarginBox[];
   pageRules?: readonly SnapshotPageRule[];
+}
+
+interface CanvasMaterialization {
+  source: HTMLCanvasElement;
+  target: HTMLCanvasElement;
 }
 
 export interface SnapshotPageRule {
@@ -174,6 +181,8 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
 
 const SVG_COMPUTED_PROPERTIES = [
   "clip-path",
+  "clip-rule",
+  "dominant-baseline",
   "filter",
   "fill",
   "fill-opacity",
@@ -192,9 +201,17 @@ const SVG_COMPUTED_PROPERTIES = [
   "stroke-miterlimit",
   "stroke-opacity",
   "stroke-width",
+  "stop-color",
+  "stop-opacity",
+  "text-anchor",
   "vector-effect",
   "visibility",
 ] as const;
+const SVG_SERIALIZED_STYLE_PROPERTIES = new Set<string>([
+  ...SVG_COMPUTED_PROPERTIES,
+  "display", "opacity", "transform", "transform-origin", "color", "direction",
+  "font-family", "font-size", "font-style", "font-weight", "letter-spacing", "word-spacing",
+]);
 
 const SUPPORTED_DISPLAY = new Set([
   "none",
@@ -228,11 +245,13 @@ const AUTHORED_FLOW_DIMENSION_MIRRORS = {
   "max-height": "--html2realpdf-authored-max-height",
 } as const;
 type FlowDimensionProperty = keyof typeof AUTHORED_FLOW_DIMENSION_MIRRORS;
-const VECTOR_SVG_ELEMENTS = new Set(["svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "title", "desc"]);
+const VECTOR_SVG_ELEMENTS = new Set([
+  "svg", "g", "defs", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+  "text", "tspan", "linearGradient", "radialGradient", "stop", "clipPath", "title", "desc",
+]);
 const VECTOR_SVG_UNSUPPORTED_PROPERTIES = [
   "filter",
   "mix-blend-mode",
-  "clip-path",
   "mask",
   "mask-image",
   "marker-start",
@@ -284,7 +303,8 @@ async function snapshotElementInEnvironment(element: Element, options: SnapshotO
     stylesheet.textContent = serializeAccessibleStylesheets(element.ownerDocument);
     targetDocument.head.append(stylesheet);
 
-    const target = cloneEnvironmentNode(element, targetDocument) as Element;
+    const canvasOrigins = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
+    const target = cloneEnvironmentNode(element, targetDocument, canvasOrigins) as Element;
     let mounted: Element = target;
     for (let ancestor = element.parentElement; ancestor && ancestor.localName !== "body" && ancestor.localName !== "html"; ancestor = ancestor.parentElement) {
       const wrapper = targetDocument.importNode(ancestor.cloneNode(false), false) as Element;
@@ -297,7 +317,7 @@ async function snapshotElementInEnvironment(element: Element, options: SnapshotO
     await waitForStyleResolution(targetDocument.defaultView);
     forceRequestedMedia(targetDocument, options.mediaType ?? "screen", viewport);
     forceShadowMediaRules(target, options.mediaType ?? "screen", viewport);
-    const snapshot = await snapshotElement(target, options);
+    const snapshot = await snapshotElement(target, options, canvasOrigins);
     return {
       html: snapshot.clone.outerHTML,
       diagnostics: snapshot.diagnostics,
@@ -1155,19 +1175,26 @@ function collectAuthoredFlowDimensionMirrorRules(rules: CSSRuleList, view: Windo
   }
 }
 
-function cloneEnvironmentNode(source: Node, targetDocument: Document): Node {
+function cloneEnvironmentNode(
+  source: Node,
+  targetDocument: Document,
+  canvasOrigins: WeakMap<HTMLCanvasElement, HTMLCanvasElement>,
+): Node {
   if (source.nodeType === Node.TEXT_NODE) return targetDocument.createTextNode(source.textContent ?? "");
   if (source.nodeType !== Node.ELEMENT_NODE) return targetDocument.createDocumentFragment();
   const original = source as Element;
   const clone = targetDocument.importNode(original.cloneNode(false), false) as Element;
   removeEventHandlers(clone);
 
-  for (const child of original.childNodes) clone.append(cloneEnvironmentNode(child, targetDocument));
+  for (const child of original.childNodes) clone.append(cloneEnvironmentNode(child, targetDocument, canvasOrigins));
   if (original.shadowRoot && "attachShadow" in clone) {
     const shadow = (clone as HTMLElement).attachShadow({ mode: "open" });
-    for (const child of original.shadowRoot.childNodes) shadow.append(cloneEnvironmentNode(child, targetDocument));
+    for (const child of original.shadowRoot.childNodes) shadow.append(cloneEnvironmentNode(child, targetDocument, canvasOrigins));
   }
   synchronizeEnvironmentState(original, clone);
+  if (original.localName === "canvas" && clone.localName === "canvas") {
+    canvasOrigins.set(clone as HTMLCanvasElement, original as HTMLCanvasElement);
+  }
   return clone;
 }
 
@@ -1192,7 +1219,11 @@ function synchronizeEnvironmentState(original: Element, clone: Element): void {
   }
 }
 
-async function snapshotElement(element: Element, options: SnapshotOptions): Promise<{
+async function snapshotElement(
+  element: Element,
+  options: SnapshotOptions,
+  canvasOrigins?: WeakMap<HTMLCanvasElement, HTMLCanvasElement>,
+): Promise<{
   clone: Element;
   diagnostics: Diagnostic[];
   page?: NormalizedPage;
@@ -1204,7 +1235,10 @@ async function snapshotElement(element: Element, options: SnapshotOptions): Prom
   const removeFlowDimensionMirrors = installAuthoredFlowDimensionMirrors(element.ownerDocument);
   try {
     const counters = CounterState.forSnapshotRoot(element, options.includeShadowDom === true);
-    const clone = cloneSnapshotElement(element, options, diagnostics, true, counters);
+    const canvases: CanvasMaterialization[] = [];
+    let clone = cloneSnapshotElement(element, options, diagnostics, true, counters, canvases, canvasOrigins);
+
+    clone = await materializeCanvases(clone, canvases, options, diagnostics);
 
     for (const active of clone.matches(ACTIVE_ELEMENTS) ? [clone] : clone.querySelectorAll(ACTIVE_ELEMENTS)) {
       active.remove();
@@ -1310,6 +1344,8 @@ function cloneSnapshotElement(
   diagnostics: Diagnostic[],
   isSnapshotRoot: boolean,
   counters: CounterState,
+  canvases: CanvasMaterialization[],
+  canvasOrigins?: WeakMap<HTMLCanvasElement, HTMLCanvasElement>,
 ): Element {
   const leaveCounterScope = counters.enter(original);
   const target = original.cloneNode(false) as Element;
@@ -1318,10 +1354,16 @@ function cloneSnapshotElement(
     materializePseudoElement(original, target, "::before", options, diagnostics, counters);
 
     const childRoot = options.includeShadowDom && original.shadowRoot ? original.shadowRoot : original;
-    for (const child of childRoot.childNodes) appendSnapshotNode(target, child, options, diagnostics, counters);
+    for (const child of childRoot.childNodes) appendSnapshotNode(target, child, options, diagnostics, counters, canvases, canvasOrigins);
 
     materializePseudoElement(original, target, "::after", options, diagnostics, counters);
     const materialized = materializeLiveState(original, target);
+    if (original.localName === "canvas" && materialized.localName === "canvas") {
+      canvases.push({
+        source: canvasOrigins?.get(original as HTMLCanvasElement) ?? original as HTMLCanvasElement,
+        target: materialized as HTMLCanvasElement,
+      });
+    }
     removeEventHandlers(materialized);
     if (childRoot !== original) materialized.setAttribute("data-html2realpdf-shadow-host", "open");
     return materialized;
@@ -1336,6 +1378,8 @@ function appendSnapshotNode(
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
   counters: CounterState,
+  canvases: CanvasMaterialization[],
+  canvasOrigins?: WeakMap<HTMLCanvasElement, HTMLCanvasElement>,
 ): void {
   if (source.nodeType === Node.TEXT_NODE) {
     parent.append(parent.ownerDocument.createTextNode(source.textContent ?? ""));
@@ -1348,10 +1392,10 @@ function appendSnapshotNode(
     const slot = element as HTMLSlotElement;
     const assigned = slot.assignedNodes({ flatten: true });
     const nodes = assigned.length > 0 ? assigned : [...slot.childNodes];
-    for (const node of nodes) appendSnapshotNode(parent, node, options, diagnostics, counters);
+    for (const node of nodes) appendSnapshotNode(parent, node, options, diagnostics, counters, canvases, canvasOrigins);
     return;
   }
-  parent.append(cloneSnapshotElement(element, options, diagnostics, false, counters));
+  parent.append(cloneSnapshotElement(element, options, diagnostics, false, counters, canvases, canvasOrigins));
 }
 
 function forceRequestedMedia(document: Document, mediaType: MediaType, viewport: ViewportOptions): void {
@@ -1707,16 +1751,20 @@ function materializeComputedStyle(
   for (const property of properties) {
     const nativePage = property === "page" ? computed.getPropertyValue("page").trim() : "";
     const mirroredPage = property === "page" ? computed.getPropertyValue(AUTHORED_PAGE_MIRROR).trim() : "";
+    const authoredFlowDimension = isFlowDimension(property)
+      ? computed.getPropertyValue(AUTHORED_FLOW_DIMENSION_MIRRORS[property]).trim()
+      : "";
     const value = property === "display"
       ? display
       : property === "page"
         ? nativePage && nativePage !== "auto" ? nativePage : mirroredPage || nativePage
+      : authoredFlowDimension.endsWith("%")
+        ? authoredFlowDimension
       : authoredInsets && property in authoredInsets
         ? authoredInsets[property as keyof typeof authoredInsets]!
         : computed.getPropertyValue(property);
     if (isFlowDimension(property)) {
-      const authored = computed.getPropertyValue(AUTHORED_FLOW_DIMENSION_MIRRORS[property]).trim();
-      if (authored === "auto" || !shouldMaterializeFlowDimension(original, property, isSnapshotRoot)) continue;
+      if (authoredFlowDimension === "auto" || !shouldMaterializeFlowDimension(original, property, isSnapshotRoot)) continue;
     }
     // A fully transparent background has no paint effect. Omitting it keeps
     // the display list compact while semi-transparent colors retain real PDF
@@ -2123,7 +2171,7 @@ async function materializeInlineSvgs(
     try {
       if (!svg.hasAttribute("xmlns")) svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
       const unsupportedReason = vectorSvgUnsupportedReason(svg);
-      const source = new XMLSerializer().serializeToString(svg);
+      const source = serializeVectorSvg(svg);
       const replacement = svg.ownerDocument.createElement("img");
       for (const attribute of svg.attributes) {
         if (attribute.name === "style") {
@@ -2164,6 +2212,24 @@ async function materializeInlineSvgs(
   }
 }
 
+function serializeVectorSvg(source: SVGSVGElement): string {
+  const svg = source.cloneNode(true) as SVGSVGElement;
+  for (const element of [svg, ...svg.querySelectorAll<SVGElement>("*")]) {
+    const style = element.getAttribute("style");
+    if (!style) continue;
+    const declarations = style.split(";").filter((declaration) => {
+      const colon = declaration.indexOf(":");
+      return colon >= 0 && SVG_SERIALIZED_STYLE_PROPERTIES.has(declaration.slice(0, colon).trim().toLowerCase());
+    });
+    if (declarations.length > 0) element.setAttribute("style", declarations.join(";"));
+    else element.removeAttribute("style");
+  }
+  return new XMLSerializer().serializeToString(svg).replace(
+    /url\(\s*(?:&quot;|&apos;)(#[A-Za-z_][\w:.-]*)(?:&quot;|&apos;)\s*\)/gi,
+    "url($1)",
+  );
+}
+
 function stripStyleProperties(style: string, properties: readonly string[]): string {
   const omitted = new Set(properties);
   return style.split(";").filter((declaration) => {
@@ -2178,21 +2244,41 @@ function vectorSvgUnsupportedReason(svg: SVGSVGElement): string | null {
     if (!isSvgElement(element) || !VECTOR_SVG_ELEMENTS.has(element.localName)) return `<${element.localName}>`;
     if (element !== svg && element.localName === "svg") return "nested <svg> viewport";
     if (element.localName === "title" || element.localName === "desc") continue;
+    if (element.localName === "linearGradient" || element.localName === "radialGradient") {
+      if (element.hasAttribute("href") || element.hasAttribute("xlink:href")) return "gradient href inheritance";
+      const spread = element.getAttribute("spreadMethod") ?? "pad";
+      if (spread !== "pad") return `gradient spreadMethod=${spread}`;
+      if (element.querySelectorAll(":scope > stop").length > 16) return "more than 16 gradient stops";
+    }
+    if (element.localName === "text" || element.localName === "tspan") {
+      if (element.hasAttribute("textLength") || element.hasAttribute("lengthAdjust")) return "SVG textLength";
+      if (element.hasAttribute("rotate")) return "per-glyph SVG rotation";
+      for (const property of ["x", "y", "dx", "dy"]) {
+        const value = element.getAttribute(property)?.trim() ?? "";
+        if (value && /[\s,]/.test(value)) return `SVG ${property} coordinate list`;
+      }
+    }
     const style = (element as SVGElement).style;
     for (const property of VECTOR_SVG_UNSUPPORTED_PROPERTIES) {
       const authored = element.getAttribute(property);
       const computed = style.getPropertyValue(property);
       if ((authored && svgUnsupportedPropertyIsActive(property, authored)) || (computed && svgUnsupportedPropertyIsActive(property, computed))) return property;
     }
+    const clipPath = style.getPropertyValue("clip-path") || element.getAttribute("clip-path") || "";
+    if (clipPath && clipPath !== "none" && !isLocalSvgUrlReference(clipPath)) return "external clip-path";
     for (const property of ["fill", "stroke"] as const) {
       const paint = style.getPropertyValue(property) || element.getAttribute(property) || "";
-      if (/url\s*\(/i.test(paint)) return `${property} paint server`;
-      if (svgPaintIsTranslucent(paint)) return `${property} opacity`;
+      if (/url\s*\(/i.test(paint)) {
+        if (!isLocalSvgUrlReference(paint)) return `external ${property} paint server`;
+        if (property === "stroke") return "gradient stroke";
+        if (element.localName === "text" || element.localName === "tspan") return "gradient SVG text";
+      }
     }
     for (const property of ["opacity", "fill-opacity", "stroke-opacity"] as const) {
       const raw = style.getPropertyValue(property) || element.getAttribute(property) || "1";
       const value = Number.parseFloat(raw);
-      if (!Number.isFinite(value) || value < 0.9999) return property;
+      if (!Number.isFinite(value) || value < 0 || value > 1) return property;
+      if (property === "opacity" && element.localName === "g" && value < 0.9999) return "group opacity";
     }
     const transform = style.getPropertyValue("transform");
     if (transform.startsWith("matrix3d(")) return "3D transform";
@@ -2200,6 +2286,10 @@ function vectorSvgUnsupportedReason(svg: SVGSVGElement): string | null {
     if (element !== svg && transform && transform !== "none" && transformOrigin && !isZeroSvgTransformOrigin(transformOrigin)) return "transform-origin";
   }
   return null;
+}
+
+function isLocalSvgUrlReference(raw: string): boolean {
+  return /^url\(\s*(?:["']\s*)?#[A-Za-z_][\w:.-]*(?:\s*["'])?\s*\)$/i.test(raw.trim());
 }
 
 function svgUnsupportedPropertyIsActive(property: string, raw: string): boolean {
@@ -2284,6 +2374,121 @@ function snapshotNodePath(element: Element, root: ParentNode): string {
   return parts.join(" > ");
 }
 
+async function materializeCanvases(
+  root: Element,
+  canvases: readonly CanvasMaterialization[],
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+): Promise<Element> {
+  let materializedRoot = root;
+  for (const { source, target } of canvases) {
+    const nodePath = snapshotNodePath(target, root);
+    let replacement: HTMLImageElement;
+    if (!options.canvasToSvg) {
+      replacement = canvasImageReplacement(target, source, canvasToPng(source));
+    } else {
+      let vectorSource;
+      try {
+        vectorSource = await options.canvasToSvg({
+          canvas: source,
+          nodePath,
+          cssWidth: source.clientWidth,
+          cssHeight: source.clientHeight,
+          bitmapWidth: source.width,
+          bitmapHeight: source.height,
+        });
+      } catch (error) {
+        throw new CanvasToSvgError("Canvas-to-SVG callback failed", nodePath, { cause: error });
+      }
+
+      if (vectorSource === null) {
+        if ((options.canvasFallback ?? "error") !== "rasterize") {
+          throw new CanvasToSvgError("Canvas-to-SVG callback returned null", nodePath);
+        }
+        replacement = rasterizedCanvasReplacement(target, source, nodePath, "the callback returned null", diagnostics);
+      } else {
+        let normalized: { dataUrl: string; unsupportedReason: string | null };
+        try {
+          normalized = await normalizeCanvasSvgSource(vectorSource);
+        } catch (error) {
+          throw new CanvasToSvgError("Canvas-to-SVG callback returned invalid SVG", nodePath, { cause: error });
+        }
+        if (normalized.unsupportedReason !== null) {
+          if (options.fallback !== "rasterize-subtree") {
+            throw new UnsupportedCssError(`Canvas SVG requires subtree rasterization: ${normalized.unsupportedReason} (${nodePath})`);
+          }
+          replacement = rasterizedCanvasReplacement(target, source, nodePath, normalized.unsupportedReason, diagnostics);
+        } else {
+          replacement = canvasImageReplacement(target, source, normalized.dataUrl);
+        }
+      }
+    }
+
+    if (target === materializedRoot) materializedRoot = replacement;
+    else target.replaceWith(replacement);
+  }
+  return materializedRoot;
+}
+
+async function normalizeCanvasSvgSource(source: string | Blob | SVGSVGElement): Promise<{
+  dataUrl: string;
+  unsupportedReason: string | null;
+}> {
+  let xml: string;
+  if (typeof source === "string") {
+    xml = source;
+  } else if (source instanceof Blob) {
+    if (source.type.split(";", 1)[0]?.trim().toLowerCase() !== "image/svg+xml") {
+      throw new Error("Canvas SVG Blob must use image/svg+xml");
+    }
+    xml = await source.text();
+  } else if (source instanceof Element && isSvgElement(source) && source.localName === "svg") {
+    xml = new XMLSerializer().serializeToString(source);
+  } else {
+    throw new Error("Canvas SVG result must be SVG markup, an image/svg+xml Blob, or SVGSVGElement");
+  }
+
+  const parsed = new DOMParser().parseFromString(xml, "image/svg+xml");
+  if (parsed.querySelector("parsererror") || !isSvgElement(parsed.documentElement) || parsed.documentElement.localName !== "svg") {
+    throw new Error("Canvas SVG result is not a complete SVG document");
+  }
+  const svg = parsed.documentElement as unknown as SVGSVGElement;
+  if (!svg.hasAttribute("xmlns")) svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  const normalized = new XMLSerializer().serializeToString(svg);
+  return {
+    dataUrl: await blobToDataUrl(new Blob([normalized], { type: "image/svg+xml" })),
+    unsupportedReason: vectorSvgUnsupportedReason(svg),
+  };
+}
+
+function canvasImageReplacement(target: HTMLCanvasElement, source: HTMLCanvasElement, dataUrl: string): HTMLImageElement {
+  const replacement = target.ownerDocument.createElement("img");
+  for (const attribute of target.attributes) replacement.setAttribute(attribute.name, attribute.value);
+  replacement.src = dataUrl;
+  replacement.alt = target.getAttribute("aria-label") ?? "";
+  replacement.dataset.html2realpdfIntrinsicWidth = String(Math.max(source.width, 1));
+  replacement.dataset.html2realpdfIntrinsicHeight = String(Math.max(source.height, 1));
+  return replacement;
+}
+
+function rasterizedCanvasReplacement(
+  target: HTMLCanvasElement,
+  source: HTMLCanvasElement,
+  nodePath: string,
+  reason: string,
+  diagnostics: Diagnostic[],
+): HTMLImageElement {
+  diagnostics.push({
+    code: "CANVAS_SUBTREE_RASTERIZED",
+    severity: "warning",
+    message: `Canvas was rasterized because ${reason}`,
+    nodePath,
+    phase: "snapshot",
+    fallback: "rasterized-subtree",
+  });
+  return canvasImageReplacement(target, source, canvasToPng(source));
+}
+
 function materializeLiveState(original: Element, target: Element): Element {
   if (original.localName === "input" && target.localName === "input") {
     const input = original as HTMLInputElement;
@@ -2313,15 +2518,6 @@ function materializeLiveState(original: Element, target: Element): Element {
       image.dataset.html2realpdfIntrinsicWidth = String(source.naturalWidth);
       image.dataset.html2realpdfIntrinsicHeight = String(source.naturalHeight);
     }
-  } else if (original.localName === "canvas" && target.localName === "canvas") {
-    const canvas = original as HTMLCanvasElement;
-    const replacement = target.ownerDocument.createElement("img");
-    for (const attribute of target.attributes) replacement.setAttribute(attribute.name, attribute.value);
-    replacement.src = canvasToPng(canvas);
-    replacement.width = canvas.width;
-    replacement.height = canvas.height;
-    target.replaceWith(replacement);
-    return replacement;
   }
   return target;
 }

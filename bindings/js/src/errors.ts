@@ -39,6 +39,12 @@ export class ResourceLoadError extends Html2RealPdfError {
   }
 }
 
+export class CanvasToSvgError extends Html2RealPdfError {
+  constructor(message: string, readonly nodePath: string, options?: ErrorOptions) {
+    super(`${message}: ${nodePath}`, "CANVAS_TO_SVG_FAILED", options);
+  }
+}
+
 export class UnsupportedCompatibilityFeatureError extends Html2RealPdfError {
   constructor(feature: string) {
     super(`${feature} belongs to the raster html2canvas/jsPDF pipeline and is not supported`, "UNSUPPORTED_COMPAT_FEATURE");

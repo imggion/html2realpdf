@@ -516,7 +516,7 @@ async function renderAnalyticsReport() {
     author: "Northstar Commerce",
     subject: "Quarterly business review fixture",
     keywords: ["analytics", "revenue", "quarterly report"],
-  }, { fallback: "rasterize-subtree" });
+  }, { fallback: "error" });
 }
 
 async function renderRoundedOperationsReport() {
@@ -1218,6 +1218,12 @@ function verifyComplexDocument(pdf, expectedPages, options = {}) {
   if (options.minimumImages && (text.match(/\/Subtype \/Image/g) ?? []).length < options.minimumImages) {
     throw new Error("report chart images were not embedded");
   }
+  if (options.forbidImages && text.includes("/Subtype /Image")) {
+    throw new Error("report charts were unexpectedly rasterized");
+  }
+  if (options.minimumForms && (text.match(/\/Subtype \/Form/g) ?? []).length < options.minimumForms) {
+    throw new Error("report charts were not preserved as native PDF Forms");
+  }
   return bytes.length;
 }
 
@@ -1432,7 +1438,8 @@ async function runWasmTests() {
 
   try {
     const pdf = await renderAnalyticsReport();
-    const size = verifyComplexDocument(pdf, 3, { minimumBytes: 120_000, minimumImages: 4 });
+    const size = verifyComplexDocument(pdf, 3, { minimumBytes: 70_000, forbidImages: true, minimumForms: 2 });
+    if (pdf.diagnostics.length !== 0) throw new Error(`analytics report emitted diagnostics: ${JSON.stringify(pdf.diagnostics)}`);
     pdf.dispose();
     passed++;
     testResults.textContent += `✓ PASS: analytics_report_with_charts (${size} bytes, 3 pages)\n`;
