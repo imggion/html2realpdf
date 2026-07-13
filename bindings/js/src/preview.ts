@@ -236,6 +236,7 @@ export class PdfPreview {
     });
   }
 
+  /** @internal */
   static async open(
     target: HTMLElement,
     bytes: Uint8Array,

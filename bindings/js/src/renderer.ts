@@ -14,7 +14,7 @@ class MainThreadBackend implements Backend {
   constructor(private readonly bridge: WasmBridge) {}
 
   render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult> {
-    if (signal?.aborted) return Promise.reject(signal.reason);
+    if (signal?.aborted) return Promise.reject(abortReason(signal));
     return Promise.resolve(this.bridge.render(html, page, metadata, cssProfile, marginBoxes, pageRules));
   }
 
@@ -71,7 +71,7 @@ class WorkerBackend implements Backend {
 
   async render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult> {
     if (this.disposed) throw new Error("Renderer has been disposed");
-    if (signal?.aborted) throw signal.reason;
+    if (signal?.aborted) throw abortReason(signal);
     await this.ready;
 
     const id = this.nextId++;
@@ -80,7 +80,7 @@ class WorkerBackend implements Backend {
       if (signal) {
         const onAbort = () => {
           this.pending.delete(id);
-          reject(signal.reason);
+          reject(abortReason(signal));
         };
         signal.addEventListener("abort", onAbort, { once: true });
         pending.removeAbort = () => signal.removeEventListener("abort", onAbort);
@@ -124,10 +124,16 @@ class WorkerBackend implements Backend {
 export class Html2RealPdf {
   private disposed = false;
 
-  constructor(private readonly backend: Backend) {}
+  private constructor(private readonly backend: Backend) {}
+
+  /** @internal */
+  static create(backend: Backend): Html2RealPdf {
+    return new Html2RealPdf(backend);
+  }
 
   async render(source: HtmlSource, options: RenderOptions = {}): Promise<PdfDocument> {
     if (this.disposed) throw new Error("Renderer has been disposed");
+    if (options.signal?.aborted) throw abortReason(options.signal);
     options.onProgress?.({ phase: "snapshot", completed: 0, total: 1 });
     const snapshotOptions: SnapshotOptions = {
       resourcePolicy: options.resourcePolicy ?? "error",
@@ -150,6 +156,7 @@ export class Html2RealPdf {
     if (options.canvasToSvg !== undefined) snapshotOptions.canvasToSvg = options.canvasToSvg;
     if (options.canvasFallback !== undefined) snapshotOptions.canvasFallback = options.canvasFallback;
     const snapshot = await snapshotSource(source, snapshotOptions);
+    if (options.signal?.aborted) throw abortReason(options.signal);
     options.onProgress?.({ phase: "snapshot", completed: 1, total: 1 });
 
     options.onProgress?.({ phase: "wasm", completed: 0, total: 1 });
@@ -165,7 +172,7 @@ export class Html2RealPdf {
     );
     options.onProgress?.({ phase: "wasm", completed: 1, total: 1 });
     options.onProgress?.({ phase: "complete", completed: 1, total: 1 });
-    return new PdfDocument(rendered.bytes, rendered.pageCount, [...snapshot.diagnostics, ...rendered.diagnostics]);
+    return PdfDocument.create(rendered.bytes, rendered.pageCount, [...snapshot.diagnostics, ...rendered.diagnostics]);
   }
 
   dispose(): void {
@@ -184,7 +191,7 @@ export async function createRenderer(init: RendererInit = {}): Promise<Html2Real
   const backend: Backend = init.execution === "main"
     ? new MainThreadBackend(await WasmBridge.create(wasmUrl, init.fonts ?? []))
     : new WorkerBackend(wasmUrl, init.fonts ?? []);
-  return new Html2RealPdf(backend);
+  return Html2RealPdf.create(backend);
 }
 
 let defaultRenderer: Promise<Html2RealPdf> | undefined;
@@ -215,4 +222,8 @@ function appendSelectorRule(output: string[], input: string | readonly string[] 
   const selectors = typeof input === "string" ? [input] : input ?? [];
   const safe = selectors.map((selector) => selector.trim()).filter((selector) => selector && !/[{};]/.test(selector));
   if (safe.length > 0) output.push(`${safe.join(",")}{${declaration}}`);
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted", "AbortError");
 }

@@ -118,6 +118,9 @@
 
 - Imports must remain SSR-safe; browser requirements are checked when creating
   a renderer or rendering.
+- Keep public constructors out of emitted declarations. Consumers create
+  renderers through `createRenderer()` and receive `PdfDocument`/`PdfPreview`
+  from supported methods instead of constructing backend-owned objects.
 - Worker execution is the default. Main-thread execution is an explicit option.
 - DOM/ref snapshots must not mutate the source element, must remove active
   content/event attributes, and must materialize computed styles, form state,
@@ -151,6 +154,7 @@
 - `make test-robustness`
 - `make test`
 - `npm --prefix bindings/js test`
+- `make test-package-consumer`
 - `node tests/web/verify_snapshots.mjs`
 - Browser harness checks pass, including complex fixtures and embedded preview,
   and download is wired.

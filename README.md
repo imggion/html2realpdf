@@ -7,7 +7,7 @@ does not capture the page as a bitmap.
 
 The browser package is published as `@imggion/html2realpdf`.
 
-## Current alpha capabilities
+## Current release-candidate capabilities
 
 - tolerant HTML tokenizer and flat DOM/Box Trees;
 - CSS cascade with specificity, source order, inheritance, inline styles, and
@@ -65,6 +65,23 @@ See [docs/css-support.md](docs/css-support.md) for the versioned property and
 pipeline-stage support matrix.
 
 ## Browser package
+
+Install the release candidate from npm once it is published:
+
+```sh
+npm install @imggion/html2realpdf@next
+```
+
+To share the package without publishing it, build a tarball and send the
+generated `.tgz` file:
+
+```sh
+cd bindings/js
+npm pack
+```
+
+The recipient can install that file with any package manager that supports
+local npm tarballs, for example `npm install ./imggion-html2realpdf-0.1.0-rc1.tgz`.
 
 ```ts
 import { renderPdf } from "@imggion/html2realpdf";
@@ -148,6 +165,9 @@ await html2pdf()
 Raster-only stages such as `toCanvas()`, `toImg()`, and html2canvas options
 throw an explicit compatibility error.
 
+The English model-facing skill is available at
+`skills/html2realpdf/SKILL.md` and is also included in the npm tarball.
+
 ## Requirements and build
 
 - Zig `0.16.0`
@@ -173,6 +193,7 @@ make test
 make test-wpt
 make test-robustness
 make test-react
+make test-package-consumer
 make test-web
 make test-debug-tokenizer
 make test-debug-dom

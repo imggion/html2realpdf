@@ -47,9 +47,15 @@
   DOM/ref sanitization, Shadow DOM flattening, and resolver-controlled resources live in `snapshot.ts`;
   integrated PDF canvas preview lives in `preview.ts`; html2pdf.js compatibility
   lives in `compat.ts`; raw ABI glue lives in `wasm.ts` and `worker.ts`.
+- Model-facing package usage belongs in `skills/html2realpdf/`; keep the
+  distributed copy under `bindings/js/skills/html2realpdf/` byte-identical and
+  verify both through the package-consumer gate.
 - Framework-agnostic interactive checks stay in `tests/web`; the real mounted
   React-ref fixture stays in `tests/react`; Node ABI/package tests stay in
   `bindings/js/test`; PDF render artifacts stay ignored under `tmp/pdfs`.
+- Packed npm artifact installation, TypeScript resolution, Vite bundling, and
+  the default Worker/WASM/PDF.js browser smoke live in
+  `bindings/js/scripts/verify-package.mjs`.
 - Release browser checks live in `tests/web/e2e`; committed visual canaries and
   byte digests live under `tests/baselines/<version>/`.
 - Renderer-native adaptations of pinned upstream WPT scenarios live in

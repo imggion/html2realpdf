@@ -1,6 +1,6 @@
 {
   "name": "@imggion/html2realpdf",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-rc1",
   "description": "Browser-first HTML to real, selectable PDF rendering powered by Zig and WebAssembly",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,14 +13,16 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "skills"
   ],
   "sideEffects": false,
   "scripts": {
     "clean": "node ./scripts/clean.mjs",
     "build": "node ./scripts/build.mjs && tsc -p tsconfig.json && node ./scripts/prepare-browser-build.mjs",
     "build:bindings": "node ./scripts/build.mjs --skip-wasm-build && tsc -p tsconfig.json && node ./scripts/prepare-browser-build.mjs",
-    "test": "npm run build && node --test ./test/*.test.mjs",
+    "test": "npm run build && node --test ./test/*.test.mjs && node ./scripts/verify-package.mjs --types-only",
+    "test:consumer": "npm run build && node ./scripts/verify-package.mjs",
     "prepack": "npm run build"
   },
   "keywords": [
@@ -32,6 +34,14 @@
     "react"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imggion/html2realpdf.git"
+  },
+  "homepage": "https://github.com/imggion/html2realpdf#readme",
+  "bugs": {
+    "url": "https://github.com/imggion/html2realpdf/issues"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true

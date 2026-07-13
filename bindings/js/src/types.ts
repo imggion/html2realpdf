@@ -1,5 +1,7 @@
+/** A React-compatible ref shape without requiring React at runtime. */
 export type RefLike<T> = { readonly current: T | null };
 
+/** HTML accepted by the renderer. Mounted elements preserve browser state. */
 export type HtmlSource = string | Element | RefLike<Element>;
 
 export type LengthUnit = "pt" | "px" | "mm" | "cm" | "in";
@@ -30,7 +32,12 @@ export interface ViewportOptions {
   width: number;
   height: number;
 }
-export type Margin = number | readonly [vertical: number, horizontal: number] | readonly [top: number, left: number, bottom: number, right: number];
+
+/** Page margins in html2pdf.js order, not CSS shorthand order. */
+export type Margin =
+  | number
+  | readonly [vertical: number, horizontal: number]
+  | readonly [top: number, left: number, bottom: number, right: number];
 
 export interface PageOptions {
   format?: PageFormat;
@@ -58,7 +65,7 @@ export interface Diagnostic {
 }
 
 export interface ResourceRequest {
-  kind: "image" | "stylesheet" | "font";
+  kind: "image" | "stylesheet";
   url: URL;
 }
 
@@ -82,7 +89,6 @@ export interface PdfMetadata {
 
 export interface RenderOptions {
   page?: PageOptions;
-  filename?: string;
   strict?: boolean;
   cssProfile?: CssProfile;
   mediaType?: MediaType;
@@ -98,6 +104,10 @@ export interface RenderOptions {
   pageBreak?: PageBreakRules;
   metadata?: PdfMetadata;
   enableLinks?: boolean;
+  /**
+   * Reject the caller when aborted. Snapshot work is checked at phase
+   * boundaries; an already-running synchronous WASM render is not preempted.
+   */
   signal?: AbortSignal;
   onProgress?: (progress: RenderProgress) => void;
 }
@@ -134,8 +144,10 @@ export interface Html2PdfOptions {
   enableLinks?: boolean;
   pagebreak?: CompatPageBreakOptions;
   jsPDF?: CompatJsPdfOptions;
-  html2canvas?: object;
-  image?: { type?: "jpeg" | "png" | "webp"; quality?: number };
+  /** Raster html2canvas configuration is intentionally unsupported. */
+  html2canvas?: never;
+  /** Raster image output configuration is intentionally unsupported. */
+  image?: never;
 }
 
 export type PdfOutputType =

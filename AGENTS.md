@@ -72,6 +72,8 @@ Read these local docs before changing code:
 - `make test-wpt` runs the pinned renderer-native WPT subset.
 - `make test-robustness` runs the deterministic parser mutation corpus, allocation-exhaustion behavior, and a 30-plus-page native PDF gate in `ReleaseSafe`.
 - `npm --prefix bindings/js test` builds the WASM/package and runs the Node package tests.
+- `make test-package-consumer` packs and installs the npm artifact, type-checks
+  Bundler/NodeNext consumers, Vite-builds it, and browser-smokes default assets.
 - `node tests/web/verify_snapshots.mjs` verifies WASM structural snapshots and PDF handles.
 - `make test-react` builds the React integration fixture; `make react` starts its Vite development server after rebuilding WASM and bindings.
 - `make test-browser` runs the browser harness and mounted React-ref preview on Chromium, Firefox, and WebKit.
@@ -99,6 +101,9 @@ Read these local docs before changing code:
 - Preserve the result-handle/context ownership contract in `src/wasm.zig` and ABI version checks in `bindings/js/src/wasm.ts`.
 - Keep PDF preview rendering in `bindings/js/src/preview.ts`; it must remain an in-page canvas component and must not fall back to iframe/object browser PDF plugins.
 - Keep `bindings/js/.browser-build/manifest.json` content-addressed through `prepare-browser-build.mjs`; the test harness must not import mutable unversioned `dist/*.js` modules.
+- Keep `skills/html2realpdf/` and `bindings/js/skills/html2realpdf/`
+  byte-identical; the former is the repository skill and the latter ships in
+  the npm tarball.
 - Serve the built React fixture in Playwright. Vite dev mode exposes raw PDF.js worker modules and is not the release integration path.
 - Use Zig doc comments deliberately: `//!` for module intent and `///` for exported types/functions or private helpers with non-obvious tradeoffs.
 - Documentation should explain why a shape exists, ownership/lifetime constraints, or phase boundaries; do not restate obvious names like `toString` returning a string.

@@ -67,7 +67,9 @@ browser package build copies that file to `dist/LICENSE.md`.
   and resource gates in `ReleaseSafe`.
 - `make test-harfbuzz` isolates the native OpenType shaping test.
 - `npm --prefix bindings/js test` rebuilds WASM, type-checks TypeScript, and
-  runs package/ABI tests including custom TTF registration.
+  runs package/ABI tests including custom TTF registration, then installs the
+  tarball into an isolated TypeScript consumer under Bundler and NodeNext
+  resolution.
 - `node tests/web/verify_snapshots.mjs` verifies structural dumps and real PDF
   output in Node.
 - `tests/web/index.html` is the interactive browser harness for snapshots,
@@ -79,6 +81,8 @@ browser package build copies that file to `dist/LICENSE.md`.
   component ref, controlled state, computed styles, tables, SVG, and canvas.
 - `make test-react` builds the React fixture; `make test-release` runs the full
   Zig, package, snapshot, cross-browser, React, and PDF baseline gate.
+- `make test-package-consumer` additionally Vite-builds the isolated installed
+  tarball and browser-smokes its default Worker, WASM, and PDF.js assets.
 - `make test-browser` runs the browser harness and built React-ref fixture in
   Chromium, Firefox, and WebKit, including compiled CSS Modules,
   styled-components, and Tailwind-style selector fixtures.

@@ -4,6 +4,16 @@ Browser-first HTML to real, selectable PDF rendering powered by Zig and
 WebAssembly. Pages are composed from PDF text, vectors, links, and image
 objects—not full-page screenshots.
 
+## Install
+
+```sh
+npm install @imggion/html2realpdf@next
+```
+
+The package is ESM and includes its TypeScript declarations, Worker, WASM, and
+PDF.js preview assets. Importing it is SSR-safe; rendering requires browser DOM
+APIs. Import values and types only from `@imggion/html2realpdf`.
+
 ## Modern API
 
 ```ts
@@ -61,8 +71,16 @@ const renderer = await createRenderer({
   }],
 });
 
-const pdf = await renderer.render('<p style="font-family: Inter">Hello</p>');
-renderer.dispose();
+try {
+  const pdf = await renderer.render('<p style="font-family: Inter">Hello</p>');
+  try {
+    pdf.download("hello.pdf");
+  } finally {
+    pdf.dispose();
+  }
+} finally {
+  renderer.dispose();
+}
 ```
 
 For a canvas-backed chart, return the chart library's SVG export from the
@@ -85,7 +103,9 @@ rasterizes only that canvas and emits `CANVAS_SUBTREE_RASTERIZED`.
 Other render options include `strict`, `baseUrl`, `resourceResolver`,
 `resourcePolicy`, `enableLinks`, selector-based `pageBreak` rules,
 `AbortSignal`, and progress callbacks. All public signatures are available in
-the generated `index.d.ts`.
+the generated `index.d.ts`. A four-value margin uses
+`[top, left, bottom, right]`. Aborting rejects the caller at snapshot/render
+boundaries, but does not preempt synchronous WASM work already in progress.
 
 ## html2pdf.js compatibility
 
@@ -113,7 +133,7 @@ real-PDF rendering model.
 
 ## Layout profile
 
-The alpha supports report-oriented block/inline/table layout, common CSS box
+The release candidate supports report-oriented block/inline/table layout, common CSS box
 model properties, A4/Letter/custom pages, pagination controls, links, JPEG,
 transparent PNG, per-corner elliptical rounded fills/borders and rounded
 overflow clipping, Noto Sans Latin/Arabic/Hebrew, and registered embeddable TTF
@@ -143,3 +163,18 @@ through `pdf.diagnostics` and can be promoted to errors with `strict: true` or
   inventory is consolidated in `dist/LICENSE.md`, including Noto fonts,
   HarfBuzz, SheenBidi, PDF.js, libunibreak, Unicode data, and adapted Web
   Platform Tests.
+
+## Share without the npm registry
+
+From the repository package directory, create the exact installable artifact:
+
+```sh
+npm pack
+```
+
+Send `imggion-html2realpdf-0.1.0-rc1.tgz` to the consumer. They can reference it
+from a project with `npm install ./imggion-html2realpdf-0.1.0-rc1.tgz`,
+`pnpm add ./imggion-html2realpdf-0.1.0-rc1.tgz`, or
+`yarn add file:./imggion-html2realpdf-0.1.0-rc1.tgz`; no registry publication is
+required. The packaged model instructions live at
+`skills/html2realpdf/SKILL.md` inside the installed module.

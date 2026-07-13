@@ -59,13 +59,18 @@ test("compat worker rejects raster-only stages explicitly", () => {
 });
 
 test("PdfDocument returns defensive byte copies", () => {
-  const pdf = new PdfDocument(new Uint8Array([1, 2, 3]), 1);
+  const pdf = PdfDocument.create(new Uint8Array([1, 2, 3]), 1);
   const first = pdf.toUint8Array();
   first[0] = 9;
   assert.deepEqual([...pdf.toUint8Array()], [1, 2, 3]);
   assert.equal(pdf.toBlob().type, "application/pdf");
   pdf.dispose();
   assert.throws(() => pdf.toUint8Array(), /disposed/);
+});
+
+test("compat worker rejects raster-only options explicitly", () => {
+  assert.throws(() => html2pdf().set({ image: { type: "jpeg" } }), UnsupportedCompatibilityFeatureError);
+  assert.throws(() => html2pdf().set({ html2canvas: {} }), UnsupportedCompatibilityFeatureError);
 });
 
 test("packaged WASM renders a real PDF with a result handle", async () => {

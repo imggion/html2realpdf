@@ -13,8 +13,10 @@
 │   ├── package.json
 │   ├── README.md
 │   ├── scripts/                 build/clean helpers
+│   ├── skills/html2realpdf/     skill shipped in the npm tarball
 │   ├── src/                     typed API, Worker, snapshot, preview, compatibility
 │   └── test/                    Node package and WASM ABI tests
+├── skills/html2realpdf/         repository copy of the model-facing package skill
 ├── scripts/fetch_fonts.sh       pinned, checksum-verified Noto fetch
 ├── src/
 │   ├── assets/fonts/            Latin, Arabic, and Hebrew Noto Sans TTF faces
@@ -50,7 +52,7 @@
 └── tests/
     ├── baselines/               versioned PDFs, Poppler PNGs, metrics, digest verifier
     ├── render_pdf_fixture.mjs    Poppler/visual QA fixture generator
-    ├── react/                    real React-ref integration app
+    ├── react/                    real React-ref integration app and Vite toolchain
     ├── wpt/                      upstream revision and selected-case provenance
     └── web/                      browser harness, complex fixtures, snapshots, Playwright E2E
 ```

@@ -7,12 +7,17 @@ export class PdfDocument {
   private readonly previews = new Set<PdfPreview>();
   private disposed = false;
 
-  constructor(
+  private constructor(
     private readonly data: Uint8Array,
     readonly pageCount: number,
     diagnostics: readonly Diagnostic[] = [],
   ) {
     this.diagnostics = Object.freeze([...diagnostics]);
+  }
+
+  /** @internal */
+  static create(data: Uint8Array, pageCount: number, diagnostics: readonly Diagnostic[] = []): PdfDocument {
+    return new PdfDocument(data, pageCount, diagnostics);
   }
 
   toUint8Array(): Uint8Array {

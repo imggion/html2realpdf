@@ -1,4 +1,4 @@
-.PHONY: debug release wasm run react baseline test test-wpt test-robustness test-harfbuzz test-bidi test-line-break test-format test-js test-react test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
+.PHONY: debug release wasm run react baseline test test-wpt test-robustness test-harfbuzz test-bidi test-line-break test-format test-js test-react test-package-consumer test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
 
 debug:
 	zig build -Doptimize=Debug
@@ -70,6 +70,9 @@ test-js:
 test-react: wasm
 	npm --prefix tests/react run build
 
+test-package-consumer: test-react
+	npm --prefix bindings/js run test:consumer
+
 test-web-snapshots: wasm
 	node tests/web/verify_snapshots.mjs
 
@@ -81,7 +84,7 @@ test-baseline: wasm
 
 test-web: test-web-snapshots test-browser
 
-test-release: test-format test test-js test-react test-web test-baseline
+test-release: test-format test test-js test-react test-package-consumer test-web test-baseline
 
 test-debug: test-debug-tokenizer test-debug-dom test-debug-box
 
@@ -121,6 +124,8 @@ help:
 	@echo "                Check all Zig facade and phase-module formatting"
 	@echo "  make test-react"
 	@echo "                Build the React ref integration app"
+	@echo "  make test-package-consumer"
+	@echo "                Pack, install, type-check, bundle, and browser-smoke the npm artifact"
 	@echo "  make test-js  Build and test the npm package"
 	@echo "  make test-web-snapshots"
 	@echo "                Verify WASM structural snapshots in Node"

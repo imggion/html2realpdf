@@ -1,0 +1,4 @@
+interface:
+  display_name: "html2realpdf"
+  short_description: "Build selectable PDFs from browser HTML"
+  default_prompt: "Use $html2realpdf to integrate typed browser HTML-to-PDF rendering in this project."

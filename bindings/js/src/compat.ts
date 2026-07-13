@@ -19,8 +19,11 @@ export class CompatWorker implements PromiseLike<PdfDocument> {
   }
 
   set(options: Html2PdfOptions): this {
-    if (options.html2canvas && Object.keys(options.html2canvas).length > 0) {
+    if (options.html2canvas !== undefined) {
       throw new UnsupportedCompatibilityFeatureError("html2canvas options");
+    }
+    if (options.image !== undefined) {
+      throw new UnsupportedCompatibilityFeatureError("image options");
     }
     this.options = { ...this.options, ...options };
     this.pdfPromise = undefined;
@@ -62,6 +65,10 @@ export class CompatWorker implements PromiseLike<PdfDocument> {
     return this.save(filename);
   }
 
+  outputPdf(type?: "blob"): Promise<Blob>;
+  outputPdf(type: "arraybuffer"): Promise<ArrayBuffer>;
+  outputPdf(type: StringPdfOutputType): Promise<string>;
+  outputPdf(type: PdfOutputType): Promise<ArrayBuffer | Blob | string>;
   async outputPdf(type: PdfOutputType = "blob"): Promise<ArrayBuffer | Blob | string> {
     const pdf = await this.ensurePdf();
     switch (type) {
@@ -74,11 +81,21 @@ export class CompatWorker implements PromiseLike<PdfDocument> {
     }
   }
 
+  output(type?: "blob", options?: unknown, source?: "pdf"): Promise<Blob>;
+  output(type: "arraybuffer", options?: unknown, source?: "pdf"): Promise<ArrayBuffer>;
+  output(type: StringPdfOutputType, options?: unknown, source?: "pdf"): Promise<string>;
+  output(type: PdfOutputType | undefined, options: unknown, source: "img"): Promise<never>;
+  output(type?: PdfOutputType, options?: unknown, source?: "pdf" | "img"): Promise<ArrayBuffer | Blob | string>;
   output(type?: PdfOutputType, _options?: unknown, source: "pdf" | "img" = "pdf"): Promise<ArrayBuffer | Blob | string> {
     if (source === "img") return Promise.reject(new UnsupportedCompatibilityFeatureError("outputImg"));
-    return this.outputPdf(type);
+    return type === undefined ? this.outputPdf() : this.outputPdf(type);
   }
 
+  export(type?: "blob", options?: unknown, source?: "pdf"): Promise<Blob>;
+  export(type: "arraybuffer", options?: unknown, source?: "pdf"): Promise<ArrayBuffer>;
+  export(type: StringPdfOutputType, options?: unknown, source?: "pdf"): Promise<string>;
+  export(type: PdfOutputType | undefined, options: unknown, source: "img"): Promise<never>;
+  export(type?: PdfOutputType, options?: unknown, source?: "pdf" | "img"): Promise<ArrayBuffer | Blob | string>;
   export(type?: PdfOutputType, options?: unknown, source?: "pdf" | "img"): Promise<ArrayBuffer | Blob | string> {
     return this.output(type, options, source);
   }
@@ -158,7 +175,6 @@ function compatRenderOptions(options: Html2PdfOptions): RenderOptions {
   if (options.margin !== undefined) page.margin = options.margin;
 
   const renderOptions: RenderOptions = { page };
-  if (options.filename !== undefined) renderOptions.filename = options.filename;
   if (options.enableLinks !== undefined) renderOptions.enableLinks = options.enableLinks;
   if (options.pagebreak) {
     const modes = typeof options.pagebreak.mode === "string"
@@ -175,6 +191,8 @@ function compatRenderOptions(options: Html2PdfOptions): RenderOptions {
   }
   return renderOptions;
 }
+
+type StringPdfOutputType = Exclude<PdfOutputType, "arraybuffer" | "blob">;
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
