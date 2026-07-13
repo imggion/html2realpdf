@@ -306,7 +306,7 @@ pub fn layoutWithOptions(
                         .rect = floats.marginRect(rect, child_box.margin),
                         .side = child_box.style.float_direction,
                     });
-                } else if (isBlockLevel(child_box.kind) or (state.web_sizing and child_box.style.clear_direction != .none)) {
+                } else if (box.isBlockLevelBox(child_box) or (state.web_sizing and child_box.style.clear_direction != .none)) {
                     if (state.web_sizing) {
                         const child_break_before = fragmentation.propagatedBefore(state.tree, child_id);
                         var boundary_break = if (sibling_group_fragment_start != null)
@@ -519,13 +519,6 @@ fn updateSiblingGroup(
     if (boundary_break.isAvoid() and group_fragment_start.* != null) return;
     group_fragment_start.* = child_fragment_start;
     group_y.* = child_y;
-}
-
-pub fn isBlockLevel(kind: box.BoxType) bool {
-    return switch (kind) {
-        .block, .listItem, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .tableCaption, .anonymousTableRow => true,
-        else => false,
-    };
 }
 
 fn minimumOuterWidth(state: anytype, box_id: box.BoxId) !f32 {

@@ -1578,6 +1578,18 @@ fn isBlockContainer(kind: BoxType) bool {
     return kind == .block or kind == .listItem or kind == .anonymousBlock or kind == .inlineBlock or kind == .tableCell or kind == .tableCaption;
 }
 
+/// Classifies the external block formatting role of a normalized box.
+///
+/// Replaced elements retain their own box kind, so their computed `display`
+/// value must participate in the decision instead of relying on kind alone.
+pub fn isBlockLevelBox(source: Box) bool {
+    return switch (source.kind) {
+        .block, .listItem, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .tableCaption, .anonymousTableRow => true,
+        .replaced => source.style.display == .block,
+        else => false,
+    };
+}
+
 /// Classifies the external formatting role used by anonymous-box normalization.
 fn isInlineLevelBox(box: Box) bool {
     return switch (box.kind) {

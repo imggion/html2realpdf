@@ -455,17 +455,10 @@ fn resolveFlexMainContribution(source: box.Box, measured: InlineSizes) InlineSiz
 fn hasBlockChildren(tree: *const box.BoxTree, box_id: box.BoxId) bool {
     var child = tree.boxes.items[box_id].first_child;
     while (child) |child_id| {
-        if (isBlockLevel(tree.boxes.items[child_id].kind)) return true;
+        if (box.isBlockLevelBox(tree.boxes.items[child_id])) return true;
         child = tree.boxes.items[child_id].next_sibling;
     }
     return false;
-}
-
-fn isBlockLevel(kind: box.BoxType) bool {
-    return switch (kind) {
-        .block, .listItem, .anonymousBlock, .table, .tableRow, .tableCell, .tableRowGroup, .anonymousTableRow => true,
-        else => false,
-    };
 }
 
 fn resolveChildContribution(source: box.Box, measured: InlineSizes) InlineSizes {

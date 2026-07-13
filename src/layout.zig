@@ -472,7 +472,7 @@ const State = struct {
                 child = child_box.next_sibling;
                 continue;
             }
-            if (block.isBlockLevel(child_box.kind) or (self.web_sizing and child_box.style.float_direction != .none)) return true;
+            if (box.isBlockLevelBox(child_box) or (self.web_sizing and child_box.style.float_direction != .none)) return true;
             child = child_box.next_sibling;
         }
         return false;

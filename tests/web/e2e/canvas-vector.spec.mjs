@@ -130,3 +130,92 @@ test("canvasToSvg fails strictly or uses an explicit scoped raster fallback", as
     }),
   ]);
 });
+
+test("raster canvas remains fully visible inside a nested clipped flex card", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "Chromium is the declared canvas geometry reference");
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const fixture = document.createElement("div");
+    fixture.style.cssText = "width:695.433px;background:#fff";
+    fixture.innerHTML = `
+      <div style="display:grid;grid-template-columns:322.281px 349.141px;grid-template-rows:441.141px;gap:24px;align-items:start">
+        <div style="height:441.141px"></div>
+        <section style="break-inside:avoid">
+          <h2 style="margin:0 0 12px;font:800 20px/1.2 sans-serif;text-align:center">Competency Analysis</h2>
+          <div style="max-width:309.921px;margin:8px auto 0">
+            <div style="overflow:hidden">
+              <div style="display:flex;flex-direction:column;overflow:hidden">
+                <div style="display:none"></div>
+                <div style="display:flex;flex-grow:1;justify-content:center;align-items:center">
+                  <div style="display:flex;width:100%;height:260px;justify-content:center">
+                    <div style="position:relative;width:100%;height:auto">
+                      <canvas width="619" height="520" style="display:block;vertical-align:middle;box-sizing:border-box;width:309.9px;height:260px"></canvas>
+                    </div>
+                  </div>
+                </div>
+                <div style="display:none"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    `;
+    document.body.append(fixture);
+    const canvas = fixture.querySelector("canvas");
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ef4444";
+    context.fillRect(0, 0, canvas.width, canvas.height / 2);
+    context.fillStyle = "#2563eb";
+    context.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
+    const browserRect = canvas.getBoundingClientRect();
+
+    const pdf = await pkg.renderPdf(fixture, {
+      cssProfile: "web",
+      page: { format: [695.433, 600], unit: "px", margin: 0 },
+      viewport: { width: 1200, height: 800 },
+      unsupportedCss: "error",
+      execution: "main",
+    });
+    const bytes = pdf.toUint8Array();
+    const diagnostics = pdf.diagnostics;
+    pdf.dispose();
+    fixture.remove();
+
+    const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+    pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+    const handle = await pdfjs.getDocument({ data: bytes }).promise;
+    const pdfPage = await handle.getPage(1);
+    const viewport = pdfPage.getViewport({ scale: 4 / 3 });
+    const rendered = document.createElement("canvas");
+    rendered.width = Math.ceil(viewport.width);
+    rendered.height = Math.ceil(viewport.height);
+    const renderedContext = rendered.getContext("2d", { willReadFrequently: true });
+    await pdfPage.render({ canvasContext: renderedContext, viewport }).promise;
+    const pixels = renderedContext.getImageData(0, 0, rendered.width, rendered.height).data;
+    let redPixels = 0;
+    let bluePixels = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      const red = pixels[index];
+      const green = pixels[index + 1];
+      const blue = pixels[index + 2];
+      if (red > 180 && green < 130 && blue < 130) redPixels += 1;
+      if (blue > 140 && red < 120 && green < 160) bluePixels += 1;
+    }
+    await handle.destroy();
+    return {
+      browserHeight: browserRect.height,
+      diagnostics,
+      redPixels,
+      bluePixels,
+    };
+  });
+
+  expect(result.diagnostics).toEqual([]);
+  expect(result.browserHeight).toBeCloseTo(260, 1);
+  expect(result.redPixels).toBeGreaterThan(20_000);
+  expect(result.bluePixels).toBeGreaterThan(20_000);
+  expect(result.bluePixels / result.redPixels).toBeGreaterThan(0.9);
+});
