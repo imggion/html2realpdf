@@ -37,6 +37,38 @@ const Match = struct {
     specificity: Specificity,
 };
 
+/// Parses each distinct inline declaration block once per render.
+///
+/// Browser snapshots intentionally repeat identical computed styles across
+/// many nodes. The parsed declarations borrow arena-owned input and parser
+/// memory, so cached slices remain valid for the complete render lifetime.
+const InlineStyleCache = struct {
+    declarations: std.StringHashMapUnmanaged([]const syntax.Declaration) = .empty,
+
+    fn forNode(
+        self: *InlineStyleCache,
+        allocator: std.mem.Allocator,
+        node: dom.Node,
+    ) ![]const syntax.Declaration {
+        const element = switch (node.kind) {
+            .element => |value| value,
+            else => return &.{},
+        };
+        const inline_text = getAttributeValue(element.attributes, "style") orelse return &.{};
+        if (inline_text.len == 0) return &.{};
+        if (self.declarations.get(inline_text)) |cached| return cached;
+
+        const wrapped = try std.fmt.allocPrint(allocator, "*{{{s}}}", .{inline_text});
+        const stylesheet = try parseStylesheet(allocator, wrapped);
+        const parsed: []const syntax.Declaration = if (stylesheet.rules.len == 0)
+            &.{}
+        else
+            stylesheet.rules[0].declarations;
+        try self.declarations.put(allocator, inline_text, parsed);
+        return parsed;
+    }
+};
+
 pub const Context = struct {
     viewport_width: f32 = 800,
     viewport_height: f32 = 600,
@@ -70,8 +102,9 @@ pub fn computeStylesWithContext(
         .viewport_height = context.viewport_height,
         .diagnostics = context.diagnostics,
     };
+    var inline_style_cache = InlineStyleCache{};
 
-    try computeStylesRecursive(document, stylesheets, styles, document.root, null, null, arena, computed_context);
+    try computeStylesRecursive(document, stylesheets, styles, document.root, null, null, arena, computed_context, &inline_style_cache);
 
     return styles;
 }
@@ -85,6 +118,7 @@ fn computeStylesRecursive(
     parent_scope: ?*const variables.Scope,
     scratch: std.mem.Allocator,
     computed_context: computed.Context,
+    inline_style_cache: *InlineStyleCache,
 ) !void {
     const ua_style = box.defaultStyleForNode(document, node_id);
     var style = ua_style;
@@ -160,31 +194,32 @@ fn computeStylesRecursive(
     var node_computed_context = computed_context;
     node_computed_context.parent_style = parent_style;
     node_computed_context.ua_style = &ua_style;
+    const inline_declarations = try inline_style_cache.forNode(scratch, document.nodes.items[node_id]);
 
     const custom_scope = try variables.Scope.create(scratch, parent_scope);
     try applyMatchedCustomProperties(custom_scope, stylesheets, matches.items, false, scratch);
-    try applyInlineCustomProperties(custom_scope, document.nodes.items[node_id], scratch, false);
+    try applyInlineCustomProperties(custom_scope, inline_declarations, scratch, false);
     try applyMatchedCustomProperties(custom_scope, stylesheets, matches.items, true, scratch);
-    try applyInlineCustomProperties(custom_scope, document.nodes.items[node_id], scratch, true);
+    try applyInlineCustomProperties(custom_scope, inline_declarations, scratch, true);
 
     var direction_probe = style;
     try applyMatchedDirection(&direction_probe, stylesheets, matches.items, custom_scope, node_computed_context, false, scratch);
-    try applyInlineDirection(&direction_probe, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, false);
+    try applyInlineDirection(&direction_probe, inline_declarations, custom_scope, node_computed_context, scratch, false);
     try applyMatchedDirection(&direction_probe, stylesheets, matches.items, custom_scope, node_computed_context, true, scratch);
-    try applyInlineDirection(&direction_probe, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, true);
+    try applyInlineDirection(&direction_probe, inline_declarations, custom_scope, node_computed_context, scratch, true);
     node_computed_context.logical_direction = direction_probe.direction;
 
     try applyMatchedDeclarations(&style, stylesheets, matches.items, custom_scope, node_computed_context, false, scratch);
-    try applyInlineStyle(&style, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, false);
+    try applyInlineStyle(&style, inline_declarations, custom_scope, node_computed_context, scratch, false);
     try applyMatchedDeclarations(&style, stylesheets, matches.items, custom_scope, node_computed_context, true, scratch);
-    try applyInlineStyle(&style, document.nodes.items[node_id], custom_scope, node_computed_context, scratch, true);
+    try applyInlineStyle(&style, inline_declarations, custom_scope, node_computed_context, scratch, true);
 
     styles[node_id] = style;
 
     const node = document.nodes.items[node_id];
     var child = node.first_child;
     while (child) |child_id| {
-        try computeStylesRecursive(document, stylesheets, styles, child_id, &style, custom_scope, scratch, computed_context);
+        try computeStylesRecursive(document, stylesheets, styles, child_id, &style, custom_scope, scratch, computed_context, inline_style_cache);
         child = document.nodes.items[child_id].next_sibling;
     }
 }
@@ -210,23 +245,13 @@ fn applyMatchedDirection(
 
 fn applyInlineDirection(
     style: *box.Style,
-    node: dom.Node,
+    declarations: []const syntax.Declaration,
     custom_scope: *const variables.Scope,
     computed_context: computed.Context,
     scratch: std.mem.Allocator,
     important: bool,
 ) !void {
-    const element = switch (node.kind) {
-        .element => |value| value,
-        else => return,
-    };
-    const inline_text = getAttributeValue(element.attributes, "style") orelse return;
-    if (inline_text.len == 0) return;
-
-    const wrapped = try std.fmt.allocPrint(scratch, "*{{{s}}}", .{inline_text});
-    const stylesheet = try parseStylesheet(scratch, wrapped);
-    if (stylesheet.rules.len == 0) return;
-    for (stylesheet.rules[0].declarations) |declaration| {
+    for (declarations) |declaration| {
         if (declaration.important != important or !std.ascii.eqlIgnoreCase(declaration.name, "direction")) continue;
         const resolved = try variables.resolve(scratch, custom_scope, declaration.value) orelse continue;
         try applyDeclaration(computed_context, style, declaration.name, resolved);
@@ -254,24 +279,13 @@ fn applyMatchedDeclarations(
 
 fn applyInlineStyle(
     style: *box.Style,
-    node: dom.Node,
+    declarations: []const syntax.Declaration,
     custom_scope: *const variables.Scope,
     computed_context: computed.Context,
     scratch: std.mem.Allocator,
     important: bool,
 ) !void {
-    const element = switch (node.kind) {
-        .element => |value| value,
-        else => return,
-    };
-    const inline_text = getAttributeValue(element.attributes, "style") orelse return;
-    if (inline_text.len == 0) return;
-
-    const wrapped = try std.fmt.allocPrint(scratch, "*{{{s}}}", .{inline_text});
-    const stylesheet = try parseStylesheet(scratch, wrapped);
-    if (stylesheet.rules.len == 0) return;
-
-    for (stylesheet.rules[0].declarations) |declaration| {
+    for (declarations) |declaration| {
         if (declaration.important != important or isCustomProperty(declaration.name)) continue;
         const resolved = try variables.resolve(scratch, custom_scope, declaration.value) orelse continue;
         try applyCascadedDeclaration(style, declaration.name, resolved, declaration.important, computed_context, scratch);
@@ -340,20 +354,11 @@ fn applyMatchedCustomProperties(
 
 fn applyInlineCustomProperties(
     scope: *variables.Scope,
-    node: dom.Node,
+    declarations: []const syntax.Declaration,
     scratch: std.mem.Allocator,
     important: bool,
 ) !void {
-    const element = switch (node.kind) {
-        .element => |value| value,
-        else => return,
-    };
-    const inline_text = getAttributeValue(element.attributes, "style") orelse return;
-    if (inline_text.len == 0) return;
-    const wrapped = try std.fmt.allocPrint(scratch, "*{{{s}}}", .{inline_text});
-    const stylesheet = try parseStylesheet(scratch, wrapped);
-    if (stylesheet.rules.len == 0) return;
-    for (stylesheet.rules[0].declarations) |declaration| {
+    for (declarations) |declaration| {
         if (declaration.important == important and isCustomProperty(declaration.name)) {
             try scope.set(scratch, declaration.name, declaration.value);
         }

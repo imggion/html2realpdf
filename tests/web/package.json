@@ -8,6 +8,7 @@
     "test:update": "playwright test --update-snapshots"
   },
   "devDependencies": {
-    "@playwright/test": "1.61.1"
+    "@playwright/test": "1.61.1",
+    "html2pdf.js": "0.14.0"
   }
 }

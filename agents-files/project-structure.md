@@ -76,11 +76,25 @@ browser package build copies that file to `dist/LICENSE.md`.
   complex invoice/report generation, embedded canvas preview, download,
   DOM/ref rendering, deterministic media/viewport selection, open Shadow DOM,
   pseudo-elements, SVG charts, canvas-to-SVG charts, canvas alpha, rounded tables, and A4 landscape
-  presentation-style PDFs.
+  presentation-style PDFs. It also compares the same selected fixture with
+  `html2realpdf` and `html2pdf.js` using cold/warm timings and PDF.js content
+  classification, including an exact 30-page mixed-content stress report.
 - `tests/react/` is an isolated Vite/React application that exercises a mounted
-  component ref, controlled state, computed styles, tables, SVG, and canvas.
+  component ref, controlled state, computed styles, tables, SVG, canvas, and
+  the same two-engine benchmark against the live mounted report.
+- `tests/benchmark/benchmark.js` owns the shared measurement boundary,
+  retained download artifacts, byte formatting, and PDF.js classification.
+- `tests/benchmark/stress-report.js` owns the deterministic 30-page report
+  shared by the native HTML and React benchmark surfaces.
 - `make test-react` builds the React fixture; `make test-release` runs the full
   Zig, package, snapshot, cross-browser, React, and PDF baseline gate.
+- `make wasm` and the npm package build use `ReleaseFast` by default. The
+  optional `make wasm-small` / `npm --prefix bindings/js run build:small` path
+  emits the same ABI with `ReleaseSmall` when transfer size matters more than
+  render latency.
+- `make test-verbose` delegates to `make test` through a non-TTY pipe, retaining
+  per-test status lines from direct `zig test` commands while preserving the
+  failing exit status.
 - `make test-package-consumer` additionally Vite-builds the isolated installed
   tarball and browser-smokes its default Worker, WASM, and PDF.js assets.
 - `make test-browser` runs the browser harness and built React-ref fixture in
@@ -88,3 +102,12 @@ browser package build copies that file to `dist/LICENSE.md`.
   styled-components, and Tailwind-style selector fixtures.
 - `make baseline` captures the document-profile PDFs and first-page Poppler
   images; `make test-baseline` rejects byte-level renderer regressions.
+- `.github/workflows/ci.yml` runs `make test-release` for pull requests into
+  `main` and pushes to `main`. A successful main push stores its npm tarball as
+  `npm-package-<commit-sha>`; the manual `publish-npm.yml` workflow publishes
+  only that artifact after checking the package version, latest SemVer tag,
+  main HEAD, and originating CI run. Pushing a tag never publishes by itself.
+- `NPM_TOKEN=... make deploy` is a separate local fallback that builds through
+  the npm `prepack` lifecycle and publishes directly to the public registry.
+  Prerelease versions use `next`, stable versions use `latest`, and local
+  publishing explicitly disables GitHub-only provenance.

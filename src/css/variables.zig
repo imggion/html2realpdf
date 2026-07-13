@@ -45,6 +45,7 @@ pub fn resolve(
     scope: *const Scope,
     value: []const u8,
 ) !?[]const u8 {
+    if (findVarFunction(value, 0) == null) return value;
     var stack = try std.ArrayList([]const u8).initCapacity(allocator, 4);
     defer stack.deinit(allocator);
     return resolveValue(allocator, scope, value, &stack, 0);

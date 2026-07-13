@@ -1,16 +1,18 @@
-name: Release npm package
+name: CI
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -25,7 +27,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Install JavaScript dependencies
@@ -40,24 +41,23 @@ jobs:
           sudo apt-get install --yes poppler-utils
           npm --prefix tests/web exec -- playwright install --with-deps chromium firefox webkit
 
-      - name: Verify tag matches package version
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          PACKAGE_VERSION="$(node -p "require('./bindings/js/package.json').version")"
-          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
-
       - name: Run complete release gate
         run: make test-release
 
-      - name: Publish package
+      - name: Pack validated npm package
+        if: github.event_name == 'push'
         working-directory: bindings/js
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_OUTPUT: ${{ runner.temp }}/npm-package
         run: |
-          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          if [[ "$PACKAGE_VERSION" == *-* ]]; then
-            npm publish --tag next
-          else
-            npm publish
-          fi
+          mkdir -p "$PACKAGE_OUTPUT"
+          npm pack --ignore-scripts --pack-destination "$PACKAGE_OUTPUT"
+
+      - name: Upload validated npm package
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package-${{ github.sha }}
+          path: ${{ runner.temp }}/npm-package/*.tgz
+          if-no-files-found: error
+          retention-days: 90

@@ -23,7 +23,7 @@
         margin: 0;
         min-width: 320px;
       }
-      button { font: inherit; touch-action: manipulation; }
+      button, select { font: inherit; touch-action: manipulation; }
       .page-header {
         background: #10243e;
         color: #fff;
@@ -57,6 +57,15 @@
       button.primary { background: var(--primary); box-shadow: none; color: #fff; }
       button:focus-visible { outline: 2px solid #111; outline-offset: 2px; }
       button:disabled { cursor: not-allowed; opacity: 0.48; }
+      select {
+        background: #fff;
+        border: 1px solid rgba(23, 32, 51, 0.18);
+        border-radius: 9px;
+        color: var(--ink);
+        min-height: 44px;
+        padding: 0 36px 0 12px;
+      }
+      select:focus-visible { outline: 2px solid #111; outline-offset: 2px; }
       .status {
         color: var(--muted);
         font-size: 13px;
@@ -100,6 +109,44 @@
         padding: 18px;
       }
       #package-source h2 { color: #1d4ed8; }
+      .benchmark-controls {
+        align-items: end;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .benchmark-controls label {
+        color: #34425b;
+        display: grid;
+        font-size: 13px;
+        font-weight: 700;
+        gap: 6px;
+        min-width: min(100%, 280px);
+      }
+      .benchmark-note {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+        margin: 12px 0;
+      }
+      .table-scroll { overflow-x: auto; }
+      .benchmark-table {
+        border-collapse: collapse;
+        font-size: 13px;
+        min-width: 760px;
+        width: 100%;
+      }
+      .benchmark-table th,
+      .benchmark-table td {
+        border-bottom: 1px solid var(--line);
+        padding: 11px 10px;
+        text-align: left;
+        vertical-align: middle;
+      }
+      .benchmark-table th { color: #475569; font-size: 12px; }
+      .benchmark-table td[data-metric] { font-variant-numeric: tabular-nums; }
+      .benchmark-table td:last-child { width: 1%; }
+      .benchmark-error { color: #b42318; }
       @media (hover: hover) and (pointer: fine) {
         button:not(:disabled):hover { background: #f5f7fa; }
         button.primary:not(:disabled):hover { background: #1e40af; }
@@ -109,6 +156,7 @@
         main { padding-left: 12px; padding-right: 12px; }
         .panel { border-radius: 10px; padding: 16px; }
         .button-row button { flex: 1 1 100%; }
+        .benchmark-controls > * { flex: 1 1 100%; }
       }
     </style>
   </head>
@@ -169,6 +217,45 @@
         <textarea id="pdf-export" hidden aria-hidden="true"></textarea>
       </section>
 
+      <section class="panel" aria-labelledby="benchmark-title">
+        <div class="panel-heading">
+          <h3>PDF benchmark</h3>
+          <h2 id="benchmark-title">Compare the same document in both engines</h2>
+          <p>Generate both PDFs, download the measured outputs, and compare time, size, and document structure.</p>
+        </div>
+        <div class="benchmark-controls">
+          <label for="benchmark-document">
+            Document
+            <select id="benchmark-document">
+              <option value="invoice">Colored invoice</option>
+              <option value="analytics">Analytics report</option>
+              <option value="operations">Rounded tables</option>
+              <option value="presentation">Presentation deck</option>
+              <option value="stress-30">30-page enterprise stress report</option>
+            </select>
+          </label>
+          <button class="primary" id="benchmark-docs" type="button">Benchmark docs</button>
+        </div>
+        <p class="benchmark-note">First PDF includes renderer initialization; warm render reuses the initialized runtime. html2canvas uses scale 1. PDF.js classifies extractable text as native/selectable and image-only pages as raster PDFs.</p>
+        <p class="status" id="benchmark-status" aria-live="polite">Choose a document to start the benchmark.</p>
+        <div class="table-scroll">
+          <table class="benchmark-table" id="benchmark-results" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Engine</th>
+                <th scope="col">First PDF</th>
+                <th scope="col">Warm render</th>
+                <th scope="col">File size</th>
+                <th scope="col">Pages</th>
+                <th scope="col">Content model</th>
+                <th scope="col">Output</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-heading">
           <h3>Public package API</h3>
@@ -192,6 +279,7 @@
       </section>
     </main>
 
+    <script src="./node_modules/html2pdf.js/dist/html2pdf.bundle.min.js"></script>
     <script type="module">
       import(`./test.js?cache=${Date.now()}`);
     </script>

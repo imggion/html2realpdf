@@ -4,6 +4,17 @@ import {
   presentationDeckHtml,
   roundedOperationsReportHtml,
 } from "./pdf-fixtures.js";
+import {
+  analyzePdf,
+  createPdfArtifact,
+  formatBytes,
+  measure,
+} from "../benchmark/benchmark.js";
+import {
+  STRESS_REPORT_FILENAME,
+  STRESS_REPORT_PAGE_COUNT,
+  thirtyPageStressReportHtml,
+} from "../benchmark/stress-report.js";
 
 const WASM_URL = "../../zig-out/bin/libhtml2realpdf.wasm";
 
@@ -163,6 +174,11 @@ const packageRenderButton = document.querySelector("#package-render");
 const packagePreviewButton = document.querySelector("#package-preview");
 const packageSource = document.querySelector("#package-source");
 const packageCanvas = document.querySelector("#package-canvas");
+const benchmarkDocument = document.querySelector("#benchmark-document");
+const benchmarkDocsButton = document.querySelector("#benchmark-docs");
+const benchmarkStatus = document.querySelector("#benchmark-status");
+const benchmarkResults = document.querySelector("#benchmark-results");
+const benchmarkResultsBody = benchmarkResults.querySelector("tbody");
 
 const packageCanvasContext = packageCanvas.getContext("2d");
 packageCanvasContext.fillStyle = "rgba(29, 78, 216, 0.45)";
@@ -181,6 +197,8 @@ let packageBuildPromise;
 let packageModulePromise;
 let packageRendererPromise;
 let packagePdf;
+let benchmarkPdfJsPromise;
+const benchmarkArtifacts = new Map();
 
 function showOutput(label, text) {
   output.textContent = `--- ${label} ---\n${text}`;
@@ -434,6 +452,20 @@ function getPackageModule() {
   return packageModulePromise;
 }
 
+function getBenchmarkPdfJs() {
+  benchmarkPdfJsPromise ??= getPackageBuild()
+    .then(async ({ buildId, distUrl }) => {
+      const pdfJs = await import(new URL(`${buildId}/vendor/pdf.min.mjs`, distUrl).href);
+      pdfJs.GlobalWorkerOptions.workerSrc = new URL(`${buildId}/vendor/pdf.worker.min.mjs`, distUrl).href;
+      return pdfJs;
+    })
+    .catch((error) => {
+      benchmarkPdfJsPromise = undefined;
+      throw error;
+    });
+  return benchmarkPdfJsPromise;
+}
+
 async function getPackageRenderer() {
   packageRendererPromise ??= Promise.all([getPackageModule(), getPackageBuild()])
     .then(([{ createRenderer }, { wasmUrl }]) => createRenderer({ wasmUrl }))
@@ -491,6 +523,254 @@ function bytesToBase64(bytes) {
     binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 16_384, bytes.length)));
   }
   return btoa(binary);
+}
+
+const benchmarkFixtureCatalog = new Map([
+  ["invoice", {
+    label: "Colored invoice",
+    html: complexInvoiceHtml,
+    filename: "northstar-invoice",
+    page: { format: "a4", margin: [32, 36, 32, 36], unit: "pt" },
+  }],
+  ["analytics", {
+    label: "Analytics report",
+    html: analyticsReportHtml,
+    filename: "northstar-analytics-report",
+    page: { format: "a4", margin: [32, 36, 32, 36], unit: "pt" },
+  }],
+  ["operations", {
+    label: "Rounded tables",
+    html: roundedOperationsReportHtml,
+    filename: "northstar-rounded-operations",
+    page: { format: "a4", margin: [32, 36, 32, 36], unit: "pt" },
+  }],
+  ["presentation", {
+    label: "Presentation deck",
+    html: presentationDeckHtml,
+    filename: "northstar-strategy-deck",
+    page: { format: "a4", orientation: "landscape", margin: [24, 24, 24, 24], unit: "pt" },
+  }],
+  ["stress-30", {
+    label: `${STRESS_REPORT_PAGE_COUNT}-page enterprise stress report`,
+    html: thirtyPageStressReportHtml,
+    filename: STRESS_REPORT_FILENAME,
+    expectedPages: STRESS_REPORT_PAGE_COUNT,
+    page: { format: "a4", margin: [28, 28, 28, 28], unit: "pt" },
+  }],
+]);
+
+function disposeBenchmarkArtifacts() {
+  for (const artifact of benchmarkArtifacts.values()) artifact.dispose();
+  benchmarkArtifacts.clear();
+}
+
+function renderBenchmarkRows(results) {
+  const rows = results.map((result) => {
+    const row = document.createElement("tr");
+    row.dataset.engine = result.id;
+    row.dataset.status = result.error ? "failed" : "complete";
+
+    const engineCell = document.createElement("th");
+    engineCell.scope = "row";
+    engineCell.textContent = result.label;
+    row.append(engineCell);
+
+    for (const [metric, value] of [
+      ["cold", result.error ? "—" : `${result.coldMs.toFixed(1)} ms`],
+      ["warm", result.error ? "—" : `${result.warmMs.toFixed(1)} ms`],
+      ["size", result.error ? "—" : formatBytes(result.size)],
+      ["pages", result.error ? "—" : String(result.analysis.pageCount)],
+    ]) {
+      const cell = document.createElement("td");
+      cell.dataset.metric = metric;
+      if (!result.error) {
+        const numericValue = metric === "cold"
+          ? result.coldMs
+          : metric === "warm"
+            ? result.warmMs
+            : metric === "size"
+              ? result.size
+              : result.analysis.pageCount;
+        cell.dataset.value = String(numericValue);
+      }
+      cell.textContent = value;
+      row.append(cell);
+    }
+
+    const typeCell = document.createElement("td");
+    if (result.error) {
+      typeCell.className = "benchmark-error";
+      typeCell.textContent = `Failed: ${result.error}`;
+    } else {
+      row.dataset.classification = result.analysis.contentModel;
+      typeCell.textContent = result.analysis.contentModel;
+      typeCell.title = `${result.analysis.pageCount} page(s), ${result.analysis.textCharacters} text characters, ${result.analysis.imagePaints} image paints`;
+    }
+    row.append(typeCell);
+
+    const outputCell = document.createElement("td");
+    if (result.artifact) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Download";
+      button.addEventListener("click", () => {
+        result.artifact.download();
+        benchmarkStatus.textContent = `Downloaded ${result.artifact.filename} from the measured bytes.`;
+      });
+      outputCell.append(button);
+    } else {
+      outputCell.textContent = "—";
+    }
+    row.append(outputCell);
+    return row;
+  });
+
+  benchmarkResultsBody.replaceChildren(...rows);
+  benchmarkResults.hidden = results.length === 0;
+}
+
+async function benchmarkHtml2RealPdf(fixture, dependencies) {
+  let renderer;
+  let coldPdf;
+  let warmPdf;
+
+  try {
+    const cold = await measure(async () => {
+      renderer = await dependencies.createRenderer({ wasmUrl: dependencies.wasmUrl });
+      return renderer.render(fixture.html, {
+        page: fixture.page,
+        fallback: "error",
+      });
+    });
+    coldPdf = cold.value;
+    coldPdf.toUint8Array();
+    coldPdf.dispose();
+    coldPdf = undefined;
+
+    const warm = await measure(() => renderer.render(fixture.html, {
+      page: fixture.page,
+      fallback: "error",
+    }));
+    warmPdf = warm.value;
+    const bytes = warmPdf.toUint8Array().slice();
+    const analysis = await analyzePdf(bytes, dependencies.pdfJs);
+    const artifact = createPdfArtifact(bytes, `${fixture.filename}-html2realpdf.pdf`);
+    benchmarkArtifacts.set("html2realpdf", artifact);
+
+    return {
+      id: "html2realpdf",
+      label: "html2realpdf",
+      coldMs: cold.durationMs,
+      warmMs: warm.durationMs,
+      size: bytes.length,
+      analysis,
+      artifact,
+    };
+  } finally {
+    coldPdf?.dispose();
+    warmPdf?.dispose();
+    renderer?.dispose();
+  }
+}
+
+function html2PdfJsOptions(page) {
+  const [top, right, bottom, left] = page.margin;
+  return {
+    margin: [top, left, bottom, right],
+    filename: "benchmark.pdf",
+    image: { type: "jpeg", quality: 0.95 },
+    html2canvas: { scale: 1, useCORS: true },
+    jsPDF: {
+      unit: "pt",
+      format: page.format,
+      orientation: page.orientation ?? "portrait",
+    },
+    pagebreak: { mode: ["css", "legacy"] },
+    enableLinks: true,
+  };
+}
+
+async function renderHtml2PdfJs(html2pdf, fixture) {
+  const output = await html2pdf()
+    .set(html2PdfJsOptions(fixture.page))
+    .from(fixture.html, "string")
+    .outputPdf("arraybuffer");
+  return new Uint8Array(output).slice();
+}
+
+async function benchmarkHtml2PdfJs(fixture, dependencies) {
+  const cold = await measure(() => renderHtml2PdfJs(dependencies.html2pdf, fixture));
+  const warm = await measure(() => renderHtml2PdfJs(dependencies.html2pdf, fixture));
+  const bytes = warm.value;
+  const analysis = await analyzePdf(bytes, dependencies.pdfJs);
+  const artifact = createPdfArtifact(bytes, `${fixture.filename}-html2pdfjs.pdf`);
+  benchmarkArtifacts.set("html2pdfjs", artifact);
+
+  return {
+    id: "html2pdfjs",
+    label: "html2pdf.js",
+    coldMs: cold.durationMs,
+    warmMs: warm.durationMs,
+    size: bytes.length,
+    analysis,
+    artifact,
+  };
+}
+
+async function runPdfBenchmark() {
+  const fixture = benchmarkFixtureCatalog.get(benchmarkDocument.value);
+  if (!fixture) throw new Error(`Unknown benchmark document: ${benchmarkDocument.value}`);
+  if (typeof window.html2pdf !== "function") throw new Error("html2pdf.js did not load from the local test dependency");
+
+  benchmarkDocsButton.disabled = true;
+  benchmarkDocument.disabled = true;
+  benchmarkResults.dataset.runId = String(Date.now());
+  document.documentElement.dataset.benchmarkStatus = "running";
+  disposeBenchmarkArtifacts();
+  renderBenchmarkRows([]);
+
+  try {
+    benchmarkStatus.textContent = "Loading both engines and the PDF analyzer...";
+    const [{ createRenderer }, { wasmUrl }, pdfJs] = await Promise.all([
+      getPackageModule(),
+      getPackageBuild(),
+      getBenchmarkPdfJs(),
+    ]);
+    const dependencies = { createRenderer, wasmUrl, pdfJs, html2pdf: window.html2pdf };
+    const results = [];
+
+    for (const [label, benchmark] of [
+      ["html2realpdf", benchmarkHtml2RealPdf],
+      ["html2pdf.js", benchmarkHtml2PdfJs],
+    ]) {
+      benchmarkStatus.textContent = `Rendering ${fixture.label} with ${label}...`;
+      try {
+        results.push(await benchmark(fixture, dependencies));
+      } catch (error) {
+        results.push({
+          id: label === "html2realpdf" ? "html2realpdf" : "html2pdfjs",
+          label,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      renderBenchmarkRows(results);
+    }
+
+    const successful = results.filter((result) => result.artifact);
+    for (const result of successful) result.artifact.download();
+    const pageMismatch = fixture.expectedPages
+      ? successful.find((result) => result.analysis.pageCount !== fixture.expectedPages)
+      : undefined;
+    document.documentElement.dataset.benchmarkStatus = successful.length > 0 && !pageMismatch ? "complete" : "failed";
+    benchmarkStatus.textContent = pageMismatch
+      ? `${pageMismatch.label} produced ${pageMismatch.analysis.pageCount} pages; expected ${fixture.expectedPages}.`
+      : successful.length === 2
+        ? `Benchmark complete for ${fixture.label}. Both measured PDFs were downloaded.`
+        : `Benchmark finished with ${successful.length} successful engine(s); available PDFs were downloaded.`;
+  } finally {
+    benchmarkDocsButton.disabled = false;
+    benchmarkDocument.disabled = false;
+  }
 }
 
 async function renderFixture(html, metadata, options = {}) {
@@ -1156,8 +1436,18 @@ downloadPdfButton.addEventListener("click", async () => {
   }
 });
 
+benchmarkDocsButton.addEventListener("click", () => {
+  runPdfBenchmark().catch((error) => {
+    document.documentElement.dataset.benchmarkStatus = "failed";
+    benchmarkStatus.textContent = `Benchmark failed: ${error instanceof Error ? error.message : String(error)}`;
+    benchmarkDocsButton.disabled = false;
+    benchmarkDocument.disabled = false;
+  });
+});
+
 window.addEventListener("pagehide", () => {
   disposeActivePreview();
+  disposeBenchmarkArtifacts();
   selectedPdf?.dispose();
   packagePdf?.dispose();
   void packageRendererPromise?.then((renderer) => renderer.dispose());

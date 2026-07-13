@@ -1283,6 +1283,23 @@ test "cascade: custom properties inherit into calc dimensions" {
     try std.testing.expectApproxEqAbs(@as(f32, 180), fixture.styles[card].width.resolve(400).?, 0.001);
 }
 
+test "cascade: cached inline declarations resolve against each node scope" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<div style='--tone:red'><span style='color:var(--tone)'>first</span></div>" ++
+            "<div style='--tone:blue'><span style='color:var(--tone)'>second</span></div>",
+    );
+    defer fixture.deinit(allocator);
+
+    const first_parent = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const second_parent = fixture.document.nodes.items[first_parent].next_sibling.?;
+    const first = fixture.document.nodes.items[first_parent].first_child.?;
+    const second = fixture.document.nodes.items[second_parent].first_child.?;
+    try std.testing.expectEqualStrings("red", fixture.styles[first].color);
+    try std.testing.expectEqualStrings("blue", fixture.styles[second].color);
+}
+
 test "cascade: var fallback survives a custom-property cycle" {
     const allocator = std.testing.allocator;
     var fixture = try cascadeTestHelper(

@@ -8,6 +8,9 @@
 ├── Makefile
 ├── build.zig
 ├── build.zig.zon
+├── .github/
+│   ├── scripts/                 release-tag validation and tests
+│   └── workflows/               main CI and manual npm publication
 ├── assets/                       third-party source support directories
 ├── bindings/js/
 │   ├── package.json
@@ -50,6 +53,7 @@
 │   ├── root.zig                 public Zig exports
 │   └── main.zig                 native executable
 └── tests/
+    ├── benchmark/               shared benchmark helpers and 30-page stress report
     ├── baselines/               versioned PDFs, Poppler PNGs, metrics, digest verifier
     ├── render_pdf_fixture.mjs    Poppler/visual QA fixture generator
     ├── react/                    real React-ref integration app and Vite toolchain

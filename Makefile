@@ -1,4 +1,4 @@
-.PHONY: debug release wasm run react baseline test test-wpt test-robustness test-harfbuzz test-bidi test-line-break test-format test-js test-react test-package-consumer test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
+.PHONY: debug release deploy wasm wasm-small run react baseline test test-verbose test-wpt test-robustness test-harfbuzz test-bidi test-line-break test-format test-js test-react test-package-consumer test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
 
 debug:
 	zig build -Doptimize=Debug
@@ -6,7 +6,38 @@ debug:
 release:
 	zig build -Doptimize=ReleaseFast
 
+deploy:
+	@set -eu; \
+	if [ -z "$${NPM_TOKEN:-}" ]; then \
+		echo "NPM_TOKEN is required. Run: NPM_TOKEN=... make deploy" >&2; \
+		exit 1; \
+	fi; \
+	package_name=$$(env -u NPM_TOKEN node -p "require('./bindings/js/package.json').name"); \
+	version=$$(env -u NPM_TOKEN node -p "require('./bindings/js/package.json').version"); \
+	case "$$version" in \
+		*-*) dist_tag=next ;; \
+		*) dist_tag=latest ;; \
+	esac; \
+	echo "Building $$package_name@$$version through prepack"; \
+	cd bindings/js; \
+	env -u NPM_TOKEN npm run prepack; \
+	umask 077; \
+	npmrc=$$(mktemp); \
+	trap 'rm -f "$$npmrc"' EXIT HUP INT TERM; \
+	printf '%s\n' '//registry.npmjs.org/:_authToken=$${NPM_TOKEN}' > "$$npmrc"; \
+	echo "Publishing $$package_name@$$version with dist-tag $$dist_tag"; \
+	NPM_CONFIG_USERCONFIG="$$npmrc" npm publish \
+		--ignore-scripts \
+		--registry=https://registry.npmjs.org/ \
+		--access public \
+		--tag "$$dist_tag" \
+		--provenance=false
+
 wasm:
+	zig build wasm -Doptimize=ReleaseFast
+	npm --prefix bindings/js run build:bindings
+
+wasm-small:
 	zig build wasm -Doptimize=ReleaseSmall
 	npm --prefix bindings/js run build:bindings
 
@@ -43,6 +74,9 @@ test: test-wpt test-robustness
 	zig build test-bidi
 	zig build test-bidi-integration
 	zig build test-line-break
+
+test-verbose:
+	@bash -o pipefail -c '$(MAKE) test 2>&1 | cat'
 
 test-wpt:
 	zig test src/wpt_subset_test.zig --test-filter "WPT subset"
@@ -104,13 +138,20 @@ help:
 	@echo "Available commands:"
 	@echo "  make debug    Build in Debug mode"
 	@echo "  make release  Build in ReleaseFast mode"
+	@echo "  make deploy   Build and publish the npm package using NPM_TOKEN"
+	@echo "                Prereleases use next; stable versions use latest"
 	@echo "  make wasm     Build WASM and cache-safe browser package runtime"
+	@echo "                Uses ReleaseFast for the default package asset"
+	@echo "  make wasm-small"
+	@echo "                Build the optional size-optimized ReleaseSmall asset"
 	@echo "  make wasm-list-exports"
 	@echo "                Print all WASM ABI exports"
 	@echo "  make run      Run the native CLI app"
 	@echo "  make react    Start the React ref integration app"
 	@echo "  make baseline Capture versioned PDF and PNG baselines"
 	@echo "  make test     Run tests"
+	@echo "  make test-verbose"
+	@echo "                Run tests with retained per-test Zig status lines"
 	@echo "  make test-wpt Run the pinned renderer-native WPT subset"
 	@echo "  make test-robustness"
 	@echo "                Run parser fuzz, allocation, and large-document gates"

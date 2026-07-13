@@ -225,6 +225,93 @@ const SVG_COMPUTED_PROPERTIES = [
   "vector-effect",
   "visibility",
 ] as const;
+
+/** Properties the native cascade inherits without requiring a child declaration. */
+const INHERITED_SNAPSHOT_ELISION = new Set<string>([
+  "color",
+  "font-family",
+  "font-size",
+  "font-style",
+  "font-weight",
+  "letter-spacing",
+  "text-transform",
+  "white-space",
+  "word-break",
+  "word-spacing",
+  "overflow-wrap",
+]);
+
+/** Browser initial values that map exactly to an unmodified native Style. */
+const NATIVE_INITIAL_COMPUTED_VALUES: Readonly<Record<string, readonly string[]>> = {
+  "align-content": ["normal", "stretch"],
+  "align-items": ["normal", "stretch"],
+  "align-self": ["auto"],
+  "aspect-ratio": ["auto"],
+  "background-image": ["none"],
+  "background-position": ["0% 0%"],
+  "background-repeat": ["repeat"],
+  "background-size": ["auto"],
+  "border-bottom-left-radius": ["0px"],
+  "border-bottom-right-radius": ["0px"],
+  "border-bottom-style": ["none"],
+  "border-bottom-width": ["0px"],
+  "border-collapse": ["separate"],
+  "border-left-style": ["none"],
+  "border-left-width": ["0px"],
+  "border-right-style": ["none"],
+  "border-right-width": ["0px"],
+  "border-top-left-radius": ["0px"],
+  "border-top-right-radius": ["0px"],
+  "border-top-style": ["none"],
+  "border-top-width": ["0px"],
+  "box-decoration-break": ["slice"],
+  "box-shadow": ["none"],
+  "box-sizing": ["content-box"],
+  "clear": ["none"],
+  "column-gap": ["normal"],
+  "flex-basis": ["auto"],
+  "flex-direction": ["row"],
+  "flex-grow": ["0"],
+  "flex-shrink": ["1"],
+  "flex-wrap": ["nowrap"],
+  "float": ["none"],
+  "grid-auto-columns": ["auto"],
+  "grid-auto-flow": ["row"],
+  "grid-auto-rows": ["auto"],
+  "grid-column-end": ["auto"],
+  "grid-column-start": ["auto"],
+  "grid-row-end": ["auto"],
+  "grid-row-start": ["auto"],
+  "grid-template-areas": ["none"],
+  "grid-template-columns": ["none"],
+  "grid-template-rows": ["none"],
+  "justify-content": ["normal"],
+  "justify-self": ["auto"],
+  "margin-bottom": ["0px"],
+  "margin-left": ["0px"],
+  "margin-right": ["0px"],
+  "margin-top": ["0px"],
+  "object-fit": ["fill"],
+  "object-position": ["50% 50%"],
+  "opacity": ["1"],
+  "order": ["0"],
+  "overflow": ["visible"],
+  "padding-bottom": ["0px"],
+  "padding-left": ["0px"],
+  "padding-right": ["0px"],
+  "padding-top": ["0px"],
+  "position": ["static"],
+  "row-gap": ["normal"],
+  "text-overflow": ["clip"],
+  "text-shadow": ["none"],
+  "transform": ["none"],
+  "vertical-align": ["baseline"],
+  "z-index": ["auto"],
+};
+
+// Pagination properties deliberately remain explicit, including `auto`.
+// Browser-resolved pseudo selectors such as :last-child can override an
+// authored forced break that the renderer's selector subset cannot replay.
 const SVG_SERIALIZED_STYLE_PROPERTIES = new Set<string>([
   ...SVG_COMPUTED_PROPERTIES,
   "display", "opacity", "transform", "transform-origin", "color", "direction",
@@ -281,7 +368,7 @@ const VECTOR_SVG_UNSUPPORTED_PROPERTIES = [
 const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   ...SUPPORTED_COMPUTED_PROPERTIES,
   "margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left", "border-radius",
-  "border-width", "border-style", "border-color", "background", "page-break-before", "page-break-after",
+  "border-width", "border-style", "border-color", "background", "font", "page-break-before", "page-break-after",
   "page-break-inside", "list-style", "flex", "flex-flow", "gap", "inset", "inset-block", "inset-inline",
   "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end", "orphans", "widows",
   "grid", "grid-template", "grid-column", "grid-row", "grid-area",
@@ -1276,9 +1363,11 @@ async function snapshotElement(
   const removePageMirror = installAuthoredPageMirror(element.ownerDocument);
   const removeFlowDimensionMirrors = installAuthoredFlowDimensionMirrors(element.ownerDocument);
   try {
-    const counters = CounterState.forSnapshotRoot(element, options.includeShadowDom === true);
+    inspectAuthoredCss(element, options, diagnostics);
+    const computedStyles = new SnapshotStyleCache();
+    const counters = CounterState.forSnapshotRoot(element, options.includeShadowDom === true, computedStyles);
     const canvases: CanvasMaterialization[] = [];
-    let clone = cloneSnapshotElement(element, options, diagnostics, true, counters, canvases, canvasOrigins);
+    let clone = cloneSnapshotElement(element, options, diagnostics, true, counters, computedStyles, canvases, canvasOrigins);
 
     clone = await materializeCanvases(clone, canvases, options, diagnostics);
 
@@ -1287,10 +1376,9 @@ async function snapshotElement(
     }
     if (options.enableLinks === false) for (const anchor of clone.querySelectorAll("a[href]")) anchor.removeAttribute("href");
 
-    await materializeInlineSvgs(clone, options, diagnostics);
-    inspectAuthoredCss(clone, options, diagnostics);
+    const materializedInlineSvgs = await materializeInlineSvgs(clone, options, diagnostics);
     await materializeBackgroundImages(clone, options, diagnostics);
-    await materializeImages(clone, options, diagnostics);
+    await materializeImages(clone, options, diagnostics, materializedInlineSvgs);
     const pageStyle = readDefaultPageStyle(element.ownerDocument, options, diagnostics);
     return {
       clone,
@@ -1392,19 +1480,22 @@ function cloneSnapshotElement(
   diagnostics: Diagnostic[],
   isSnapshotRoot: boolean,
   counters: CounterState,
+  computedStyles: SnapshotStyleCache,
   canvases: CanvasMaterialization[],
   canvasOrigins?: WeakMap<HTMLCanvasElement, HTMLCanvasElement>,
+  inheritedStyle?: CSSStyleDeclaration,
 ): Element {
   const leaveCounterScope = counters.enter(original);
   const target = original.cloneNode(false) as Element;
   try {
-    materializeComputedStyle(original, target, options, diagnostics, isSnapshotRoot);
-    materializePseudoElement(original, target, "::before", options, diagnostics, counters);
+    const computed = computedStyles.forElement(original);
+    materializeComputedStyle(original, target, options, diagnostics, isSnapshotRoot, computed, true, inheritedStyle);
+    materializePseudoElement(original, target, "::before", options, diagnostics, counters, computedStyles);
 
     const childRoot = options.includeShadowDom && original.shadowRoot ? original.shadowRoot : original;
-    for (const child of childRoot.childNodes) appendSnapshotNode(target, child, options, diagnostics, counters, canvases, canvasOrigins);
+    for (const child of childRoot.childNodes) appendSnapshotNode(target, child, options, diagnostics, counters, computedStyles, canvases, canvasOrigins, computed);
 
-    materializePseudoElement(original, target, "::after", options, diagnostics, counters);
+    materializePseudoElement(original, target, "::after", options, diagnostics, counters, computedStyles);
     const materialized = materializeLiveState(original, target);
     if (original.localName === "canvas" && materialized.localName === "canvas") {
       canvases.push({
@@ -1426,8 +1517,10 @@ function appendSnapshotNode(
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
   counters: CounterState,
+  computedStyles: SnapshotStyleCache,
   canvases: CanvasMaterialization[],
   canvasOrigins?: WeakMap<HTMLCanvasElement, HTMLCanvasElement>,
+  inheritedStyle?: CSSStyleDeclaration,
 ): void {
   if (source.nodeType === Node.TEXT_NODE) {
     parent.append(parent.ownerDocument.createTextNode(source.textContent ?? ""));
@@ -1440,10 +1533,10 @@ function appendSnapshotNode(
     const slot = element as HTMLSlotElement;
     const assigned = slot.assignedNodes({ flatten: true });
     const nodes = assigned.length > 0 ? assigned : [...slot.childNodes];
-    for (const node of nodes) appendSnapshotNode(parent, node, options, diagnostics, counters, canvases, canvasOrigins);
+    for (const node of nodes) appendSnapshotNode(parent, node, options, diagnostics, counters, computedStyles, canvases, canvasOrigins, inheritedStyle);
     return;
   }
-  parent.append(cloneSnapshotElement(element, options, diagnostics, false, counters, canvases, canvasOrigins));
+  parent.append(cloneSnapshotElement(element, options, diagnostics, false, counters, computedStyles, canvases, canvasOrigins, inheritedStyle));
 }
 
 function forceRequestedMedia(document: Document, mediaType: MediaType, viewport: ViewportOptions): void {
@@ -1577,6 +1670,30 @@ interface CounterNode {
   counters: CounterInstance[];
 }
 
+/** Reuses stable computed declarations across counter and clone traversals. */
+class SnapshotStyleCache {
+  readonly #elements = new Map<Element, CSSStyleDeclaration>();
+  readonly #pseudos = new Map<Element, Partial<Record<"::before" | "::after", CSSStyleDeclaration>>>();
+
+  forElement(element: Element): CSSStyleDeclaration {
+    const cached = this.#elements.get(element);
+    if (cached) return cached;
+    const computed = (element.ownerDocument.defaultView ?? window).getComputedStyle(element);
+    this.#elements.set(element, computed);
+    return computed;
+  }
+
+  forPseudo(element: Element, pseudo: "::before" | "::after"): CSSStyleDeclaration {
+    const cached = this.#pseudos.get(element)?.[pseudo];
+    if (cached) return cached;
+    const computed = (element.ownerDocument.defaultView ?? window).getComputedStyle(element, pseudo);
+    const pseudos = this.#pseudos.get(element) ?? {};
+    pseudos[pseudo] = computed;
+    this.#pseudos.set(element, pseudos);
+    return computed;
+  }
+}
+
 /**
  * Models CSS counter scope over the live tree before pseudo-elements become
  * synthetic text nodes in the flat renderer input.
@@ -1587,13 +1704,15 @@ class CounterState {
   #active: readonly CounterInstance[] = [];
   #lastNode: CounterNode | null = null;
 
-  static forSnapshotRoot(root: Element, includeShadowDom: boolean): CounterState {
-    const state = new CounterState();
+  static forSnapshotRoot(root: Element, includeShadowDom: boolean, computedStyles: SnapshotStyleCache): CounterState {
+    const state = new CounterState(computedStyles);
     const treeRoot = root.ownerDocument.documentElement;
     if (treeRoot?.contains(root)) state.buildElement(treeRoot, null, null, includeShadowDom, false);
     else state.buildElement(root, null, null, includeShadowDom, false);
     return state;
   }
+
+  private constructor(private readonly computedStyles: SnapshotStyleCache) {}
 
   enter(element: Element): () => void {
     const previous = this.#active;
@@ -1629,8 +1748,7 @@ class CounterState {
   ): CounterNode {
     const node = this.createNode(parent, previousSibling);
     this.#elements.set(element, node);
-    const view = element.ownerDocument.defaultView ?? window;
-    const computed = view.getComputedStyle(element);
+    const computed = this.computedStyles.forElement(element);
     const hidden = suppressed || computed.getPropertyValue("display") === "none";
     if (!hidden) applyCounterProperties(node, computed);
     this.#lastNode = node;
@@ -1653,8 +1771,7 @@ class CounterState {
     suppressed: boolean,
   ): CounterNode | null {
     if (suppressed || isReplacedOrControl(element)) return null;
-    const view = element.ownerDocument.defaultView ?? window;
-    const computed = view.getComputedStyle(element, pseudo);
+    const computed = this.computedStyles.forPseudo(element, pseudo);
     const content = computed.getPropertyValue("content").trim();
     if (!content || content === "none" || content === "normal" || computed.getPropertyValue("display") === "none") return null;
     const node = this.createNode(parent, previousSibling);
@@ -1760,6 +1877,8 @@ function materializeComputedStyle(
   diagnostics: Diagnostic[],
   isSnapshotRoot: boolean,
   computedStyle?: CSSStyleDeclaration,
+  preserveAuthoredInsets = false,
+  inheritedStyle?: CSSStyleDeclaration,
 ): void {
   const view = original.ownerDocument.defaultView ?? window;
   const computed = computedStyle ?? view.getComputedStyle(original);
@@ -1798,7 +1917,7 @@ function materializeComputedStyle(
   }
 
   const declarations: string[] = [];
-  const authoredInsets = computedStyle === undefined && position !== "static"
+  const authoredInsets = preserveAuthoredInsets && position !== "static"
     ? authoredInsetOverrides(original, computed, view)
     : undefined;
   const properties = isSvgElement(original)
@@ -1826,6 +1945,7 @@ function materializeComputedStyle(
     // the display list compact while semi-transparent colors retain real PDF
     // alpha through ExtGState.
     if (property === "background-color" && isFullyTransparentColor(value)) continue;
+    if (!isFlowDimension(property) && isRedundantComputedValue(original, property, value, inheritedStyle)) continue;
     if (value) declarations.push(`${property}:${value}`);
   }
   target.setAttribute("style", declarations.join(";"));
@@ -1901,9 +2021,10 @@ function materializePseudoElement(
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
   counters: CounterState,
+  computedStyles: SnapshotStyleCache,
 ): void {
   if (isReplacedOrControl(original)) return;
-  const computed = (original.ownerDocument.defaultView ?? window).getComputedStyle(original, pseudo);
+  const computed = computedStyles.forPseudo(original, pseudo);
   const rawContent = computed.getPropertyValue("content").trim();
   if (!rawContent || rawContent === "none" || rawContent === "normal") return;
   const leaveCounterScope = counters.enterPseudo(original, pseudo);
@@ -1917,7 +2038,7 @@ function materializePseudoElement(
     const synthetic = target.ownerDocument.createElement("span");
     synthetic.dataset.html2realpdfPseudo = pseudo.slice(2);
     synthetic.textContent = content;
-    materializeComputedStyle(original, synthetic, options, diagnostics, false, computed);
+    materializeComputedStyle(original, synthetic, options, diagnostics, false, computed, false, computedStyles.forElement(original));
     target.append(synthetic);
   } finally {
     leaveCounterScope();
@@ -2213,12 +2334,39 @@ function isFullyTransparentColor(value: string): boolean {
   return normalized === "transparent" || /^rgba\([^,]+,[^,]+,[^,]+,0(?:\.0+)?\)$/.test(normalized);
 }
 
+function isRedundantComputedValue(
+  element: Element,
+  property: string,
+  value: string,
+  inheritedStyle?: CSSStyleDeclaration,
+): boolean {
+  const normalized = value.trim();
+  if (!normalized) return true;
+  if (hasNativeUserAgentDefault(element, property)) return false;
+  if (inheritedStyle && INHERITED_SNAPSHOT_ELISION.has(property)) {
+    if (normalized === inheritedStyle.getPropertyValue(property).trim()) return true;
+  }
+  return NATIVE_INITIAL_COMPUTED_VALUES[property]?.includes(normalized) === true;
+}
+
+/** Keeps browser resets that override the renderer's intentional HTML defaults. */
+function hasNativeUserAgentDefault(element: Element, property: string): boolean {
+  const tag = element.localName;
+  if ((property === "margin-top" || property === "margin-bottom") && /^(?:h[1-6]|p|ul|ol)$/.test(tag)) return true;
+  if (property === "font-size" && /^h[1-6]$/.test(tag)) return true;
+  if (property === "font-weight" && tag === "strong") return true;
+  if (property === "font-style" && tag === "em") return true;
+  if (property === "color" && tag === "a") return true;
+  return property === "padding-left" && (tag === "ul" || tag === "ol");
+}
+
 /** Preserves supported inline SVG as vector resources or applies scoped fallback. */
 async function materializeInlineSvgs(
   root: ParentNode,
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
-): Promise<void> {
+): Promise<ReadonlySet<HTMLImageElement>> {
+  const replacements = new Set<HTMLImageElement>();
   const svgs = [...root.querySelectorAll("svg")];
   if (root.nodeType === Node.ELEMENT_NODE && isSvgElement(root as Element) && (root as Element).localName === "svg") {
     svgs.unshift(root as SVGSVGElement);
@@ -2256,6 +2404,7 @@ async function materializeInlineSvgs(
       }
       replacement.alt = svg.getAttribute("aria-label") ?? "";
       svg.replaceWith(replacement);
+      replacements.add(replacement);
     } catch (error) {
       if (error instanceof UnsupportedCssError) throw error;
       if (options.resourcePolicy === "error") throw new ResourceLoadError("inline SVG", { cause: error });
@@ -2267,6 +2416,7 @@ async function materializeInlineSvgs(
       });
     }
   }
+  return replacements;
 }
 
 function serializeVectorSvg(source: SVGSVGElement): string {
@@ -2599,10 +2749,12 @@ async function materializeImages(
   root: ParentNode,
   options: SnapshotOptions,
   diagnostics: Diagnostic[],
+  alreadyMaterialized: ReadonlySet<HTMLImageElement> = new Set(),
 ): Promise<void> {
   const images = [...root.querySelectorAll("img")];
   if (root.nodeType === Node.ELEMENT_NODE && (root as Element).localName === "img") images.unshift(root as HTMLImageElement);
   for (const image of images) {
+    if (alreadyMaterialized.has(image as HTMLImageElement)) continue;
     const source = (image as HTMLImageElement).currentSrc || image.getAttribute("src") || "";
     if (!source) continue;
     if (/^data:image\/svg\+xml;/i.test(source)) {

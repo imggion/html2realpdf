@@ -15,6 +15,7 @@
 - [React](#react)
 - [Preview](#preview)
 - [Page layouts](#page-layouts)
+- [Benchmark](#benchmark)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -135,6 +136,20 @@ const pdf = await renderPdf(postcard, {
 });
 ```
 
+## Benchmark
+
+The browser and React QA fixtures include an interactive comparison with
+`html2pdf.js`. Each run renders the same source through both engines, downloads
+the two warm outputs, and reports first-render time, warm-render time, file
+size, and a PDF.js content classification. The comparison uses html2canvas at
+scale 1 and keeps PDF analysis and downloads outside the measured interval.
+
+Run `make wasm`, serve the repository, and open `tests/web/index.html` to choose
+between the production-style document fixtures, including a deterministic
+30-page stress report with charts, dense tables, diagrams, and narrative
+sections. Run `make react` to benchmark either that same stress report or the
+currently mounted, controlled React report.
+
 ## Contributing
 
 You need Zig `0.16.0`, Node.js `20.16+`, npm, and Make. On a fresh checkout,
@@ -150,7 +165,8 @@ npm ci --prefix tests/web
 | --- | --- |
 | `make test` | Run the Zig and renderer tests |
 | `make release` | Build the native release binary |
-| `make wasm` | Build WebAssembly and the browser package |
+| `make wasm` | Build the default `ReleaseFast` WebAssembly and browser package |
+| `make wasm-small` | Build the optional size-oriented `ReleaseSmall` package asset |
 | `make react` | Start the React integration app |
 | `make test-release` | Run the complete release gate |
 

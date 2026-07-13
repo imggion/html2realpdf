@@ -100,7 +100,9 @@ try {
 Worker execution is the default because synchronous WASM work would otherwise
 occupy the UI thread. Use `execution: "main"` only when Workers are unavailable
 or a controlled environment requires it. Override `wasmUrl` only when a deploy
-cannot serve package-relative assets.
+cannot serve package-relative assets. The published default asset is built with
+`ReleaseFast`. Repository consumers that prioritize transfer size can build the
+same ABI with `npm run build:small` and serve that asset through `wasmUrl`.
 
 ## Render options
 

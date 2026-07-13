@@ -1,7 +1,20 @@
 import { forwardRef, useEffect, useRef, useState } from "react";
 import { createRenderer } from "@imggion/html2realpdf";
+import {
+  analyzePdf,
+  createPdfArtifact,
+  formatBytes,
+  measure,
+} from "../../benchmark/benchmark.js";
 
 const wasmUrl = new URL("../../../bindings/js/dist/libhtml2realpdf.wasm", import.meta.url);
+const pdfJsUrl = new URL("../../../bindings/js/dist/vendor/pdf.min.mjs", import.meta.url);
+const pdfJsWorkerUrl = new URL("../../../bindings/js/dist/vendor/pdf.worker.min.mjs", import.meta.url);
+const liveReportPage = { format: "a4", margin: [30, 36, 30, 36], unit: "pt" };
+const stressReportPage = { format: "a4", margin: [28, 28, 28, 28], unit: "pt" };
+
+let html2PdfJsPromise;
+let pdfJsPromise;
 
 const revenue = [42, 58, 51, 72, 84, 79, 96, 112, 108, 126, 139, 154];
 
@@ -21,6 +34,44 @@ function revenueChartSvg() {
     <path d="${line}" fill="none" stroke="#2563eb" stroke-width="4"/>
     <text x="590" y="22" text-anchor="end" font-size="13" fill="#1e3a8a">Revenue €154k</text>
   </svg>`;
+}
+
+function loadHtml2PdfJs() {
+  html2PdfJsPromise ??= import("html2pdf.js").then((module) => {
+    const html2pdf = module.default ?? module;
+    if (typeof html2pdf !== "function") throw new Error("html2pdf.js did not expose its worker factory");
+    return html2pdf;
+  });
+  return html2PdfJsPromise;
+}
+
+function loadPdfJs() {
+  pdfJsPromise ??= import(/* @vite-ignore */ pdfJsUrl.href).then((pdfJs) => {
+    pdfJs.GlobalWorkerOptions.workerSrc = pdfJsWorkerUrl.href;
+    return pdfJs;
+  });
+  return pdfJsPromise;
+}
+
+function html2PdfJsOptions(page) {
+  const [top, right, bottom, left] = page.margin;
+  return {
+    margin: [top, left, bottom, right],
+    filename: "benchmark.pdf",
+    image: { type: "jpeg", quality: 0.95 },
+    html2canvas: { scale: 1, useCORS: true },
+    jsPDF: { unit: "pt", format: page.format, orientation: page.orientation ?? "portrait" },
+    pagebreak: { mode: ["css", "legacy"] },
+    enableLinks: true,
+  };
+}
+
+async function renderWithHtml2PdfJs(html2pdf, source, page) {
+  const output = await html2pdf()
+    .set(html2PdfJsOptions(page))
+    .from(source)
+    .outputPdf("arraybuffer");
+  return new Uint8Array(output).slice();
 }
 
 function bytesToBase64(bytes) {
@@ -147,6 +198,10 @@ const ReportDocument = forwardRef(function ReportDocument({ customer, period, no
   );
 });
 
+const StressReportDocument = forwardRef(function StressReportDocument({ markup }, ref) {
+  return <article ref={ref} className="stress-report-root" dangerouslySetInnerHTML={{ __html: markup }} />;
+});
+
 export function App() {
   const reportRef = useRef(null);
   const previewRef = useRef(null);
@@ -154,21 +209,207 @@ export function App() {
   const pdfRef = useRef(null);
   const previewControllerRef = useRef(null);
   const pdfExportRef = useRef(null);
+  const benchmarkArtifactsRef = useRef(new Map());
   const [customer, setCustomer] = useState("Acme Europe S.p.A.");
   const [period, setPeriod] = useState("Q2 2026");
   const [note, setNote] = useState("Growth remained broad-based, with email lifecycle producing the strongest conversion efficiency.");
   const [approved, setApproved] = useState(true);
   const [status, setStatus] = useState("Ready. Change the form, then render the mounted React ref.");
   const [rendering, setRendering] = useState(false);
+  const [benchmarking, setBenchmarking] = useState(false);
+  const [benchmarkStatus, setBenchmarkStatus] = useState("Benchmark the mounted report when you are ready.");
+  const [benchmarkResults, setBenchmarkResults] = useState([]);
+  const [documentMode, setDocumentMode] = useState("live");
+  const [loadingStressReport, setLoadingStressReport] = useState(false);
+  const [stressReportFixture, setStressReportFixture] = useState(null);
 
   useEffect(() => () => {
     previewControllerRef.current?.dispose();
     pdfRef.current?.dispose();
     rendererRef.current?.dispose();
+    for (const artifact of benchmarkArtifactsRef.current.values()) artifact.dispose();
+    benchmarkArtifactsRef.current.clear();
   }, []);
+
+  function clearBenchmarkArtifacts() {
+    for (const artifact of benchmarkArtifactsRef.current.values()) artifact.dispose();
+    benchmarkArtifactsRef.current.clear();
+  }
+
+  function getDocumentProfile() {
+    if (documentMode === "stress") {
+      return {
+        page: stressReportPage,
+        filename: stressReportFixture?.filename ?? "northstar-30-page-stress-report",
+        title: "Northstar 30-page enterprise stress report",
+        expectedPages: stressReportFixture?.pageCount ?? 30,
+      };
+    }
+    return {
+      page: liveReportPage,
+      filename: "northstar-react-ref-report",
+      title: `${customer} ${period} performance report`,
+      expectedPages: 1,
+    };
+  }
+
+  async function changeDocumentMode(event) {
+    const nextMode = event.target.value;
+    setDocumentMode(nextMode);
+    previewControllerRef.current?.dispose();
+    previewControllerRef.current = null;
+    pdfRef.current?.dispose();
+    pdfRef.current = null;
+    clearBenchmarkArtifacts();
+    setBenchmarkResults([]);
+    setStatus(nextMode === "stress" ? "Loading the 30-page mounted stress report..." : "Ready to render the live controlled report.");
+
+    if (nextMode !== "stress" || stressReportFixture) return;
+    setLoadingStressReport(true);
+    try {
+      const fixture = await import("../../benchmark/stress-report.js");
+      setStressReportFixture({
+        filename: fixture.STRESS_REPORT_FILENAME,
+        pageCount: fixture.STRESS_REPORT_PAGE_COUNT,
+        markup: `<style>${fixture.stressReportStyles}</style>${fixture.stressReportPagesHtml}`,
+      });
+      setStatus(`Mounted the ${fixture.STRESS_REPORT_PAGE_COUNT}-page stress report. Render or benchmark it when ready.`);
+    } catch (error) {
+      setStatus(`Stress report failed to load: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setLoadingStressReport(false);
+    }
+  }
+
+  async function benchmarkHtml2RealPdf(pdfJs, profile) {
+    let renderer;
+    let coldPdf;
+    let warmPdf;
+
+    try {
+      const cold = await measure(async () => {
+        renderer = await createRenderer({ wasmUrl });
+        return renderer.render(reportRef, {
+          page: profile.page,
+          fallback: "error",
+          canvasFallback: "error",
+          canvasToSvg: ({ canvas }) => canvas.getAttribute("aria-label") === "Revenue chart" ? revenueChartSvg() : null,
+        });
+      });
+      coldPdf = cold.value;
+      coldPdf.toUint8Array();
+      coldPdf.dispose();
+      coldPdf = undefined;
+
+      const warm = await measure(() => renderer.render(reportRef, {
+        page: profile.page,
+        fallback: "error",
+        canvasFallback: "error",
+        canvasToSvg: ({ canvas }) => canvas.getAttribute("aria-label") === "Revenue chart" ? revenueChartSvg() : null,
+      }));
+      warmPdf = warm.value;
+      const bytes = warmPdf.toUint8Array().slice();
+      const analysis = await analyzePdf(bytes, pdfJs);
+      const artifact = createPdfArtifact(bytes, `${profile.filename}-html2realpdf.pdf`);
+      benchmarkArtifactsRef.current.set("html2realpdf", artifact);
+
+      return {
+        id: "html2realpdf",
+        label: "html2realpdf",
+        coldMs: cold.durationMs,
+        warmMs: warm.durationMs,
+        size: bytes.length,
+        analysis,
+        artifact,
+      };
+    } finally {
+      coldPdf?.dispose();
+      warmPdf?.dispose();
+      renderer?.dispose();
+    }
+  }
+
+  async function benchmarkHtml2PdfJs(html2pdf, pdfJs, profile) {
+    const cold = await measure(() => renderWithHtml2PdfJs(html2pdf, reportRef.current, profile.page));
+    const warm = await measure(() => renderWithHtml2PdfJs(html2pdf, reportRef.current, profile.page));
+    const bytes = warm.value;
+    const analysis = await analyzePdf(bytes, pdfJs);
+    const artifact = createPdfArtifact(bytes, `${profile.filename}-html2pdfjs.pdf`);
+    benchmarkArtifactsRef.current.set("html2pdfjs", artifact);
+
+    return {
+      id: "html2pdfjs",
+      label: "html2pdf.js",
+      coldMs: cold.durationMs,
+      warmMs: warm.durationMs,
+      size: bytes.length,
+      analysis,
+      artifact,
+    };
+  }
+
+  async function benchmarkDocs() {
+    if (!reportRef.current) {
+      setBenchmarkStatus("The report ref is not mounted.");
+      return;
+    }
+    if (documentMode === "stress" && !stressReportFixture) {
+      setBenchmarkStatus("Wait for the 30-page stress report to finish loading.");
+      return;
+    }
+
+    const profile = getDocumentProfile();
+    setBenchmarking(true);
+    setBenchmarkStatus("Loading html2pdf.js and the PDF analyzer...");
+    setBenchmarkResults([]);
+    clearBenchmarkArtifacts();
+    document.documentElement.dataset.reactBenchmarkStatus = "running";
+
+    try {
+      const [html2pdf, pdfJs] = await Promise.all([loadHtml2PdfJs(), loadPdfJs()]);
+      const results = [];
+      for (const [id, label, benchmark] of [
+        ["html2realpdf", "html2realpdf", () => benchmarkHtml2RealPdf(pdfJs, profile)],
+        ["html2pdfjs", "html2pdf.js", () => benchmarkHtml2PdfJs(html2pdf, pdfJs, profile)],
+      ]) {
+        setBenchmarkStatus(`Rendering the mounted report with ${label}...`);
+        try {
+          results.push(await benchmark());
+        } catch (error) {
+          results.push({
+            id,
+            label,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        setBenchmarkResults([...results]);
+      }
+
+      const successful = results.filter((result) => result.artifact);
+      for (const result of successful) result.artifact.download();
+      const pageMismatch = successful.find((result) => result.analysis.pageCount !== profile.expectedPages);
+      document.documentElement.dataset.reactBenchmarkStatus = successful.length > 0 && !pageMismatch ? "complete" : "failed";
+      setBenchmarkStatus(pageMismatch
+        ? `${pageMismatch.label} produced ${pageMismatch.analysis.pageCount} pages; expected ${profile.expectedPages}.`
+        : successful.length === 2
+          ? "Benchmark complete. Both measured PDFs were downloaded."
+          : `Benchmark finished with ${successful.length} successful engine(s); available PDFs were downloaded.`);
+    } catch (error) {
+      document.documentElement.dataset.reactBenchmarkStatus = "failed";
+      setBenchmarkStatus(`Benchmark failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBenchmarking(false);
+    }
+  }
+
+  function downloadBenchmarkResult(result) {
+    result.artifact.download();
+    setBenchmarkStatus(`Downloaded ${result.artifact.filename} from the measured bytes.`);
+  }
 
   async function renderReport({ preview = false } = {}) {
     if (!reportRef.current) throw new Error("The report ref is not mounted");
+    const profile = getDocumentProfile();
     setRendering(true);
     setStatus("Snapshotting the mounted React component...");
     try {
@@ -176,8 +417,8 @@ export function App() {
       previewControllerRef.current?.dispose();
       pdfRef.current?.dispose();
       pdfRef.current = await rendererRef.current.render(reportRef, {
-        page: { format: "a4", margin: [30, 36, 30, 36], unit: "pt" },
-        metadata: { title: `${customer} ${period} performance report`, author: "Northstar Analytics" },
+        page: profile.page,
+        metadata: { title: profile.title, author: "Northstar Analytics" },
         fallback: "error",
         canvasFallback: "error",
         canvasToSvg: ({ canvas }) => canvas.getAttribute("aria-label") === "Revenue chart" ? revenueChartSvg() : null,
@@ -204,8 +445,11 @@ export function App() {
       setStatus("Render the React ref before downloading.");
       return;
     }
-    pdfRef.current.download("northstar-react-ref-report.pdf");
+    pdfRef.current.download(`${getDocumentProfile().filename}.pdf`);
   }
+
+  const busy = rendering || benchmarking || loadingStressReport;
+  const liveControlsDisabled = busy || documentMode === "stress";
 
   return (
     <main className="app-shell">
@@ -216,22 +460,76 @@ export function App() {
       </header>
 
       <section className="controls" aria-label="Live React state">
-        <label>Customer<input value={customer} onChange={(event) => setCustomer(event.target.value)} /></label>
-        <label>Period<select value={period} onChange={(event) => setPeriod(event.target.value)}><option>Q1 2026</option><option>Q2 2026</option><option>Q3 2026</option></select></label>
-        <label className="wide-control">Management note<textarea value={note} onChange={(event) => setNote(event.target.value)} rows="2" /></label>
-        <label className="check-control"><input type="checkbox" checked={approved} onChange={(event) => setApproved(event.target.checked)} /> Approved</label>
+        <label className="wide-control">Rendered document<select value={documentMode} onChange={changeDocumentMode} disabled={busy}><option value="live">Live controlled report</option><option value="stress">30-page enterprise stress report</option></select></label>
+        <label>Customer<input value={customer} onChange={(event) => setCustomer(event.target.value)} disabled={liveControlsDisabled} /></label>
+        <label>Period<select value={period} onChange={(event) => setPeriod(event.target.value)} disabled={liveControlsDisabled}><option>Q1 2026</option><option>Q2 2026</option><option>Q3 2026</option></select></label>
+        <label className="wide-control">Management note<textarea value={note} onChange={(event) => setNote(event.target.value)} rows="2" disabled={liveControlsDisabled} /></label>
+        <label className="check-control"><input type="checkbox" checked={approved} onChange={(event) => setApproved(event.target.checked)} disabled={liveControlsDisabled} /> Approved</label>
         <div className="actions">
-          <button type="button" onClick={() => renderReport()} disabled={rendering}>Render ref</button>
-          <button className="primary" type="button" onClick={() => renderReport({ preview: true })} disabled={rendering}>Render and preview</button>
-          <button type="button" onClick={downloadReport} disabled={rendering}>Download</button>
+          <button type="button" onClick={() => renderReport()} disabled={busy}>Render ref</button>
+          <button className="primary" type="button" onClick={() => renderReport({ preview: true })} disabled={busy}>Render and preview</button>
+          <button type="button" onClick={downloadReport} disabled={busy}>Download</button>
+          <button type="button" onClick={benchmarkDocs} disabled={busy}>{benchmarking ? "Benchmarking…" : "Benchmark docs"}</button>
         </div>
         <p className="status" aria-live="polite">{status}</p>
       </section>
 
+      <section className="benchmark-panel" aria-labelledby="react-benchmark-title">
+        <div>
+          <p className="app-kicker">PDF benchmark</p>
+          <h2 id="react-benchmark-title">Same mounted report, two renderers</h2>
+          <p className="benchmark-note">First PDF includes renderer initialization; warm render reuses the initialized runtime. html2canvas uses scale 1. PDF.js distinguishes selectable text from image-only PDF pages.</p>
+        </div>
+        <p className="status" aria-live="polite">{benchmarkStatus}</p>
+        {benchmarkResults.length > 0 ? (
+          <div className="benchmark-table-scroll">
+            <table className="benchmark-table" id="react-benchmark-results">
+              <thead>
+                <tr>
+                  <th scope="col">Engine</th>
+                  <th scope="col">First PDF</th>
+                  <th scope="col">Warm render</th>
+                  <th scope="col">File size</th>
+                  <th scope="col">Pages</th>
+                  <th scope="col">Content model</th>
+                  <th scope="col">Output</th>
+                </tr>
+              </thead>
+              <tbody>
+                {benchmarkResults.map((result) => (
+                  <tr
+                    key={result.id}
+                    data-engine={result.id}
+                    data-status={result.error ? "failed" : "complete"}
+                    data-classification={result.analysis?.contentModel}
+                  >
+                    <th scope="row">{result.label}</th>
+                    <td data-metric="cold" data-value={result.error ? undefined : result.coldMs}>{result.error ? "—" : `${result.coldMs.toFixed(1)} ms`}</td>
+                    <td data-metric="warm" data-value={result.error ? undefined : result.warmMs}>{result.error ? "—" : `${result.warmMs.toFixed(1)} ms`}</td>
+                    <td data-metric="size" data-value={result.error ? undefined : result.size}>{result.error ? "—" : formatBytes(result.size)}</td>
+                    <td data-metric="pages" data-value={result.error ? undefined : result.analysis.pageCount}>{result.error ? "—" : result.analysis.pageCount}</td>
+                    <td className={result.error ? "benchmark-error" : undefined} title={result.analysis ? `${result.analysis.pageCount} page(s), ${result.analysis.textCharacters} text characters, ${result.analysis.imagePaints} image paints` : undefined}>
+                      {result.error ? `Failed: ${result.error}` : result.analysis.contentModel}
+                    </td>
+                    <td>{result.artifact ? <button type="button" onClick={() => downloadBenchmarkResult(result)} disabled={benchmarking}>Download</button> : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+
       <section className="comparison">
         <div>
-          <h2>Mounted React DOM</h2>
-          <div className="document-stage"><ReportDocument ref={reportRef} customer={customer} period={period} note={note} approved={approved} /></div>
+          <h2>{documentMode === "stress" ? "Mounted 30-page React DOM" : "Mounted React DOM"}</h2>
+          <div className="document-stage">
+            {documentMode === "stress"
+              ? stressReportFixture
+                ? <StressReportDocument ref={reportRef} markup={stressReportFixture.markup} />
+                : <p>Loading the stress report fixture...</p>
+              : <ReportDocument ref={reportRef} customer={customer} period={period} note={note} approved={approved} />}
+          </div>
         </div>
         <div>
           <h2>Generated PDF canvas</h2>

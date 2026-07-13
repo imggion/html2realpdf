@@ -53,6 +53,12 @@
 - Framework-agnostic interactive checks stay in `tests/web`; the real mounted
   React-ref fixture stays in `tests/react`; Node ABI/package tests stay in
   `bindings/js/test`; PDF render artifacts stay ignored under `tmp/pdfs`.
+- Timing, PDF.js content classification, and retained Blob download ownership
+  shared by the native and React benchmark surfaces live in `tests/benchmark/`.
+  The deterministic 30-page stress report also lives there so both surfaces
+  render the same generated markup and page contract.
+  Engine-specific adapters remain with their fixture because HTML strings and
+  mounted React refs have different lifecycles.
 - Packed npm artifact installation, TypeScript resolution, Vite bundling, and
   the default Worker/WASM/PDF.js browser smoke live in
   `bindings/js/scripts/verify-package.mjs`.

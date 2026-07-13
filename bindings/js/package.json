@@ -20,6 +20,7 @@
   "scripts": {
     "clean": "node ./scripts/clean.mjs",
     "build": "node ./scripts/build.mjs && tsc -p tsconfig.json && node ./scripts/prepare-browser-build.mjs",
+    "build:small": "node ./scripts/build.mjs --release-small && tsc -p tsconfig.json && node ./scripts/prepare-browser-build.mjs",
     "build:bindings": "node ./scripts/build.mjs --skip-wasm-build && tsc -p tsconfig.json && node ./scripts/prepare-browser-build.mjs",
     "test": "npm run build && node --test ./test/*.test.mjs && node ./scripts/verify-package.mjs --types-only",
     "test:consumer": "npm run build && node ./scripts/verify-package.mjs",

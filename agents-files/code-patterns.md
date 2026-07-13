@@ -146,6 +146,18 @@
   do not reintroduce iframe, object, embed, or browser-plugin preview paths.
 - The browser harness must resolve the package through the generated hashed
   runtime manifest so nested ESM modules cannot survive a rebuild from cache.
+- Benchmark both engines serially from the same source and page profile. Time
+  through final PDF byte serialization, but classify with PDF.js and trigger
+  downloads after the measured interval. Keep exact timings and sizes out of
+  assertions because they are machine-dependent.
+- Keep computed snapshots sparse only where omission is semantically exact:
+  initial native values for that element and parent values copied by the native
+  cascade. Preserve browser resets that override renderer UA defaults. Resolved
+  page and break properties stay explicit because browser-only selectors may
+  have overridden a broader authored pagination rule.
+- The core cascade caches each distinct inline declaration block for the render
+  arena lifetime. Reuse the parsed declarations without changing specificity,
+  custom-property, direction, normal, or important ordering.
 - `PdfDocument.dispose()` owns previews created from that document. Preview
   controls must retain keyboard focus states and 44px touch targets.
 - The default export should preserve common html2pdf.js PDF chains while
