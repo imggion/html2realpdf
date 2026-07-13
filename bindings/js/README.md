@@ -278,14 +278,14 @@ Blob URL outputs remain owned by the cached `PdfDocument`. Retrieve it with
 ## Share without the npm registry
 
 Run `npm pack` from this package directory and send the generated
-`imggion-html2realpdf-0.1.0-rc1.tgz` file. A consumer can install it with:
+`imggion-html2realpdf-0.1.0-rc2.tgz` file. A consumer can install it with:
 
 ```sh
-npm install ./imggion-html2realpdf-0.1.0-rc1.tgz
+npm install ./imggion-html2realpdf-0.1.0-rc2.tgz
 # or
-pnpm add ./imggion-html2realpdf-0.1.0-rc1.tgz
+pnpm add ./imggion-html2realpdf-0.1.0-rc2.tgz
 # or
-yarn add file:./imggion-html2realpdf-0.1.0-rc1.tgz
+yarn add file:./imggion-html2realpdf-0.1.0-rc2.tgz
 ```
 
 The packaged model instructions live at `skills/html2realpdf/SKILL.md`.
