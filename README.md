@@ -2,6 +2,12 @@
   <h1>html2realpdf</h1>
   <p><strong>A real PDF, not a screenshot.</strong></p>
   <p>
+    <a href="https://github.com/imggion/html2realpdf/releases/tag/0.1.0-rc2"><img src="https://img.shields.io/badge/release-0.1.0--rc2-2ea44f?style=flat-square" alt="Latest release: 0.1.0-rc2"></a>
+    <img src="https://img.shields.io/badge/-zig-f39b34?style=flat-square&amp;logo=zig&amp;logoColor=white" alt="Zig">
+    <img src="https://img.shields.io/badge/-WASM-654ff0?style=flat-square&amp;logo=webassembly&amp;logoColor=white" alt="WebAssembly">
+    <img src="https://img.shields.io/badge/-TypeScript-3178c6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript">
+  </p>
+  <p>
     Generate selectable, searchable, vector-based PDFs from HTML in the browser.<br>
     Written in Zig, compiled to WebAssembly, and packaged with a typed TypeScript API.
   </p>

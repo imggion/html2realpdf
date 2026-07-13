@@ -32,3 +32,6 @@ tests/web/node_modules/
 # Local PDF render verification artifacts
 tmp/
 output/
+
+# garbage
+.DS_Store
