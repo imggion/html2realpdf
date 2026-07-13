@@ -107,6 +107,7 @@ Read these local docs before changing code:
 - Serve the built React fixture in Playwright. Vite dev mode exposes raw PDF.js worker modules and is not the release integration path.
 - Use Zig doc comments deliberately: `//!` for module intent and `///` for exported types/functions or private helpers with non-obvious tradeoffs.
 - Documentation should explain why a shape exists, ownership/lifetime constraints, or phase boundaries; do not restate obvious names like `toString` returning a string.
+- Keep public TypeScript bindings documented with concise English TSDoc that records defaults, precedence, lifecycle, ownership, and fallback behavior; comment internal helpers only for non-obvious contracts.
 - Keep doc examples tiny and only when they make usage faster to understand.
 - Use DRY deliberately; extract shared logic only when duplication is real and the abstraction improves readability.
 - Preserve clear runtime boundaries between native CLI code, reusable tokenizer/library code, and WASM exports.

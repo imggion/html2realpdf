@@ -1,10 +1,24 @@
+/**
+ * Shadow-DOM PDF preview backed by package-relative PDF.js assets.
+ *
+ * @packageDocumentation
+ */
+
+/** Display and rendering limits for `PdfDocument.preview`. */
 export interface PdfPreviewOptions {
+  /** Initial zoom or automatic fit. Defaults to `fit-width`. */
   initialScale?: number | "fit-width";
+  /** Lowest permitted zoom. Defaults to `0.25` and is never below `0.1`. */
   minScale?: number;
+  /** Highest permitted zoom. Defaults to `3` and is never below `minScale`. */
   maxScale?: number;
+  /** Zoom-button increment. Defaults to `0.25` and is never below `0.05`. */
   zoomStep?: number;
+  /** Device-pixel-ratio cap used for page canvases. Defaults to `2`. */
   maxPixelRatio?: number;
+  /** Accessible label for the preview region. Defaults to `PDF preview`. */
   ariaLabel?: string;
+  /** Called after each page canvas completes rendering. */
   onProgress?: (completedPages: number, totalPages: number) => void;
 }
 
@@ -140,6 +154,7 @@ const VIEWER_STYLES = `
 
 let pdfJsModule: Promise<PdfJsModule> | undefined;
 
+/** Lazily loads one shared PDF.js module while keeping preview assets relocatable. */
 async function loadPdfJs(): Promise<PdfJsModule> {
   pdfJsModule ??= import(/* @vite-ignore */ new URL("./vendor/pdf.min.mjs", import.meta.url).href)
     .then((module: unknown) => {
@@ -154,7 +169,16 @@ async function loadPdfJs(): Promise<PdfJsModule> {
   return pdfJsModule;
 }
 
+/**
+ * Interactive canvas preview created and owned by a `PdfDocument`.
+ *
+ * @remarks
+ * The viewer replaces the target's children with one isolated Shadow DOM
+ * subtree. Dispose it to cancel rendering, destroy PDF.js state, and clear the
+ * target. Construct previews through `PdfDocument.preview`.
+ */
 export class PdfPreview {
+  /** Host element inserted into the preview target. */
   readonly element: HTMLElement;
 
   private readonly shadow: ShadowRoot;
@@ -256,10 +280,12 @@ export class PdfPreview {
     }
   }
 
+  /** Current logical PDF.js scale after option clamping. */
   get currentScale(): number {
     return this.scale;
   }
 
+  /** Sets a clamped scale and rerenders every page canvas. */
   async setScale(value: number): Promise<void> {
     this.assertActive();
     const next = clamp(value, this.minScale, this.maxScale);
@@ -268,6 +294,7 @@ export class PdfPreview {
     await this.renderPages();
   }
 
+  /** Fits the first page to the available viewer width and rerenders all pages. */
   async fitToWidth(): Promise<void> {
     this.assertActive();
     const pdf = this.document;
@@ -280,6 +307,7 @@ export class PdfPreview {
     await this.renderPages();
   }
 
+  /** Cancels active work, destroys PDF.js state, and clears the target. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -312,6 +340,10 @@ export class PdfPreview {
     await this.renderPages();
   }
 
+  /**
+   * Renders pages serially so progress, cancellation, and memory use remain
+   * deterministic across browsers.
+   */
   private async renderPages(): Promise<void> {
     const pdf = this.document;
     if (!pdf) return;

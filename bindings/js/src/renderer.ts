@@ -1,3 +1,9 @@
+/**
+ * Renderer factories, execution backends, and per-render pipeline ownership.
+ *
+ * @packageDocumentation
+ */
+
 import { UnsupportedEnvironmentError, WasmRenderError } from "./errors.js";
 import { normalizePage, type NormalizedPage } from "./page.js";
 import { PdfDocument } from "./pdf-document.js";
@@ -5,11 +11,13 @@ import { snapshotSource, type SnapshotOptions, type SnapshotPageMarginBox, type 
 import type { CssProfile, FontRegistration, HtmlSource, PageBreakRules, PdfMetadata, RendererInit, RenderOptions } from "./types.js";
 import { WasmBridge, type WasmRenderResult } from "./wasm.js";
 
+/** Common ownership boundary for main-thread and Worker WASM contexts. */
 interface Backend {
   render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult>;
   dispose(): void;
 }
 
+/** Executes the synchronous bridge on the caller's browser thread. */
 class MainThreadBackend implements Backend {
   constructor(private readonly bridge: WasmBridge) {}
 
@@ -23,12 +31,14 @@ class MainThreadBackend implements Backend {
   }
 }
 
+/** Caller state retained while a Worker render is in flight. */
 interface PendingRender {
   resolve: (result: WasmRenderResult) => void;
   reject: (error: unknown) => void;
   removeAbort?: () => void;
 }
 
+/** Owns a module Worker and routes concurrent results by request identifier. */
 class WorkerBackend implements Backend {
   private readonly worker: Worker;
   private readonly pending = new Map<number, PendingRender>();
@@ -121,6 +131,14 @@ class WorkerBackend implements Backend {
   }
 }
 
+/**
+ * Reusable renderer backed by one Worker or main-thread WASM context.
+ *
+ * @remarks
+ * Create instances with `createRenderer`. Fonts and execution mode belong to
+ * the renderer lifetime; each returned `PdfDocument` has its own shorter
+ * lifetime. Call `dispose` when the renderer is no longer needed.
+ */
 export class Html2RealPdf {
   private disposed = false;
 
@@ -131,6 +149,13 @@ export class Html2RealPdf {
     return new Html2RealPdf(backend);
   }
 
+  /**
+   * Snapshots browser state and renders one PDF.
+   *
+   * @throws {@link InvalidSourceError} when a ref is null or the source shape is invalid.
+   * @throws {@link UnsupportedCssError} when strict CSS or fallback policy rejects input.
+   * @throws {@link ResourceLoadError} when required resources cannot be materialized.
+   */
   async render(source: HtmlSource, options: RenderOptions = {}): Promise<PdfDocument> {
     if (this.disposed) throw new Error("Renderer has been disposed");
     if (options.signal?.aborted) throw abortReason(options.signal);
@@ -175,6 +200,7 @@ export class Html2RealPdf {
     return PdfDocument.create(rendered.bytes, rendered.pageCount, [...snapshot.diagnostics, ...rendered.diagnostics]);
   }
 
+  /** Terminates the owned backend and rejects future renders. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -182,6 +208,23 @@ export class Html2RealPdf {
   }
 }
 
+/**
+ * Creates a reusable renderer with explicit backend and font ownership.
+ *
+ * @example
+ * ```ts
+ * const renderer = await createRenderer({ fonts });
+ * try {
+ *   const pdf = await renderer.render(element);
+ *   try { pdf.download("report.pdf"); } finally { pdf.dispose(); }
+ * } finally {
+ *   renderer.dispose();
+ * }
+ * ```
+ *
+ * @throws {@link UnsupportedEnvironmentError} outside a browser or when the
+ * requested execution backend is unavailable.
+ */
 export async function createRenderer(init: RendererInit = {}): Promise<Html2RealPdf> {
   if (typeof window === "undefined") throw new UnsupportedEnvironmentError();
   if (init.execution !== "main" && typeof Worker === "undefined") {
@@ -196,6 +239,21 @@ export async function createRenderer(init: RendererInit = {}): Promise<Html2Real
 
 let defaultRenderer: Promise<Html2RealPdf> | undefined;
 
+/**
+ * Renders with a lazily created package-default Worker renderer.
+ *
+ * @remarks
+ * The default renderer is cached for the application lifetime and cannot be
+ * configured with custom fonts. Use `createRenderer` when deterministic
+ * backend disposal or renderer-level configuration is required. The returned
+ * document must still be disposed by the caller.
+ *
+ * @example
+ * ```ts
+ * const pdf = await renderPdf(document.querySelector("#invoice")!);
+ * try { pdf.download("invoice.pdf"); } finally { pdf.dispose(); }
+ * ```
+ */
 export async function renderPdf(source: HtmlSource, options: RenderOptions = {}): Promise<PdfDocument> {
   defaultRenderer ??= createRenderer().catch((error: unknown) => {
     defaultRenderer = undefined;

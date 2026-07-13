@@ -1,7 +1,15 @@
+/**
+ * Browser snapshot boundary that converts live or inert HTML into deterministic,
+ * self-contained renderer input.
+ *
+ * @packageDocumentation
+ */
+
 import { CanvasToSvgError, InvalidSourceError, ResourceLoadError, UnsupportedCssError, UnsupportedEnvironmentError } from "./errors.js";
 import type { CanvasFallbackPolicy, CanvasToSvg, CssProfile, Diagnostic, FallbackPolicy, HtmlSource, MediaType, ResourceResolver, UnsupportedCssPolicy, ViewportOptions } from "./types.js";
 import type { NormalizedPage } from "./page.js";
 
+/** Internal snapshot policy derived from public per-render options. */
 export interface SnapshotOptions {
   baseUrl?: string | URL;
   resourcePolicy: "error" | "omit";
@@ -18,19 +26,27 @@ export interface SnapshotOptions {
   enableLinks?: boolean;
 }
 
+/** Self-contained HTML plus browser-derived paged-media state and diagnostics. */
 export interface SnapshotResult {
+  /** Sanitized HTML with browser state and resources materialized. */
   html: string;
+  /** Non-fatal decisions made while producing the snapshot. */
   diagnostics: Diagnostic[];
+  /** Default `@page` geometry, when resolved from the source. */
   page?: NormalizedPage;
+  /** Default margin-box templates captured before native pagination. */
   pageMarginBoxes?: readonly SnapshotPageMarginBox[];
+  /** Named and pseudo-page rules retained for page-aware native selection. */
   pageRules?: readonly SnapshotPageRule[];
 }
 
+/** Maps a cloned canvas back to the original canvas used by export adapters. */
 interface CanvasMaterialization {
   source: HTMLCanvasElement;
   target: HTMLCanvasElement;
 }
 
+/** Browser-resolved `@page` selector, geometry, precedence, and margin content. */
 export interface SnapshotPageRule {
   name?: string;
   first?: boolean;
@@ -51,12 +67,14 @@ export interface SnapshotPageRule {
   marginBoxes?: readonly SnapshotPageMarginBox[];
 }
 
+/** Stable ABI names for supported CSS paged-media margin slots. */
 export type SnapshotPageMarginBoxName =
   | "top_left_corner" | "top_left" | "top_center" | "top_right" | "top_right_corner"
   | "right_top" | "right_middle" | "right_bottom"
   | "bottom_right_corner" | "bottom_right" | "bottom_center" | "bottom_left" | "bottom_left_corner"
   | "left_bottom" | "left_middle" | "left_top";
 
+/** Generated margin-box text and the supported style subset sent to WASM. */
 export interface SnapshotPageMarginBox {
   name: SnapshotPageMarginBoxName;
   content: string;
@@ -270,6 +288,13 @@ const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   "place-content", "place-items", "place-self",
 ]);
 
+/**
+ * Selects the inert-string or live-element snapshot path.
+ *
+ * @remarks
+ * A requested viewport or print media environment isolates even mounted
+ * elements so media queries can be evaluated without mutating the source page.
+ */
 export async function snapshotSource(source: HtmlSource, options: SnapshotOptions): Promise<SnapshotResult> {
   if (typeof window === "undefined" || typeof Element === "undefined") throw new UnsupportedEnvironmentError();
   if (typeof source === "string") return snapshotHtmlString(source, options);
@@ -283,6 +308,7 @@ export async function snapshotSource(source: HtmlSource, options: SnapshotOption
   return { html: clone.outerHTML, diagnostics, ...(page ? { page } : {}), ...(pageMarginBoxes ? { pageMarginBoxes } : {}), ...(pageRules ? { pageRules } : {}) };
 }
 
+/** Clones an element and its selector context into an off-screen media environment. */
 async function snapshotElementInEnvironment(element: Element, options: SnapshotOptions): Promise<SnapshotResult> {
   const viewport = options.viewport ?? { width: window.innerWidth || 1280, height: window.innerHeight || 720 };
   const iframe = createSnapshotFrame(viewport);
@@ -410,6 +436,10 @@ const PAGE_MARGIN_BOX_NAMES = new Map<string, SnapshotPageMarginBoxName>([
   ["left-middle", "left_middle"], ["left-top", "left_top"],
 ]);
 
+/**
+ * Resolves default, named, and pseudo `@page` rules while retaining CSS
+ * importance for the native page-selector cascade.
+ */
 function readDefaultPageStyle(document: Document, options: SnapshotOptions, diagnostics: Diagnostic[]): PageStyleResult {
   const cascade: PageCascade = {};
   const marginCascades = new Map<SnapshotPageMarginBoxName, MarginBoxCascade>();
@@ -1053,6 +1083,10 @@ function serializeAccessibleStylesheets(source: Document): string {
   return output.join("\n");
 }
 
+/**
+ * Mirrors the authored `page` property before computed styles erase whether a
+ * named page was explicitly selected. The returned cleanup restores inline CSS.
+ */
 function installAuthoredPageMirror(document: Document): () => void {
   const view = document.defaultView ?? window;
   const rules: string[] = [`*{${AUTHORED_PAGE_MIRROR}:auto}`];
@@ -1109,6 +1143,10 @@ function collectAuthoredPageMirrorRules(rules: CSSRuleList, view: Window, output
   }
 }
 
+/**
+ * Preserves whether normal-flow dimensions were authored so browser used values
+ * do not accidentally freeze otherwise reflowable PDF geometry.
+ */
 function installAuthoredFlowDimensionMirrors(document: Document): () => void {
   const view = document.defaultView ?? window;
   const reset = Object.values(AUTHORED_FLOW_DIMENSION_MIRRORS)
@@ -1219,6 +1257,10 @@ function synchronizeEnvironmentState(original: Element, clone: Element): void {
   }
 }
 
+/**
+ * Clones one mounted subtree without mutating it, then materializes browser-only
+ * state and resources in stable document order.
+ */
 async function snapshotElement(
   element: Element,
   options: SnapshotOptions,
@@ -1263,6 +1305,10 @@ async function snapshotElement(
   }
 }
 
+/**
+ * Evaluates HTML strings in a CSP-restricted inert document where external
+ * stylesheets are available only through the explicit resource resolver.
+ */
 async function snapshotHtmlString(source: string, options: SnapshotOptions): Promise<SnapshotResult> {
   const template = document.createElement("template");
   template.innerHTML = source;
@@ -1309,6 +1355,7 @@ async function snapshotHtmlString(source: string, options: SnapshotOptions): Pro
   }
 }
 
+/** Replaces external stylesheet links with resolver-provided inline CSS. */
 async function materializeExternalStylesheets(
   root: ParentNode,
   options: SnapshotOptions,
@@ -1338,6 +1385,7 @@ async function materializeExternalStylesheets(
   }
 }
 
+/** Recursively clones DOM state, pseudo-content, counters, and open Shadow DOM. */
 function cloneSnapshotElement(
   original: Element,
   options: SnapshotOptions,
@@ -1529,6 +1577,10 @@ interface CounterNode {
   counters: CounterInstance[];
 }
 
+/**
+ * Models CSS counter scope over the live tree before pseudo-elements become
+ * synthetic text nodes in the flat renderer input.
+ */
 class CounterState {
   readonly #elements = new Map<Element, CounterNode>();
   readonly #pseudos = new Map<Element, Partial<Record<"::before" | "::after", CounterNode>>>();
@@ -1697,6 +1749,10 @@ function parseCounterOperations(value: string, defaultValue: number): CounterOpe
   return operations;
 }
 
+/**
+ * Freezes the supported computed-style subset while retaining authored values
+ * needed later for paged and positioned layout decisions.
+ */
 function materializeComputedStyle(
   original: Element,
   target: Element,
@@ -2157,6 +2213,7 @@ function isFullyTransparentColor(value: string): boolean {
   return normalized === "transparent" || /^rgba\([^,]+,[^,]+,[^,]+,0(?:\.0+)?\)$/.test(normalized);
 }
 
+/** Preserves supported inline SVG as vector resources or applies scoped fallback. */
 async function materializeInlineSvgs(
   root: ParentNode,
   options: SnapshotOptions,
@@ -2238,6 +2295,7 @@ function stripStyleProperties(style: string, properties: readonly string[]): str
   }).join(";");
 }
 
+/** Returns the first feature that prevents SVG-native PDF emission. */
 function vectorSvgUnsupportedReason(svg: SVGSVGElement): string | null {
   const elements = [svg, ...svg.querySelectorAll("*")];
   for (const element of elements) {
@@ -2374,6 +2432,10 @@ function snapshotNodePath(element: Element, root: ParentNode): string {
   return parts.join(" > ");
 }
 
+/**
+ * Replaces cloned canvases with PNG or adapter-provided SVG while invoking
+ * adapters against the corresponding original live canvas.
+ */
 async function materializeCanvases(
   root: Element,
   canvases: readonly CanvasMaterialization[],
@@ -2532,6 +2594,7 @@ function replaceFormControl(target: Element, text: string, preserveWhitespace = 
   return replacement;
 }
 
+/** Resolves image elements into self-contained JPEG, PNG, or validated SVG data. */
 async function materializeImages(
   root: ParentNode,
   options: SnapshotOptions,
@@ -2634,6 +2697,7 @@ async function materializeSvgResourceBlob(
   return rasterizeBlobToPng(normalizedBlob);
 }
 
+/** Resolves each authored background URL without disturbing native gradients. */
 async function materializeBackgroundImages(
   root: ParentNode,
   options: SnapshotOptions,
@@ -2686,6 +2750,7 @@ async function fetchImageBlob(url: URL): Promise<Blob> {
   return response.blob();
 }
 
+/** Applies the selected unsupported-CSS policy to authored declarations. */
 function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnostics: Diagnostic[]): void {
   const elements = [...root.querySelectorAll("[style],style")];
   if (root instanceof Element && (root.hasAttribute("style") || root.localName === "style")) elements.unshift(root);

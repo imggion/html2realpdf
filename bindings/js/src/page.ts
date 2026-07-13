@@ -1,5 +1,12 @@
+/**
+ * Conversion of public page settings into the point-based WASM contract.
+ *
+ * @packageDocumentation
+ */
+
 import type { LengthUnit, Margin, PageOptions } from "./types.js";
 
+/** Page box and margins normalized to PDF points in CSS edge order. */
 export interface NormalizedPage {
   widthPoints: number;
   heightPoints: number;
@@ -22,6 +29,13 @@ const POINTS_PER_UNIT: Record<LengthUnit, number> = {
   in: 72,
 };
 
+/**
+ * Resolves named or custom page geometry and validates a positive content box.
+ *
+ * @remarks
+ * Named formats retain their physical size regardless of `unit`; the unit only
+ * scales custom dimensions and margins.
+ */
 export function normalizePage(options: PageOptions = {}): NormalizedPage {
   const unit = options.unit ?? "pt";
   const scale = POINTS_PER_UNIT[unit];

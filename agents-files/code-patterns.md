@@ -116,6 +116,10 @@
 
 ## JavaScript package
 
+- Keep public TypeScript exports documented with concise English TSDoc. Explain
+  defaults, precedence, lifecycle, ownership, and fallback contracts; document
+  internal helpers only when they preserve a non-obvious phase boundary or
+  resource invariant, and never narrate self-evident names.
 - Imports must remain SSR-safe; browser requirements are checked when creating
   a renderer or rendering.
 - Keep public constructors out of emitted declarations. Consumers create

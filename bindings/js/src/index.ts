@@ -1,3 +1,9 @@
+/**
+ * Browser-first HTML-to-PDF rendering with selectable text, native vectors,
+ * typed configuration, and an html2pdf.js compatibility layer.
+ *
+ * @packageDocumentation
+ */
 import html2pdf from "./compat.js";
 
 export default html2pdf;

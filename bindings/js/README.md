@@ -1,8 +1,8 @@
 # @imggion/html2realpdf
 
-Browser-first HTML to real, selectable PDF rendering powered by Zig and
-WebAssembly. Pages are composed from PDF text, vectors, links, and image
-objects—not full-page screenshots.
+Browser-first HTML-to-PDF rendering powered by Zig and WebAssembly. Text,
+vectors, links, and images are emitted as native PDF objects instead of a
+full-page screenshot.
 
 ## Install
 
@@ -10,53 +10,64 @@ objects—not full-page screenshots.
 npm install @imggion/html2realpdf@next
 ```
 
-The package is ESM and includes its TypeScript declarations, Worker, WASM, and
-PDF.js preview assets. Importing it is SSR-safe; rendering requires browser DOM
-APIs. Import values and types only from `@imggion/html2realpdf`.
+The package is ESM and includes TypeScript declarations, its Worker, WASM, and
+PDF.js preview assets. Imports are SSR-safe; rendering requires browser DOM APIs.
+Import values and types only from `@imggion/html2realpdf`.
 
-## Modern API
+## Choose an API
+
+| Need | API | Lifetime |
+| --- | --- | --- |
+| Default rendering with minimal setup | `renderPdf` | Cached package Worker for the application lifetime |
+| Repeated renders, custom fonts, or explicit cleanup | `createRenderer` | Caller-owned renderer |
+| Migration from supported html2pdf.js chains | Default `html2pdf` export | Compatibility worker with a cached PDF |
+
+Use the modern API for new integrations. The compatibility API deliberately
+rejects stages that depend on html2canvas or rasterized PDF pages.
+
+## Sources
+
+`renderPdf` and `renderer.render` accept:
 
 ```ts
-import { renderPdf } from "@imggion/html2realpdf";
-
-const pdf = await renderPdf(document.querySelector("#invoice")!, {
-  page: { format: "a4", orientation: "portrait", margin: [15, 12], unit: "mm" },
-  metadata: { title: "Invoice 2026-001", keywords: ["invoice", "customer"] },
-  resourcePolicy: "error",
-});
-
-pdf.download("invoice.pdf");
-const preview = await pdf.preview(document.querySelector("#pdf-preview")!, {
-  initialScale: "fit-width",
-});
-
-preview.dispose();
-pdf.dispose();
+type HtmlSource = string | Element | { readonly current: Element | null };
 ```
 
-`preview()` renders every PDF page into a self-contained Shadow DOM viewer with
-canvas pages, HiDPI output, zoom controls, fit-to-width behavior, keyboard focus
-states, and touch-sized controls. It never uses an iframe, object element, or
-the browser's built-in PDF viewer.
+- A mounted `Element` preserves computed styles, pseudo-elements, live form
+  state, canvas pixels, and other browser state.
+- A ref-shaped object supports React refs without adding React as a dependency.
+- An HTML string runs in an inert, CSP-restricted document. Scripts, event
+  handlers, refresh directives, and active elements are removed.
 
-`renderPdf` accepts an HTML string, an `Element`, or a ref-shaped object such
-as a React `RefObject<Element>`. DOM/ref input is cloned, computed styles and
-live form values are materialized, canvas content becomes a transparent PNG by
-default, and supported SVG shapes, paths, text/tspan, gradient fills, and clip
-paths remain native vector Form XObjects. `canvasToSvg` can replace live canvases
-with the same validated SVG subset. An unsupported SVG rasterizes only that SVG,
-emits `CSS_SUBTREE_RASTERIZED`, and
-can instead fail with `fallback: "error"`; active elements and event attributes
-are removed.
+Prefer a mounted source when output must match live UI state. Render refs only
+after they are mounted; a null ref produces `InvalidSourceError`.
 
-For DOM/ref input, transparent descendant backgrounds remain transparent,
-normal-flow dimensions are allowed to reflow unless explicitly authored, and
-live controls, buttons, canvas pixels, lists, and open/closed details state are
-captured from the mounted browser tree. React itself is not a package runtime
-dependency; the integration fixture under `tests/react/` verifies the boundary
-with a real React application.
+## Render once
 
-For repeated renders or custom fonts, create and dispose an explicit renderer:
+```ts
+import { renderPdf, type RenderOptions } from "@imggion/html2realpdf";
+
+const options: RenderOptions = {
+  page: { format: "a4", unit: "mm", margin: [15, 12] },
+  cssProfile: "web",
+  mediaType: "print",
+  fallback: "error",
+  metadata: { title: "Invoice 2026-001" },
+};
+
+const pdf = await renderPdf(document.querySelector("#invoice")!, options);
+try {
+  pdf.download("invoice.pdf");
+} finally {
+  pdf.dispose();
+}
+```
+
+`renderPdf` lazily creates and caches a default Worker renderer. Use an explicit
+renderer when the backend must be disposed, configured with fonts, or forced to
+the main thread.
+
+## Reuse a renderer
 
 ```ts
 import { createRenderer } from "@imggion/html2realpdf";
@@ -65,16 +76,19 @@ const renderer = await createRenderer({
   execution: "worker",
   fonts: [{
     family: "Inter",
-    data: await (await fetch("/Inter-Regular.ttf")).arrayBuffer(),
+    data: await (await fetch("/fonts/Inter-Regular.ttf")).arrayBuffer(),
     weight: 400,
     style: "normal",
   }],
 });
 
 try {
-  const pdf = await renderer.render('<p style="font-family: Inter">Hello</p>');
+  const pdf = await renderer.render(
+    '<p style="font-family: Inter">Selectable text</p>',
+  );
   try {
-    pdf.download("hello.pdf");
+    const blob = pdf.toBlob();
+    // Store or upload the Blob.
   } finally {
     pdf.dispose();
   }
@@ -83,33 +97,141 @@ try {
 }
 ```
 
-For a canvas-backed chart, return the chart library's SVG export from the
-per-render bridge. The callback receives the original live canvas, its stable
-snapshot path, and both CSS and bitmap dimensions:
+Worker execution is the default because synchronous WASM work would otherwise
+occupy the UI thread. Use `execution: "main"` only when Workers are unavailable
+or a controlled environment requires it. Override `wasmUrl` only when a deploy
+cannot serve package-relative assets.
+
+## Render options
+
+### Page and CSS
+
+| Option | Default | Contract |
+| --- | --- | --- |
+| `page` | Captured `@page`, then A4 portrait with zero margins | Explicit API geometry wins over captured page geometry. Custom dimensions and margins use `page.unit`. |
+| `cssProfile` | `"document"` | `document` favors paged reports; `web` adds broader browser layout; `strict` uses web layout and rejects unsupported CSS by default. |
+| `unsupportedCss` | `"error"` in strict mode, otherwise `"warn"` | `warn` records diagnostics, `error` rejects, and `ignore` omits silently. |
+| `strict` | `false` | Promotes unsupported snapshot CSS to errors but does not select the `web` layout profile. Explicit `unsupportedCss` wins. |
+| `mediaType` | `"screen"` | Selects the media environment used during style resolution. |
+| `viewport` | Source environment | Makes responsive layout and media queries deterministic. |
+
+Named page formats retain their physical dimensions regardless of `unit`.
+Custom `[width, height]` formats use that unit. Four-value margins follow
+html2pdf.js order `[top, left, bottom, right]`, not CSS shorthand order.
+
+### Resources and browser state
+
+| Option | Default | Contract |
+| --- | --- | --- |
+| `baseUrl` | Source document URL | Resolves relative stylesheets and images. |
+| `resourcePolicy` | `"error"` | `omit` removes failed resources and records `RESOURCE_OMITTED`. |
+| `resourceResolver` | None | Resolves protected or virtual images and stylesheets. Fonts are renderer registrations. |
+| `includeShadowDom` | `false` | Flattens open Shadow DOM only. Closed roots are inaccessible. |
+| `enableLinks` | `true` | Set to `false` to remove link targets before rendering. |
+
+The resolver receives `{ kind: "image" | "stylesheet", url }`. For a
+stylesheet, a returned string is CSS source. For an image, a string is a
+supported data URL or replacement URL. Returning `null` applies
+`resourcePolicy`.
+
+External stylesheets in HTML-string input are inert and must be supplied by the
+resolver. Mounted DOM input can use stylesheets already accessible through the
+browser CSSOM.
+
+### SVG and canvas
+
+| Option | Default | Contract |
+| --- | --- | --- |
+| `fallback` | `"error"` | Unsupported SVG fails unless `"rasterize-subtree"` explicitly permits scoped rasterization. |
+| `canvasToSvg` | None | Converts live canvases through a chart library's SVG exporter. Without it, canvases become transparent PNG images. |
+| `canvasFallback` | `"error"` | `"rasterize"` applies only when the adapter returns `null`. |
 
 ```ts
 const pdf = await renderer.render(dashboardElement, {
-  canvasToSvg: async ({ canvas, cssWidth, cssHeight }) =>
+  canvasToSvg: ({ canvas, cssWidth, cssHeight }) =>
     chartFor(canvas).toSvg({ width: cssWidth, height: cssHeight }),
   canvasFallback: "error",
   fallback: "error",
 });
 ```
 
-The adapter may return an SVG string, `Blob`, `SVGSVGElement`, or a promise of
-one. With `canvasFallback: "rasterize"`, a missing or invalid adapter result
-rasterizes only that canvas and emits `CANVAS_SUBTREE_RASTERIZED`.
+The adapter may return a complete SVG string, an `image/svg+xml` Blob, an
+`SVGSVGElement`, or a promise. A thrown error or malformed SVG produces
+`CanvasToSvgError`; it does not activate `canvasFallback`. A valid SVG that uses
+unsupported vector features follows the separate `fallback` policy.
 
-Other render options include `strict`, `baseUrl`, `resourceResolver`,
-`resourcePolicy`, `enableLinks`, selector-based `pageBreak` rules,
-`AbortSignal`, and progress callbacks. All public signatures are available in
-the generated `index.d.ts`. A four-value margin uses
-`[top, left, bottom, right]`. Aborting rejects the caller at snapshot/render
-boundaries, but does not preempt synchronous WASM work already in progress.
+Scoped rasterization records `CSS_SUBTREE_RASTERIZED` or
+`CANVAS_SUBTREE_RASTERIZED`. Inspect diagnostics before describing output as
+fully vector.
+
+### Pagination, metadata, cancellation, and progress
+
+`pageBreak.before`, `after`, and `avoid` accept selectors or selector arrays.
+`legacy` honors `.html2pdf__page-break`; `avoidAll` applies
+`break-inside: avoid` globally. These rules override computed snapshot defaults
+without overriding authored inline `!important` declarations.
+
+`metadata` accepts `title`, `author`, `subject`, `keywords`, and `creator`.
+`keywords` may be a string or an array.
+
+`signal` rejects at snapshot and render boundaries. It cannot preempt a
+synchronous WASM render already running. `onProgress` reports the coarse phases
+`snapshot`, `wasm`, and `complete`; it is not per-page progress.
+
+## PDF output and preview
+
+`PdfDocument` exposes immutable output through:
+
+- `toUint8Array()`, `toArrayBuffer()`, and `toBlob()`;
+- `download(filename)`;
+- `createObjectURL()` and `revokeObjectURL(url)`;
+- `preview(target, options)`;
+- `pageCount` and `diagnostics`.
+
+Byte methods return defensive copies. `PdfDocument.dispose()` disposes every
+preview it owns, revokes tracked object URLs, and invalidates future exports.
+Manually revoke long-lived object URLs earlier when possible.
+
+```ts
+const preview = await pdf.preview(document.querySelector("#preview")!, {
+  initialScale: "fit-width",
+  minScale: 0.25,
+  maxScale: 3,
+  zoomStep: 0.25,
+  maxPixelRatio: 2,
+  onProgress: (completed, total) => updatePreviewProgress(completed, total),
+});
+
+await preview.setScale(1.25);
+await preview.fitToWidth();
+preview.dispose();
+```
+
+The preview renders every page into an isolated Shadow DOM canvas viewer. It
+does not use iframe, object, embed, or the browser PDF plugin.
+
+## Diagnostics and errors
+
+Successful documents may contain structured diagnostics with a stable `code`,
+`severity`, and `message`, plus optional `property`, `nodePath`, `phase`, and
+`fallback`. Use `unsupportedCss: "error"`, `fallback: "error"`, and
+`resourcePolicy: "error"` when omissions must reject the operation.
+
+The package exports these error classes:
+
+- `Html2RealPdfError`, the base class with a machine-readable `code`;
+- `UnsupportedEnvironmentError`;
+- `InvalidSourceError`;
+- `UnsupportedCssError`;
+- `WasmRenderError`, including a native or bridge `status`;
+- `ResourceLoadError`;
+- `CanvasToSvgError`, including `nodePath`;
+- `UnsupportedCompatibilityFeatureError`.
+
+Cancellation normally rejects with `AbortError`. Invalid page margins produce a
+`RangeError`; lifecycle misuse after disposal produces a regular `Error`.
 
 ## html2pdf.js compatibility
-
-The default export preserves common PDF-oriented chains:
 
 ```ts
 import html2pdf from "@imggion/html2realpdf";
@@ -125,56 +247,43 @@ await html2pdf()
   .save();
 ```
 
-`outputPdf`/`output`, Blob, ArrayBuffer, Blob URL, data URL, `save`, `saveAs`,
-`get`, and Promise-like chaining are supported. Raster pipeline stages
-(`toCanvas`, `toImg`, `outputImg`, html2canvas options, or image input stages)
-throw `UnsupportedCompatibilityFeatureError` because they conflict with the
-real-PDF rendering model.
+| Compatibility surface | Status |
+| --- | --- |
+| `from(string | Element | ref)` | Supported |
+| `set`, `using` | Supported for typed PDF options |
+| `toPdf`, `save`, `saveAs` | Supported |
+| `outputPdf`, `output`, `export` | Blob, ArrayBuffer, Blob URL, and data URL supported |
+| `get`, Promise-like chaining | Supported |
+| `toContainer` | Chain-preserving no-op; no intermediate container is exposed |
+| `to("container")` | Schedules PDF output directly |
+| Canvas or image input stages | Unsupported |
+| `toCanvas`, `toImg`, `outputImg` | Throw `UnsupportedCompatibilityFeatureError` |
+| `html2canvas` and raster `image` options | Rejected explicitly |
 
-## Layout profile
+Passing a source directly to `html2pdf(source, options)` also schedules `save`,
+matching the shorthand compatibility behavior.
 
-The release candidate supports report-oriented block/inline/table layout, common CSS box
-model properties, A4/Letter/custom pages, pagination controls, links, JPEG,
-transparent PNG, per-corner elliptical rounded fills/borders and rounded
-overflow clipping, Noto Sans Latin/Arabic/Hebrew, and registered embeddable TTF
-fonts. A default `@page` rule can set CSS absolute page size/orientation and
-margins when the API does not provide `page`; explicit API page options win.
-Paged layout combines adjacent `break-before`/`break-after` controls, propagates
-first/last child breaks through block containers, honors facing-page and
-recto/verso values, and applies `avoid` across block siblings, table rows, Flex
-lines/items, and Grid rows. Forced descendant breaks override ancestor avoid.
-The Web profile also supports Flexbox, Grid, floats, positioned layout,
-native 2D transforms, layered URL/gradient backgrounds, shadows, and isolated
-opacity groups, plus vector-preserved SVG `path`, `rect`, circle/ellipse, line,
-polyline, polygon, group transform, solid fill/stroke, dash paint, selectable
-`text`/`tspan`, bounded linear/radial gradient fills, and local `clipPath`.
-Filters, masks, blend modes, 3D transforms, gradient strokes/text, inherited
-gradient references, and arbitrary browser painting remain outside the current
-native profile. Layout-critical unsupported
-CSS is rejected; cosmetic omissions and scoped raster fallbacks are available
-through `pdf.diagnostics` and can be promoted to errors with `strict: true` or
-`fallback: "error"`.
+Blob URL outputs remain owned by the cached `PdfDocument`. Retrieve it with
+`await worker.get("pdf")` to revoke an individual URL or dispose the document.
 
 ## Runtime and licensing
 
-- ESM package; Node.js `20.16+` is required for build tooling.
-- Rendering requires a browser with WebAssembly, Worker, Blob, and DOM APIs.
-- Project code is MIT licensed. The complete project and third-party license
-  inventory is consolidated in `dist/LICENSE.md`, including Noto fonts,
-  HarfBuzz, SheenBidi, PDF.js, libunibreak, Unicode data, and adapted Web
-  Platform Tests.
+- Rendering requires a browser with DOM, WebAssembly, Worker, and Blob support.
+- Node.js `20.16+` is required for package build tooling, not browser rendering.
+- Project code is MIT licensed. `dist/LICENSE.md` contains the consolidated
+  project and third-party license inventory.
 
 ## Share without the npm registry
 
-From the repository package directory, create the exact installable artifact:
+Run `npm pack` from this package directory and send the generated
+`imggion-html2realpdf-0.1.0-rc1.tgz` file. A consumer can install it with:
 
 ```sh
-npm pack
+npm install ./imggion-html2realpdf-0.1.0-rc1.tgz
+# or
+pnpm add ./imggion-html2realpdf-0.1.0-rc1.tgz
+# or
+yarn add file:./imggion-html2realpdf-0.1.0-rc1.tgz
 ```
 
-Send `imggion-html2realpdf-0.1.0-rc1.tgz` to the consumer. They can reference it
-from a project with `npm install ./imggion-html2realpdf-0.1.0-rc1.tgz`,
-`pnpm add ./imggion-html2realpdf-0.1.0-rc1.tgz`, or
-`yarn add file:./imggion-html2realpdf-0.1.0-rc1.tgz`; no registry publication is
-required. The packaged model instructions live at
-`skills/html2realpdf/SKILL.md` inside the installed module.
+The packaged model instructions live at `skills/html2realpdf/SKILL.md`.

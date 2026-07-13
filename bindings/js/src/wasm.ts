@@ -1,3 +1,9 @@
+/**
+ * Typed ownership bridge for the renderer's handle-based WebAssembly ABI.
+ *
+ * @packageDocumentation
+ */
+
 import { WasmRenderError } from "./errors.js";
 import type { NormalizedPage } from "./page.js";
 import type { CssProfile, Diagnostic, FontRegistration, PdfMetadata } from "./types.js";
@@ -5,6 +11,7 @@ import type { SnapshotPageMarginBox, SnapshotPageRule } from "./snapshot.js";
 
 const EXPECTED_ABI_VERSION = 1;
 
+/** ABI surface implemented by `src/wasm.zig`. */
 interface WasmExports {
   html2realpdf_abi_version(): number;
   pdf_context_create(): number;
@@ -50,18 +57,28 @@ interface WasmExports {
   pdf_result_free(handle: number): void;
 }
 
+/** Owned JavaScript result copied out of WASM memory. */
 export interface WasmRenderResult {
   bytes: Uint8Array;
   pageCount: number;
   diagnostics: Diagnostic[];
 }
 
+/**
+ * Owns one native PDF context and its registered fonts.
+ *
+ * @remarks
+ * All temporary allocations and result handles are freed before `render`
+ * returns. PDF bytes are copied first because freeing handles or growing WASM
+ * memory invalidates borrowed views.
+ */
 export class WasmBridge {
   private readonly encoder = new TextEncoder();
   private disposed = false;
 
   private constructor(private readonly exports: WasmExports, private readonly context: number) {}
 
+  /** Instantiates the expected ABI, creates a context, and registers its fonts. */
   static async create(wasmUrl: string | URL, fonts: readonly FontRegistration[] = []): Promise<WasmBridge> {
     const response = await fetch(wasmUrl);
     if (!response.ok) throw new WasmRenderError(`Could not load WASM: HTTP ${response.status}`, -10);
@@ -90,6 +107,7 @@ export class WasmBridge {
     }
   }
 
+  /** Serializes render options, invokes the native renderer, and returns owned output. */
   render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile: CssProfile = "document", marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[]): WasmRenderResult {
     if (this.disposed) throw new WasmRenderError("WASM bridge has been disposed", -15);
     const input = this.encoder.encode(html);
@@ -151,12 +169,14 @@ export class WasmBridge {
     }
   }
 
+  /** Frees the renderer context and every font copied into it. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.exports.pdf_context_free(this.context);
   }
 
+  /** Copies one font registration across the ABI into context-owned storage. */
   private registerFont(registration: FontRegistration): void {
     const family = this.encoder.encode(registration.family.trim());
     const data = registration.data instanceof Uint8Array
