@@ -1,259 +1,169 @@
-# html2realpdf
+<div align="center">
+  <h1>html2realpdf</h1>
+  <p><strong>A real PDF, not a screenshot.</strong></p>
+  <p>
+    Generate selectable, searchable, vector-based PDFs from HTML in the browser.<br>
+    Written in Zig, compiled to WebAssembly, and packaged with a typed TypeScript API.
+  </p>
+</div>
 
-`html2realpdf` is a Zig/WebAssembly renderer that converts HTML into real PDF
-content. Text remains selectable and searchable, links become PDF annotations,
-fonts are embedded as subset TrueType fonts, and shapes stay vector-based. It
-does not capture the page as a bitmap.
+## Contents
 
-The browser package is published as `@imggion/html2realpdf`.
+- [Why real PDFs](#why-real-pdfs)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [React](#react)
+- [Preview](#preview)
+- [Page layouts](#page-layouts)
+- [Contributing](#contributing)
+- [License](#license)
 
-## Current release-candidate capabilities
+## Why real PDFs
 
-- tolerant HTML tokenizer and flat DOM/Box Trees;
-- CSS cascade with specificity, source order, inheritance, inline styles, and
-  `!important`;
-- block and inline layout, wrapping, whitespace modes, alignment, margin
-  collapse, padding, borders, and `border-box` sizing;
-- tables with `colspan`, `rowspan`, collapsed borders, and repeated `<thead>`
-  and page-end `<tfoot>` rows;
-- Web/strict Flexbox with row/column/reverse flow, wrapping, grow/shrink,
-  min/max constraints, gaps, alignment, auto margins, nested containers,
-  replaced elements, and page-aware line/item placement;
-- Web/strict relative, absolute, fixed, and sticky positioning with physical
-  and logical insets, positioned containing blocks, `z-index` paint phases,
-  overflow clipping, native opacity, and repeated fixed headers/footers anchored
-  from either page edge;
-- Web/strict CSS Grid with explicit and implicit tracks, `fr`, `repeat()`,
-  `minmax()`, auto-placement, spans, named lines/areas, Box Alignment, nested
-  grids, intrinsic sizing, replaced elements, and page-aware row placement;
-- Web/strict 2D transforms with length-percentage origins, nested matrices,
-  transformed overflow clips, text, images, vectors, and real link bounds;
-- Web/strict multiple backgrounds with URL resources, per-layer sizing,
-  positioning and repeat, native axial/radial PDF shadings, conic mesh
-  shadings, and vector alpha-gradient bands;
-- multiple outer/inset box shadows, artifact-marked text shadows, and nested
-  isolated PDF transparency groups for correct element-opacity compositing;
-- A4, Letter, landscape, custom page sizes, default `@page` size/orientation and
-  margins, shared page-fragmentainer placement, propagated and adjacent break
-  arbitration, `page`/`left`/`right`/`recto`/`verso`, `avoid`, orphans/widows,
-  page-aware block, table, Flex, and Grid flows, and selectable text in all 16
-  standard `@page` margin boxes with `counter(page)`/`counter(pages)`;
-- selectable Unicode text with Noto Sans Latin/Arabic/Hebrew fallbacks or registered TTF fonts;
-- HarfBuzz OpenType shaping, kerning, ligatures, and positioned RTL runs in the
-  `web` and `strict` profiles while `document` remains byte-stable;
-- JPEG pass-through, transparent PNG soft masks, supported SVG shape/path,
-  selectable text/tspan, gradient fill, and clip-path resources as native PDF
-  Form XObjects, vector backgrounds/borders, and live link annotations;
-- per-corner circular/elliptical `border-radius` fills, borders, and overflow clips emitted as native PDF Bézier paths;
-- compressed PDF 1.7 streams, metadata, deterministic classic xref output;
-- a versioned WASM ABI with independent result handles and structured errors;
-- an ESM/TypeScript browser package with Worker execution, DOM/React-ref
-  snapshotting, preview/download helpers, and an html2pdf.js-compatible facade.
+Screenshot-based PDF tools turn a page into an image. `html2realpdf` keeps text
+as text, links as PDF annotations, fonts as embedded subsets, and supported
+graphics as vectors.
 
-The document profile remains aimed at invoices, reports, tickets, letters, and
-similar documents. The Web profile additionally enables floats, Flexbox,
-positioned layout, CSS Grid, 2D transforms, layered backgrounds, gradients,
-shadows, and isolated opacity. Filters, blend modes, 3D transforms, and
-arbitrary browser painting are still rejected or reported instead of silently
-rasterizing the whole page. Canvas remains a scoped PNG by default, or callers
-can provide `canvasToSvg` to replace it with validated native SVG content.
-Unsupported SVG paint is rejected by default and can rasterize only its own
-subtree when callers explicitly opt into `fallback: "rasterize-subtree"`;
-every fallback is exposed through structured diagnostics.
+The text includes Unicode mappings, so people can select, copy, and search the
+result. Tools and LLMs can read the document text without first running OCR.
+Text-heavy documents are also often smaller and stay sharp at every zoom level.
 
-See [docs/css-support.md](docs/css-support.md) for the versioned property and
-pipeline-stage support matrix.
+Zig performs the layout and PDF writing, while WebAssembly brings the renderer
+to the browser. The result is one portable pipeline for invoices, reports,
+tickets, letters, slides, and other web-generated documents.
 
-## Browser package
+See the [CSS support matrix](docs/css-support.md) for the current layout and
+rendering coverage. The RC provides machine-readable text and accessible
+preview controls; it does not claim PDF/UA or fully tagged PDF compliance.
 
-Install the release candidate from npm once it is published:
+## Install
+
+The release candidate is prepared for npm but is not published yet. Once it is
+available, install the `next` release with your package manager:
 
 ```sh
 npm install @imggion/html2realpdf@next
+pnpm add @imggion/html2realpdf@next
+yarn add @imggion/html2realpdf@next
+bun add @imggion/html2realpdf@next
 ```
 
-To share the package without publishing it, build a tarball and send the
-generated `.tgz` file:
+## Quick start
 
-```sh
-cd bindings/js
-npm pack
-```
-
-The recipient can install that file with any package manager that supports
-local npm tarballs, for example `npm install ./imggion-html2realpdf-0.1.0-rc1.tgz`.
+Render an HTML element, download the PDF, then release its resources:
 
 ```ts
 import { renderPdf } from "@imggion/html2realpdf";
 
-const pdf = await renderPdf(document.querySelector("#invoice")!, {
-  cssProfile: "web",
-  mediaType: "print",
-  viewport: { width: 1440, height: 900 },
-  unsupportedCss: "warn",
-  fallback: "error",
-  page: { format: "a4", margin: [15, 12], unit: "mm" },
-  metadata: { title: "Invoice 2026-001", author: "Example Ltd" },
-});
+const invoice = document.querySelector<HTMLElement>("#invoice");
+if (!invoice) throw new Error("Invoice not found");
 
-const preview = await pdf.preview(document.querySelector("#pdf-preview")!, {
+const pdf = await renderPdf(invoice);
+pdf.download("invoice.pdf");
+pdf.dispose();
+```
+
+HTML strings are supported too:
+
+```ts
+const pdf = await renderPdf("<h1>Hello from a real PDF</h1>");
+```
+
+## React
+
+Pass a ref to a mounted element. The package understands React-shaped refs
+without depending on React itself.
+
+```tsx
+const reportRef = useRef<HTMLDivElement>(null);
+
+async function downloadReport() {
+  if (!reportRef.current) return;
+
+  const pdf = await renderPdf(reportRef);
+  pdf.download("report.pdf");
+  pdf.dispose();
+}
+
+return <Report ref={reportRef} />;
+```
+
+`Report` can be a component that forwards its ref to its root element. Pass the
+mounted ref, not an unmounted component definition.
+
+## Preview
+
+The preview renders the actual generated PDF inside your page. It uses isolated
+Shadow DOM and canvas pages instead of an iframe, browser PDF plugin, or fake
+HTML copy.
+
+```ts
+const pdf = await renderPdf(invoice);
+const previewTarget = document.querySelector<HTMLElement>("#pdf-preview");
+if (!previewTarget) throw new Error("Preview target not found");
+
+const preview = await pdf.preview(previewTarget, {
   initialScale: "fit-width",
 });
-pdf.download("invoice.pdf");
 
+// Later, when closing the preview:
 preview.dispose();
 pdf.dispose();
 ```
 
-Canvas-based chart libraries can opt into native PDF vectors without changing
-the renderer's default canvas behavior:
+## Page layouts
+
+Use the named `a4` and `letter` formats in portrait or landscape mode. A4
+landscape works well for presentation decks:
 
 ```ts
-const pdf = await renderPdf(document.querySelector("#dashboard")!, {
-  canvasToSvg: ({ canvas }) => exportChartAsSvg(canvas),
-  canvasFallback: "error",
-  fallback: "error",
+const pdf = await renderPdf(slides, {
+  page: {
+    format: "a4",
+    orientation: "landscape",
+    unit: "mm",
+    margin: [12, 12],
+  },
 });
 ```
 
-`canvasToSvg` may return an SVG string, `Blob`, `SVGSVGElement`, or a promise of
-one. Returning `null`, malformed SVG, or an unsupported SVG fails with
-`canvasFallback: "error"`; `canvasFallback: "rasterize"` preserves only that
-canvas as PNG and emits `CANVAS_SUBTREE_RASTERIZED`.
-
-The preview is an in-page Shadow DOM component with responsive canvas pages,
-HiDPI rendering, zoom controls, and fit-to-width behavior. It does not open an
-iframe or delegate rendering to the browser's built-in PDF plugin.
-
-React refs work without a React runtime dependency:
+For postcards or any other size, pass custom `[width, height]` dimensions:
 
 ```ts
-const pdf = await renderPdf(invoiceRef);
-```
-
-Register custom TTF faces when creating a renderer:
-
-```ts
-import { createRenderer } from "@imggion/html2realpdf";
-
-const renderer = await createRenderer({
-  fonts: [{
-    family: "Inter",
-    data: await (await fetch("/fonts/Inter-Regular.ttf")).arrayBuffer(),
-    weight: 400,
-  }],
+const pdf = await renderPdf(postcard, {
+  page: { format: [148, 105], unit: "mm", margin: 8 },
 });
-
-const pdf = await renderer.render('<p style="font-family: Inter">Hello</p>');
 ```
 
-Common html2pdf.js PDF workflows are available from the default export:
+## Contributing
 
-```ts
-import html2pdf from "@imggion/html2realpdf";
-
-await html2pdf()
-  .set({
-    filename: "invoice.pdf",
-    pagebreak: { mode: ["css", "legacy"], avoid: ".line-item" },
-    jsPDF: { format: "a4", unit: "mm" },
-  })
-  .from(document.querySelector("#invoice")!)
-  .save();
-```
-
-Raster-only stages such as `toCanvas()`, `toImg()`, and html2canvas options
-throw an explicit compatibility error.
-
-The English model-facing skill is available at
-`skills/html2realpdf/SKILL.md` and is also included in the npm tarball.
-
-## Requirements and build
-
-- Zig `0.16.0`
-- Node.js `20.16+` for the npm package and JavaScript tests
-- `make` for convenience targets
+You need Zig `0.16.0`, Node.js `20.16+`, npm, and Make. On a fresh checkout,
+install the JavaScript dependencies once:
 
 ```sh
-zig build
-zig build wasm -Doptimize=ReleaseSmall
-npm --prefix bindings/js test
+npm ci --prefix bindings/js
+npm ci --prefix tests/react
+npm ci --prefix tests/web
 ```
 
-Run the complete local suite:
+| Command | Purpose |
+| --- | --- |
+| `make test` | Run the Zig and renderer tests |
+| `make release` | Build the native release binary |
+| `make wasm` | Build WebAssembly and the browser package |
+| `make react` | Start the React integration app |
+| `make test-release` | Run the complete release gate |
 
-```sh
-make test-release
-```
-
-Useful focused commands:
-
-```sh
-make test
-make test-wpt
-make test-robustness
-make test-react
-make test-package-consumer
-make test-web
-make test-debug-tokenizer
-make test-debug-dom
-make test-debug-box
-```
-
-`make test-wpt` runs the locally adapted, revision-pinned conformance cases
-listed in `tests/wpt/README.md`. `make test-robustness` covers 512 deterministic
-malformed HTML/CSS inputs, allocator exhaustion, and a 30-plus-page native PDF.
-
-## Browser harness
-
-Build the WASM artifact, serve the repository, and open
-`tests/web/index.html`:
+To open the small browser test harness:
 
 ```sh
 make wasm
 python3 -m http.server 8765
 ```
 
-`make wasm` also rebuilds the TypeScript bindings and writes a content-addressed
-browser runtime manifest, so the harness cannot combine a new test script with
-stale nested ESM modules from an earlier preview API.
+Visit [http://localhost:8765/tests/web/index.html](http://localhost:8765/tests/web/index.html).
 
-The harness runs structural snapshots and exposes buttons for PDF generation,
-in-page canvas preview, download, and the public DOM/ref package API. It also
-generates a two-page colored invoice and a three-page analytics report with
-charts, a two-page rounded-table operations report, and a four-page A4
-landscape presentation deck. It verifies that canvas transparency survives as
-a PDF soft mask and that the presentation uses landscape page geometry.
+## License
 
-For a real React integration, install the isolated test app once and start it:
-
-```sh
-npm --prefix tests/react install
-make react
-```
-
-`tests/react/` renders a mounted report component through `forwardRef`, updates
-it with controlled React state, and shows the source DOM beside the generated
-in-page PDF canvas. The fixture covers computed class styles, percentage table
-cards, live canvas pixels, inline SVG, links, lists, and closed details state.
-
-## Architecture
-
-```text
-HTML -> tokenizer -> flat DOM -> CSS cascade -> flat Box Tree
-     -> font fallback/OpenType shaping -> block/inline/table layout -> pagination -> display list
-     -> PDF writer -> WASM result handle -> Worker/TypeScript API
-```
-
-Core modules live under `src/`: `html.zig`, `dom.zig`, `css.zig`, `box.zig`,
-`font.zig`, `harfbuzz.zig`, `unicode_case.zig`, `layout.zig`, `pagination.zig`, `display_list.zig`, `image.zig`,
-`pdf.zig`, `render.zig`, and `wasm.zig`. The npm package lives in
-`bindings/js/`; framework-agnostic browser verification lives in `tests/web/`
-and the explicit React integration fixture lives in `tests/react/`.
-
-## Licenses
-
-Project code is MIT licensed. The complete license inventory and full texts for
-Noto fonts, HarfBuzz, SheenBidi, PDF.js, libunibreak, Unicode data, and adapted
-Web Platform Tests are consolidated in [LICENSE.md](LICENSE.md). The browser
-package includes the same file as `dist/LICENSE.md`.
+The project code is released under the MIT License. See [LICENSE.md](LICENSE.md)
+for the complete project and third-party license inventory.
