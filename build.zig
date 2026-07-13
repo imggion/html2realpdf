@@ -76,6 +76,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     native_lib_mod.addObjectFile(native_harfbuzz_object);
     native_lib_mod.addObjectFile(native_sheenbidi_object);
@@ -204,6 +205,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/harfbuzz_test.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     harfbuzz_test_mod.addObjectFile(native_harfbuzz_object);
     const harfbuzz_tests = b.addTest(.{ .root_module = harfbuzz_test_mod });
@@ -215,6 +217,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/bidi_test.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     bidi_test_mod.addObjectFile(native_sheenbidi_object);
     const bidi_tests = b.addTest(.{ .root_module = bidi_test_mod });
@@ -226,6 +229,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/line_break_test.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     line_break_test_mod.addObjectFile(native_libunibreak_object);
     const line_break_tests = b.addTest(.{ .root_module = line_break_test_mod });
@@ -237,6 +241,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/bidi_integration.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     bidi_integration_mod.addObjectFile(native_harfbuzz_object);
     bidi_integration_mod.addObjectFile(native_sheenbidi_object);
