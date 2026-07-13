@@ -1,0 +1,63 @@
+name: Release npm package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install JavaScript dependencies
+        run: |
+          npm ci --prefix bindings/js
+          npm ci --prefix tests/react
+          npm ci --prefix tests/web
+
+      - name: Install browser and PDF test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes poppler-utils
+          npm --prefix tests/web exec -- playwright install --with-deps chromium firefox webkit
+
+      - name: Verify tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./bindings/js/package.json').version")"
+          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
+
+      - name: Run complete release gate
+        run: make test-release
+
+      - name: Publish package
+        working-directory: bindings/js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [[ "$PACKAGE_VERSION" == *-* ]]; then
+            npm publish --tag next
+          else
+            npm publish
+          fi
