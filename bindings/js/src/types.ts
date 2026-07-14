@@ -230,7 +230,7 @@ export interface RenderOptions {
   pageBreak?: PageBreakRules;
   /** PDF information dictionary fields. */
   metadata?: PdfMetadata;
-  /** Preserves PDF link annotations unless explicitly set to `false`. */
+  /** Preserves HTTP(S), mail, telephone, and FTP annotations unless explicitly set to `false`. */
   enableLinks?: boolean;
   /**
    * Rejects the caller at snapshot and render boundaries when aborted.
@@ -291,7 +291,7 @@ export interface Html2PdfOptions {
   margin?: Margin;
   /** Filename used by `save` when no method argument is supplied. */
   filename?: string;
-  /** Preserves links unless explicitly disabled. */
+  /** Preserves HTTP(S), mail, telephone, and FTP links unless explicitly disabled. */
   enableLinks?: boolean;
   /** Compatibility pagination rules. */
   pagebreak?: CompatPageBreakOptions;

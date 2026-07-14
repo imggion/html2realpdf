@@ -77,6 +77,10 @@ HTML strings are supported too:
 const pdf = await renderPdf("<h1>Hello from a real PDF</h1>");
 ```
 
+PDF link annotations keep relative URLs plus `http`, `https`, `mailto`, `tel`,
+and `ftp` schemes. Active or local schemes such as `javascript`, `data`, and
+`file` are removed. Set `enableLinks: false` to remove every link annotation.
+
 ## React
 
 Pass a ref to a mounted element. The package understands React-shaped refs

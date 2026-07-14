@@ -1179,6 +1179,75 @@ async function verifyInertHtmlStringComputedSnapshot() {
   if (Reflect.get(window, "__html2realpdfScriptExecuted")) throw new Error("HTML string script executed during snapshot");
 }
 
+async function verifyPdfLinkProtocolSafety() {
+  const { buildId, distUrl } = await getPackageBuild();
+  const { snapshotSource } = await import(new URL(`${buildId}/snapshot.js`, distUrl).href);
+  const source = `
+    <a data-link="relative" href="/reports/weekly">Relative report</a>
+    <a data-link="https" href="https://safe.example/report">HTTPS report</a>
+    <a data-link="mailto" href="mailto:owner@example.com">Email owner</a>
+    <a data-link="javascript" href="javascript:alert('unsafe')">Script link</a>
+    <a data-link="data" href="data:text/html,unsafe">Data link</a>
+    <a data-link="file" href="file:///etc/passwd">File link</a>
+    <a data-link="invalid" href="http://[invalid">Invalid link</a>
+  `;
+  const snapshot = await snapshotSource(source, {
+    baseUrl: "https://app.example.test/",
+    resourcePolicy: "error",
+    enableLinks: true,
+  });
+  const template = document.createElement("template");
+  template.innerHTML = snapshot.html;
+  for (const name of ["relative", "https", "mailto"]) {
+    if (!template.content.querySelector(`[data-link="${name}"]`)?.hasAttribute("href")) {
+      throw new Error(`${name} PDF link was removed`);
+    }
+  }
+  for (const name of ["javascript", "data", "file", "invalid"]) {
+    if (template.content.querySelector(`[data-link="${name}"]`)?.hasAttribute("href")) {
+      throw new Error(`${name} PDF link survived protocol filtering`);
+    }
+  }
+
+  const disabled = await snapshotSource(source, {
+    baseUrl: "https://app.example.test/",
+    resourcePolicy: "error",
+    enableLinks: false,
+  });
+  const disabledTemplate = document.createElement("template");
+  disabledTemplate.innerHTML = disabled.html;
+  if (disabledTemplate.content.querySelector("a[href]")) throw new Error("enableLinks:false retained a PDF link");
+
+  const unsafeRoot = document.createElement("a");
+  unsafeRoot.href = "javascript:alert('unsafe-root')";
+  unsafeRoot.textContent = "Unsafe root";
+  document.body.append(unsafeRoot);
+  try {
+    const rootSnapshot = await snapshotSource(unsafeRoot, { resourcePolicy: "error", enableLinks: true });
+    const rootTemplate = document.createElement("template");
+    rootTemplate.innerHTML = rootSnapshot.html;
+    if (rootTemplate.content.querySelector("a")?.hasAttribute("href")) throw new Error("root anchor bypassed protocol filtering");
+  } finally {
+    unsafeRoot.remove();
+  }
+
+  const renderer = await getPackageRenderer();
+  const pdf = await renderer.render(source, {
+    baseUrl: "https://app.example.test/",
+    cssProfile: "strict",
+    enableLinks: true,
+  });
+  try {
+    const serialized = decoder.decode(pdf.toUint8Array());
+    if (!serialized.includes("https://safe.example/report")) throw new Error("safe HTTPS annotation is missing from the PDF");
+    for (const unsafe of ["javascript:alert", "data:text/html", "file:///etc/passwd"]) {
+      if (serialized.includes(unsafe)) throw new Error(`${unsafe} survived in a PDF annotation`);
+    }
+  } finally {
+    pdf.dispose();
+  }
+}
+
 async function verifySelectorPageBreak() {
   const renderer = await getPackageRenderer();
   const pdf = await renderer.render("<main><p>First page</p><p id='second'>Second page</p></main>", {
@@ -1702,6 +1771,15 @@ async function runWasmTests() {
   } catch (err) {
     failed++;
     testResults.textContent += `✗ ERROR: inert_html_string_computed_snapshot — ${err.message}\n`;
+  }
+
+  try {
+    await verifyPdfLinkProtocolSafety();
+    passed++;
+    testResults.textContent += "✓ PASS: pdf_link_protocol_safety\n";
+  } catch (err) {
+    failed++;
+    testResults.textContent += `✗ ERROR: pdf_link_protocol_safety — ${err.message}\n`;
   }
 
   try {
