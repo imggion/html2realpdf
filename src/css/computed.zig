@@ -80,29 +80,30 @@ pub const Context = struct {
 };
 
 const supported_properties = [_][]const u8{
-    "align-content",             "align-items",                "align-self",            "aspect-ratio",           "background-color",
-    "background-image",          "background-position",        "background-repeat",     "background-size",        "border-bottom-color",
-    "border-bottom-left-radius", "border-bottom-right-radius", "border-bottom-style",   "border-bottom-width",    "border-collapse",
-    "border-left-color",         "border-left-style",          "border-left-width",     "border-radius",          "border-right-color",
-    "border-right-style",        "border-right-width",         "border-top-color",      "border-top-left-radius", "border-top-right-radius",
-    "border-top-style",          "border-top-width",           "box-decoration-break",  "box-shadow",             "box-sizing",
-    "bottom",                    "break-after",                "break-before",          "break-inside",           "caption-side",
-    "clear",                     "color",                      "column-gap",            "direction",              "display",
-    "flex-basis",                "flex-direction",             "flex-grow",             "flex-shrink",            "flex-wrap",
-    "float",                     "font-family",                "font-size",             "font-style",             "font-weight",
-    "gap",                       "grid-auto-columns",          "grid-auto-flow",        "grid-auto-rows",         "grid-column-end",
-    "grid-column-start",         "grid-row-end",               "grid-row-start",        "grid-template-areas",    "grid-template-columns",
-    "grid-template-rows",        "height",                     "justify-content",       "justify-items",          "justify-self",
-    "left",                      "letter-spacing",             "line-height",           "list-style-position",    "list-style-type",
-    "margin-bottom",             "margin-left",                "margin-right",          "margin-top",             "max-height",
-    "max-width",                 "min-height",                 "min-width",             "object-fit",             "object-position",
-    "opacity",                   "order",                      "orphans",               "overflow",               "overflow-wrap",
-    "padding-bottom",            "padding-left",               "padding-right",         "padding-top",            "page",
-    "page-break-after",          "page-break-before",          "page-break-inside",     "position",               "right",
-    "row-gap",                   "text-align",                 "text-decoration-color", "text-decoration-line",   "text-decoration-style",
-    "text-decoration-thickness", "text-indent",                "text-overflow",         "text-shadow",            "text-transform",
-    "top",                       "transform",                  "transform-origin",      "vertical-align",         "white-space",
-    "widows",                    "width",                      "word-break",            "word-spacing",           "z-index",
+    "align-content",             "align-items",                "align-self",          "aspect-ratio",          "background-color",
+    "background-image",          "background-position",        "background-repeat",   "background-size",       "border-bottom-color",
+    "border-bottom-left-radius", "border-bottom-right-radius", "border-bottom-style", "border-bottom-width",   "border-collapse",
+    "border-spacing",            "border-left-color",          "border-left-style",   "border-left-width",     "border-radius",
+    "border-right-color",        "border-right-style",         "border-right-width",  "border-top-color",      "border-top-left-radius",
+    "border-top-right-radius",   "border-top-style",           "border-top-width",    "box-decoration-break",  "box-shadow",
+    "box-sizing",                "bottom",                     "break-after",         "break-before",          "break-inside",
+    "caption-side",              "clear",                      "color",               "column-gap",            "direction",
+    "display",                   "flex-basis",                 "flex-direction",      "flex-grow",             "flex-shrink",
+    "flex-wrap",                 "float",                      "font-family",         "font-size",             "font-style",
+    "font-weight",               "gap",                        "grid-auto-columns",   "grid-auto-flow",        "grid-auto-rows",
+    "grid-column-end",           "grid-column-start",          "grid-row-end",        "grid-row-start",        "grid-template-areas",
+    "grid-template-columns",     "grid-template-rows",         "height",              "justify-content",       "justify-items",
+    "justify-self",              "left",                       "letter-spacing",      "line-height",           "list-style-position",
+    "list-style-type",           "margin-bottom",              "margin-left",         "margin-right",          "margin-top",
+    "max-height",                "max-width",                  "min-height",          "min-width",             "object-fit",
+    "object-position",           "opacity",                    "order",               "orphans",               "overflow",
+    "overflow-wrap",             "padding-bottom",             "padding-left",        "padding-right",         "padding-top",
+    "page",                      "page-break-after",           "page-break-before",   "page-break-inside",     "position",
+    "right",                     "row-gap",                    "text-align",          "text-decoration-color", "text-decoration-line",
+    "text-decoration-style",     "text-decoration-thickness",  "text-indent",         "text-overflow",         "text-shadow",
+    "text-transform",            "top",                        "transform",           "transform-origin",      "vertical-align",
+    "white-space",               "widows",                     "width",               "word-break",            "word-spacing",
+    "z-index",
 };
 
 const logical_properties = [_][]const u8{
@@ -357,6 +358,8 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
         if (parseListStylePosition(value)) |list_style_position| style.list_style_position = list_style_position;
     } else if (eqlProp(name, "border-collapse")) {
         if (parseBorderCollapse(value)) |collapse| style.border_collapse = collapse;
+    } else if (eqlProp(name, "border-spacing")) {
+        if (try parseBorderSpacing(context, value, style.font_size)) |spacing| style.border_spacing = spacing;
     } else if (eqlProp(name, "caption-side")) {
         if (parseCaptionSide(value)) |side| style.caption_side = side;
     } else if (eqlProp(name, "border-top-left-radius")) {
@@ -434,6 +437,26 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
     } else if (eqlProp(name, "border-left-width")) {
         if (parseBorderWidth(value)) |l| style.border.left = l;
     }
+}
+
+fn parseBorderSpacing(context: Context, value: []const u8, font_size: f32) !?box.BorderSpacing {
+    const pair = splitRadiusPair(value);
+    const horizontal = try parseAbsoluteNonNegativeLength(context, pair.first, font_size) orelse return null;
+    const vertical = if (pair.second) |second|
+        try parseAbsoluteNonNegativeLength(context, second, font_size) orelse return null
+    else
+        horizontal;
+    return .{ .horizontal = horizontal, .vertical = vertical };
+}
+
+fn parseAbsoluteNonNegativeLength(context: Context, value: []const u8, font_size: f32) !?f32 {
+    const length = try parseDimensionWithContext(context.allocator, context.expression_store, value, context.expressionContext(font_size)) orelse return null;
+    const resolved = switch (length) {
+        .px => |pixels| pixels,
+        .expression => |expression| if (expression.dependsOnPercentage()) return null else expression.resolve(0) orelse return null,
+        else => return null,
+    };
+    return if (resolved >= 0) resolved else null;
 }
 
 fn parseCornerRadius(context: Context, value: []const u8, font_size: f32) !?box.CornerRadius {
@@ -747,7 +770,7 @@ fn isInheritedProperty(name: []const u8) bool {
         eqlProp(name, "overflow-wrap") or eqlProp(name, "text-decoration") or
         eqlProp(name, "text-decoration-line") or eqlProp(name, "text-decoration-style") or
         eqlProp(name, "text-decoration-color") or eqlProp(name, "text-decoration-thickness") or
-        eqlProp(name, "white-space") or eqlProp(name, "caption-side") or eqlProp(name, "list-style-type") or
+        eqlProp(name, "white-space") or eqlProp(name, "caption-side") or eqlProp(name, "border-spacing") or eqlProp(name, "list-style-type") or
         eqlProp(name, "list-style-position") or eqlProp(name, "orphans") or
         eqlProp(name, "widows");
 }
@@ -928,6 +951,10 @@ fn copyProperty(target: *box.Style, source: *const box.Style, name: []const u8) 
     }
     if (eqlProp(name, "caption-side")) {
         target.caption_side = source.caption_side;
+        return;
+    }
+    if (eqlProp(name, "border-spacing")) {
+        target.border_spacing = source.border_spacing;
         return;
     }
     if (eqlProp(name, "page")) {

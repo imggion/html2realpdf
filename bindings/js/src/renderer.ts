@@ -176,6 +176,7 @@ export class Html2RealPdf {
     if (options.resourceResolver !== undefined) snapshotOptions.resourceResolver = options.resourceResolver;
     if (options.strict !== undefined) snapshotOptions.strict = options.strict;
     if (options.enableLinks !== undefined) snapshotOptions.enableLinks = options.enableLinks;
+    if (options.layoutContext !== undefined) snapshotOptions.layoutContext = options.layoutContext;
     if (options.viewport !== undefined) snapshotOptions.viewport = options.viewport;
     if (options.includeShadowDom !== undefined) snapshotOptions.includeShadowDom = options.includeShadowDom;
     if (options.canvasToSvg !== undefined) snapshotOptions.canvasToSvg = options.canvasToSvg;

@@ -38,6 +38,9 @@ export type CssProfile = "document" | "web" | "strict";
 /** Media environment used while resolving styles and media queries. */
 export type MediaType = "screen" | "print";
 
+/** Containing block used for the snapshotted root element. */
+export type LayoutContext = "source" | "page";
+
 /** Action taken when an authored CSS property is outside the selected profile. */
 export type UnsupportedCssPolicy = "warn" | "error" | "ignore";
 
@@ -199,6 +202,12 @@ export interface RenderOptions {
   cssProfile?: CssProfile;
   /** Media environment used for style resolution. Defaults to `screen`. */
   mediaType?: MediaType;
+  /**
+   * Root layout context. `source` preserves the mounted browser width;
+   * `page` resolves an implicit root width and auto inline margins against the
+   * PDF content box. Defaults to `source`.
+   */
+  layoutContext?: LayoutContext;
   /** Isolated viewport used for media queries and responsive layout. */
   viewport?: ViewportOptions;
   /** Unsupported-CSS policy; defaults to `error` for strict mode and `warn` otherwise. */

@@ -74,8 +74,9 @@ pub fn layoutWithOptions(
     const containing_height: ?f32 = if (state.web_sizing) options.containing_block_height else containing.height;
 
     const fragment_start = state.fragments.items.len;
-    const outer_x = containing.x + margin.left;
-    const available_outer_width = @max(containing.width - margin.left - margin.right, 1);
+    const fixed_margin_left = if (style.margin_auto.left) 0 else margin.left;
+    const fixed_margin_right = if (style.margin_auto.right) 0 else margin.right;
+    const available_outer_width = @max(containing.width - fixed_margin_left - fixed_margin_right, 1);
     const horizontal_non_content = border.left + border.right + padding.left + padding.right;
     const vertical_non_content = border.top + border.bottom + padding.top + padding.bottom;
     const inline_sizes = if (options.shrink_to_fit or style.width.usesIntrinsicSizing() or style.min_width.usesIntrinsicSizing() or style.max_width.usesIntrinsicSizing())
@@ -122,13 +123,23 @@ pub fn layoutWithOptions(
         content_width + horizontal_non_content
     else
         @min(content_width + horizontal_non_content, available_outer_width);
+    const auto_margin_space = @max(containing.width - fixed_margin_left - outer_width - fixed_margin_right, 0);
+    const used_margin_left = if (style.margin_auto.left)
+        auto_margin_space / @as(f32, if (style.margin_auto.right) 2 else 1)
+    else
+        fixed_margin_left;
+    const used_margin_right = if (style.margin_auto.right)
+        auto_margin_space / @as(f32, if (style.margin_auto.left) 2 else 1)
+    else
+        fixed_margin_right;
+    const outer_x = containing.x + used_margin_left;
     var outer_y = cursor_y.* + used_margin_top;
     const tracks_fragmentainer_inline = options.fragmentainer_inline_insets != null and
         options.forced_content_width == null and !options.shrink_to_fit and
         style.width.isAuto() and style.min_width.isAuto() and style.max_width.isAuto();
     const fragmentainer_border_insets: ?types.FragmentainerInlineInsets = if (tracks_fragmentainer_inline) .{
-        .left = options.fragmentainer_inline_insets.?.left + margin.left,
-        .right = options.fragmentainer_inline_insets.?.right + margin.right,
+        .left = options.fragmentainer_inline_insets.?.left + used_margin_left,
+        .right = options.fragmentainer_inline_insets.?.right + used_margin_right,
     } else null;
     const fragmentainer_content_insets: ?types.FragmentainerInlineInsets = if (fragmentainer_border_insets) |insets| .{
         .left = insets.left + border.left + padding.left,

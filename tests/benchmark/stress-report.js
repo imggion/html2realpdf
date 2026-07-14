@@ -7,7 +7,7 @@ const owners = ["Commercial", "Finance", "Operations", "Platform", "Data", "Secu
 
 export const stressReportStyles = `
   .stress-report-root { background:#ffffff; color:#172033; font-family:"Noto Sans",Arial,sans-serif; font-size:12px; margin:0; padding:0; }
-  .stress-page { background:#ffffff; box-sizing:border-box; min-height:940px; padding:28px 30px; width:700px; break-after:page; page-break-after:always; }
+  .stress-page { background:#ffffff; box-sizing:border-box; min-height:940px; margin:0 auto; padding:28px 30px; width:700px; break-after:page; page-break-after:always; }
   .stress-page:last-child { break-after:auto; page-break-after:auto; }
   .stress-cover { background:#10243e; color:#ffffff; }
   .stress-header { border-bottom:2px solid #2563eb; margin-bottom:10px; padding-bottom:7px; }

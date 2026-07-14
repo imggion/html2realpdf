@@ -115,6 +115,7 @@ same ABI with `npm run build:small` and serve that asset through `wasmUrl`.
 | `unsupportedCss` | `"error"` in strict mode, otherwise `"warn"` | `warn` records diagnostics, `error` rejects, and `ignore` omits silently. |
 | `strict` | `false` | Promotes unsupported snapshot CSS to errors but does not select the `web` layout profile. Explicit `unsupportedCss` wins. |
 | `mediaType` | `"screen"` | Selects the media environment used during style resolution. |
+| `layoutContext` | `"source"` | `"page"` lets an implicit root width and authored auto inline margins resolve against the PDF content box. |
 | `viewport` | Source environment | Makes responsive layout and media queries deterministic. |
 
 Named page formats retain their physical dimensions regardless of `unit`.

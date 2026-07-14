@@ -1038,6 +1038,23 @@ test "cascade: caption-side inherits and accepts bottom" {
     try std.testing.expectEqual(box.CaptionSide.bottom, ct.styles[caption_id].caption_side);
 }
 
+test "cascade: border-spacing parses absolute pairs and inherits" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='border-spacing:8px 4pt'><span>inherited</span><em style='border-spacing:initial'>initial</em></div>" ++
+        "<div style='border-spacing:-1px'>invalid</div>");
+    defer ct.deinit(allocator);
+    const parent_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const inherited_id = ct.document.nodes.items[parent_id].first_child.?;
+    const initial_id = ct.document.nodes.items[inherited_id].next_sibling.?;
+    const invalid_id = ct.document.nodes.items[parent_id].next_sibling.?;
+
+    try std.testing.expectApproxEqAbs(@as(f32, 8), ct.styles[parent_id].border_spacing.horizontal, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.3333), ct.styles[parent_id].border_spacing.vertical, 0.01);
+    try std.testing.expectEqual(ct.styles[parent_id].border_spacing, ct.styles[inherited_id].border_spacing);
+    try std.testing.expectEqual(box.BorderSpacing{}, ct.styles[initial_id].border_spacing);
+    try std.testing.expectEqual(box.BorderSpacing{}, ct.styles[invalid_id].border_spacing);
+}
+
 test "cascade: clear remains local to the clearing block" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<div style='clear:both'><p>child</p></div>");

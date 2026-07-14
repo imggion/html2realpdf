@@ -43,6 +43,7 @@ pub const document_profile = [_]PropertySupport{
     .{ .name = "border", .stage = full, .notes = "physical sides plus per-corner elliptical radius paths" },
     .{ .name = "border-collapse", .stage = layout },
     .{ .name = "border-radius", .stage = full, .notes = "per-corner length-percentage ellipses and rounded overflow clipping" },
+    .{ .name = "border-spacing", .stage = layout, .notes = "inherited one or two non-negative lengths for separate-border tables" },
     .{ .name = "box-decoration-break", .stage = full, .notes = "web and strict slice or clone page-fragment borders and radius" },
     .{ .name = "box-shadow", .stage = full, .notes = "web and strict multiple outer and inset native vector falloff shadows" },
     .{ .name = "box-sizing", .stage = layout },

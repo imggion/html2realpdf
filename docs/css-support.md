@@ -55,6 +55,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `list-style-type` / `list-style-position` | Y | Y | Y | Y | Y | Y | Y | inherited common bullet, decimal, alphabetic and Roman markers; inside/outside placement, HTML start/reversed/value/type hints |
 | `box-sizing` | Y | Y | Y | Y | - | Y | Y | content-box and border-box |
 | `border-collapse` | Y | Y | Y | Y | Y | Y | Y | table collapsed-border approximation |
+| `border-spacing` | Y | Y | Y | Y | Y | Y | Y | inherited one/two-value non-negative lengths; horizontal and vertical outer/inter-cell spacing applies only to separate-border tables |
 | `caption-side` | Y | Y | Y | Y | Y | Y | Y | inherited `top` and `bottom` placement on table captions |
 | table formatting | Y | Y | Y | Y | Y | Y | Y | intrinsic auto-layout tracks, percentage/column hints, rowspan/colspan, captions and column groups, repeated headers plus page-end footers with reserved body extent, avoid-linked row groups, and top/middle/bottom/baseline cell alignment including row spans |
 | break before/after/inside | Y | Y | Y | Y | - | Y | Y | `always` alias plus `page`, `left`, `right`, `recto`, `verso`, `avoid`, and `avoid-page`; adjacent values arbitrate together, first/last block-child values propagate, forced values override avoid, and block/table/Flex/Grid page opportunities share one fragmentainer model |

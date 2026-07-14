@@ -639,6 +639,7 @@ async function benchmarkHtml2RealPdf(fixture, dependencies) {
       renderer = await dependencies.createRenderer({ wasmUrl: dependencies.wasmUrl });
       return renderer.render(fixture.html, {
         page: fixture.page,
+        layoutContext: "page",
         fallback: "error",
       });
     });
@@ -649,9 +650,13 @@ async function benchmarkHtml2RealPdf(fixture, dependencies) {
 
     const warm = await measure(() => renderer.render(fixture.html, {
       page: fixture.page,
+      layoutContext: "page",
       fallback: "error",
     }));
     warmPdf = warm.value;
+    if (warmPdf.diagnostics.some((diagnostic) => diagnostic.property === "border-spacing")) {
+      throw new Error(`border-spacing emitted a diagnostic: ${JSON.stringify(warmPdf.diagnostics)}`);
+    }
     const bytes = warmPdf.toUint8Array().slice();
     const analysis = await analyzePdf(bytes, dependencies.pdfJs);
     const artifact = createPdfArtifact(bytes, `${fixture.filename}-html2realpdf.pdf`);
@@ -856,6 +861,7 @@ async function verifyDomSnapshotFidelity() {
     <label>Live value <input value="initial"></label>
     <button type="button">Action</button>
     <img alt="fit probe" style="width:120px;height:80px;aspect-ratio:3/2;object-fit:cover;object-position:75% 25%">
+    <table style="border-collapse:separate;border-spacing:7px 3px"><tbody><tr><td>Gap probe</td></tr></tbody></table>
   `;
   document.body.append(fixture);
   const input = fixture.querySelector("input");
@@ -882,7 +888,9 @@ async function verifyDomSnapshotFidelity() {
     const control = root?.querySelector("label span");
     const button = root?.querySelector("span[type='button']");
     const image = root?.querySelector("img");
+    const table = root?.querySelector("table");
     if (!root?.style.backgroundColor) throw new Error("root background was not materialized");
+    if (!root.style.width) throw new Error("source layout context did not preserve the mounted root width");
     if (paragraph?.style.backgroundColor) throw new Error("transparent child background was serialized");
     if (paragraph?.style.height) throw new Error("auto block height was frozen into the snapshot");
     if (paragraph?.style.wordSpacing !== "3px") throw new Error("computed word-spacing was not captured");
@@ -907,6 +915,23 @@ async function verifyDomSnapshotFidelity() {
     }
     if (image?.getAttribute("data-html2realpdf-intrinsic-width") !== "2" || image.getAttribute("data-html2realpdf-intrinsic-height") !== "1") {
       throw new Error("image intrinsic dimensions were not captured");
+    }
+    if (table?.style.borderSpacing !== "7px 3px") throw new Error("computed border-spacing was not captured");
+    if (snapshot.diagnostics.some((diagnostic) => diagnostic.property === "border-spacing")) {
+      throw new Error(`supported border-spacing emitted a diagnostic: ${JSON.stringify(snapshot.diagnostics)}`);
+    }
+
+    fixture.style.margin = "0 auto";
+    const pageSnapshot = await snapshotSource({ current: fixture }, {
+      resourcePolicy: "error",
+      layoutContext: "page",
+    });
+    const pageTemplate = document.createElement("template");
+    pageTemplate.innerHTML = pageSnapshot.html;
+    const pageRoot = pageTemplate.content.firstElementChild;
+    if (pageRoot?.style.width) throw new Error("page layout context froze an implicit root width");
+    if (pageRoot?.style.marginLeft !== "auto" || pageRoot.style.marginRight !== "auto") {
+      throw new Error("page layout context did not preserve authored auto inline margins");
     }
   } finally {
     fixture.remove();

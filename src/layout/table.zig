@@ -125,6 +125,7 @@ fn layoutTableRow(
     active_spans: []const ActiveSpan,
     occupied: []bool,
     collapse_borders: bool,
+    horizontal_spacing: f32,
     is_header_row: bool,
     is_footer_row: bool,
 ) !RowLayout {
@@ -168,10 +169,11 @@ fn layoutTableRow(
             const row_span = tableCellRowSpan(state, cell_id);
             column_index = findFreeColumns(occupied, column_index, span);
             if (column_index + span > column_widths.len) break;
-            var cell_x = start_x;
-            for (column_widths[0..column_index]) |track_width| cell_x += track_width;
+            var cell_x = start_x + horizontal_spacing;
+            for (column_widths[0..column_index]) |track_width| cell_x += track_width + horizontal_spacing;
             var cell_width: f32 = 0;
             for (column_widths[column_index .. column_index + span]) |track_width| cell_width += track_width;
+            if (span > 1) cell_width += horizontal_spacing * @as(f32, @floatFromInt(span - 1));
             var cell_cursor = row_y;
             const cell_fragment_id = state.fragments.items.len;
             _ = try state.layoutBlockWithOptions(
@@ -247,15 +249,22 @@ fn layoutPass(
     defer bottom_captions.deinit(state.allocator);
     try collectTableCaptions(state, table_id, &top_captions, &bottom_captions);
 
+    const table_style = state.tree.boxes.items[table_id].style;
+    const collapse_borders = table_style.border_collapse == .collapse;
+    const horizontal_spacing = if (collapse_borders) 0 else table_style.border_spacing.horizontal;
+    const vertical_spacing = if (collapse_borders) 0 else table_style.border_spacing.vertical;
     const column_count = @max(try tableGridColumnCount(state, flow_rows), tableDefinedColumnCount(state, table_id));
-    const column_widths = try tableColumnWidths(state, table_id, flow_rows, column_count, width);
+    const spacing_width = horizontal_spacing * @as(f32, @floatFromInt(column_count + 1));
+    const track_budget = @max(width - spacing_width, @as(f32, @floatFromInt(column_count)));
+    const column_widths = try tableColumnWidths(state, table_id, flow_rows, column_count, track_budget);
     defer state.allocator.free(column_widths);
-    var table_width: f32 = 0;
+    var table_width: f32 = spacing_width;
     for (column_widths) |track_width| table_width += track_width;
     if (commit_root_width) expandTableRootWidth(state, table_id, table_width - width);
 
     var row_y = start_y;
     try layoutCaptions(state, table_id, top_captions.items, start_x, &row_y, table_width);
+    if (flow_rows.len > 0) row_y += vertical_spacing;
     var header_template_start: ?usize = null;
     var header_template_end: usize = 0;
     var header_start_y: f32 = 0;
@@ -277,7 +286,6 @@ fn layoutPass(
     const occupied = try state.allocator.alloc(bool, column_count);
     defer state.allocator.free(occupied);
 
-    const collapse_borders = state.tree.boxes.items[table_id].style.border_collapse == .collapse;
     for (flow_rows, 0..) |row_id, row_index| {
         const is_header_row = isTableHeaderRow(state, row_id);
         const is_footer_row = isTableFooterRow(state, row_id);
@@ -286,7 +294,7 @@ fn layoutPass(
                 const first_page = context.pageIndex(start_y);
                 const current_page = context.pageIndex(row_y);
                 if (current_page > first_page) {
-                    row_y = context.pageEnd(row_y) - footer_reservation;
+                    row_y = context.pageEnd(row_y) - footer_reservation + vertical_spacing;
                 }
             }
         }
@@ -332,6 +340,7 @@ fn layoutPass(
             active_spans,
             occupied,
             collapse_borders,
+            horizontal_spacing,
             is_header_row,
             is_footer_row,
         );
@@ -407,6 +416,7 @@ fn layoutPass(
                         active_spans,
                         occupied,
                         collapse_borders,
+                        horizontal_spacing,
                         is_header_row,
                         is_footer_row,
                     );
@@ -449,6 +459,7 @@ fn layoutPass(
                     active_spans,
                     occupied,
                     collapse_borders,
+                    horizontal_spacing,
                     is_header_row,
                     is_footer_row,
                 );
@@ -468,18 +479,18 @@ fn layoutPass(
         if (is_header_row) {
             if (header_template_start == null) {
                 header_template_start = row_layout.fragment_start;
-                header_start_y = row_y;
+                header_start_y = row_y - vertical_spacing;
             }
             header_template_end = state.fragments.items.len;
-            header_height = row_y + row_height - header_start_y;
+            header_height = row_y + row_height + vertical_spacing - header_start_y;
         }
         if (is_footer_row) {
             if (footer_template_start == null) {
                 footer_template_start = row_layout.fragment_start;
-                footer_start_y = row_y;
+                footer_start_y = row_y - vertical_spacing;
             }
             footer_template_end = state.fragments.items.len;
-            footer_height = row_y + row_height - footer_start_y;
+            footer_height = row_y + row_height + vertical_spacing - footer_start_y;
         }
 
         var old_span_cells = try std.ArrayList(CellLayout).initCapacity(state.allocator, 0);
@@ -523,7 +534,7 @@ fn layoutPass(
             }
         }
 
-        row_y += row_height;
+        row_y += row_height + vertical_spacing;
         previous_break_after = row_source.style.page_break_after;
         previous_page_row = row_id;
     }

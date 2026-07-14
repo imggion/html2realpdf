@@ -658,6 +658,13 @@ pub const EdgeSizes = struct {
     left: f32 = 0,
 };
 
+/// Resolved CSS table spacing. The cascade normalizes supported absolute
+/// lengths to CSS pixels before table track geometry consumes the pair.
+pub const BorderSpacing = struct {
+    horizontal: f32 = 0,
+    vertical: f32 = 0,
+};
+
 /// A layout dimension that must retain its percentage until a containing size
 /// is known. Absolute CSS units are normalized to CSS pixels by the cascade.
 pub const FitContentLimit = union(enum) {
@@ -906,6 +913,7 @@ pub const Style = struct {
     grid_row_start: GridLine = .auto,
     grid_row_end: GridLine = .auto,
     border_collapse: BorderCollapse = .separate,
+    border_spacing: BorderSpacing = .{},
     caption_side: CaptionSide = .top,
     border_radius: f32 = 0,
     border_radii: BorderRadii = .{},
@@ -1824,6 +1832,9 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
     }
     if (style.box_sizing != .contentBox) try writer.print(" box-sizing={s}", .{style.box_sizing.toString()});
     if (style.border_collapse != .separate) try writer.print(" border-collapse={s}", .{style.border_collapse.toString()});
+    if (style.border_spacing.horizontal != 0 or style.border_spacing.vertical != 0) {
+        try writer.print(" border-spacing={d:.2} {d:.2}", .{ style.border_spacing.horizontal, style.border_spacing.vertical });
+    }
     if (style.page_break_before != .auto) try writer.print(" page-break-before={s}", .{style.page_break_before.toString()});
     if (style.page_break_after != .auto) try writer.print(" page-break-after={s}", .{style.page_break_after.toString()});
     if (style.page_break_inside != .auto) try writer.print(" page-break-inside={s}", .{style.page_break_inside.toString()});

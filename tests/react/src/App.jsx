@@ -291,6 +291,7 @@ export function App() {
         renderer = await createRenderer({ wasmUrl });
         return renderer.render(reportRef, {
           page: profile.page,
+          layoutContext: "page",
           fallback: "error",
           canvasFallback: "error",
           canvasToSvg: ({ canvas }) => canvas.getAttribute("aria-label") === "Revenue chart" ? revenueChartSvg() : null,
@@ -303,11 +304,15 @@ export function App() {
 
       const warm = await measure(() => renderer.render(reportRef, {
         page: profile.page,
+        layoutContext: "page",
         fallback: "error",
         canvasFallback: "error",
         canvasToSvg: ({ canvas }) => canvas.getAttribute("aria-label") === "Revenue chart" ? revenueChartSvg() : null,
       }));
       warmPdf = warm.value;
+      if (warmPdf.diagnostics.some((diagnostic) => diagnostic.property === "border-spacing")) {
+        throw new Error(`border-spacing emitted a diagnostic: ${JSON.stringify(warmPdf.diagnostics)}`);
+      }
       const bytes = warmPdf.toUint8Array().slice();
       const analysis = await analyzePdf(bytes, pdfJs);
       const artifact = createPdfArtifact(bytes, `${profile.filename}-html2realpdf.pdf`);
@@ -418,11 +423,15 @@ export function App() {
       pdfRef.current?.dispose();
       pdfRef.current = await rendererRef.current.render(reportRef, {
         page: profile.page,
+        layoutContext: "page",
         metadata: { title: profile.title, author: "Northstar Analytics" },
         fallback: "error",
         canvasFallback: "error",
         canvasToSvg: ({ canvas }) => canvas.getAttribute("aria-label") === "Revenue chart" ? revenueChartSvg() : null,
       });
+      if (pdfRef.current.diagnostics.some((diagnostic) => diagnostic.property === "border-spacing")) {
+        throw new Error(`border-spacing emitted a diagnostic: ${JSON.stringify(pdfRef.current.diagnostics)}`);
+      }
       const bytes = pdfRef.current.toUint8Array();
       pdfExportRef.current.setAttribute("data-pdf", bytesToBase64(bytes));
       setStatus(`Generated ${bytes.length.toLocaleString()} bytes across ${pdfRef.current.pageCount} page(s) from ref.current.`);

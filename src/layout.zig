@@ -1741,6 +1741,78 @@ test "table layout places cells in shared row columns" {
     try std.testing.expectApproxEqAbs(cells[0].height, cells[1].height, 0.01);
 }
 
+test "separate table border spacing reserves outer and inter-cell tracks" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:200px;border-spacing:10px 5px'>" ++
+        "<tr><td style='width:50%;height:20px'></td><td style='width:50%;height:20px'></td></tr>" ++
+        "<tr><td style='height:20px'></td><td style='height:20px'></td></tr>" ++
+        "</table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200 });
+    defer result.deinit(allocator);
+
+    var cells: [4]geometry.Rect = undefined;
+    var cell_count: usize = 0;
+    var table_rect: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const source_box = tree.boxes.items[fragment.source_box];
+        if (source_box.kind == .table) table_rect = fragment.rect;
+        if (source_box.kind != .tableCell) continue;
+        cells[cell_count] = fragment.rect;
+        cell_count += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 4), cell_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), cells[0].x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 85), cells[0].width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 105), cells[1].x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), cells[0].y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), cells[2].y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 55), table_rect.?.height, 0.01);
+}
+
+test "collapsed tables ignore authored border spacing" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source = "<table style='width:200px;border-collapse:collapse;border-spacing:10px'><tr><td></td><td></td></tr></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200 });
+    defer result.deinit(allocator);
+
+    var cells: [2]geometry.Rect = undefined;
+    var cell_count: usize = 0;
+    for (result.fragments.items) |fragment| {
+        if (tree.boxes.items[fragment.source_box].kind != .tableCell) continue;
+        cells[cell_count] = fragment.rect;
+        cell_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), cell_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), cells[0].x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), cells[1].x, 0.01);
+}
+
 test "table cells align top middle bottom and shared baselines" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -1977,7 +2049,7 @@ test "table grid honors row and column spans" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const allocator = arena_state.allocator();
-    const source = "<table style=\"width:300px\"><tr><td rowspan=\"2\">A</td><td>B</td></tr><tr><td>C</td></tr></table>";
+    const source = "<table style=\"width:300px;border-spacing:10px 5px\"><tr><td rowspan=\"2\">A</td><td>B</td></tr><tr><td>C</td></tr></table>";
 
     var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
     defer tokens.deinit(allocator);
@@ -1997,11 +2069,11 @@ test "table grid honors row and column spans" {
         count += 1;
     }
     try std.testing.expectEqual(@as(usize, 3), count);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), cells[0].x, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 150), cells[1].x, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 150), cells[2].x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), cells[0].x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 155), cells[1].x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 155), cells[2].x, 0.01);
     try std.testing.expect(cells[2].y > cells[1].y);
-    try std.testing.expectApproxEqAbs(cells[1].height + cells[2].height, cells[0].height, 0.01);
+    try std.testing.expectApproxEqAbs(cells[1].height + cells[2].height + 5, cells[0].height, 0.01);
 }
 
 test "row-spanning cells align after their final row height is known" {
@@ -2407,6 +2479,42 @@ test "web sizing measures min max fit content and shrink-to-fit inline blocks" {
     try std.testing.expectApproxEqAbs(@as(f32, 100), fit_width.?, 0.01);
     try std.testing.expectApproxEqAbs(inline_expected, inline_width.?, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 120), constrained_width.?, 0.01);
+}
+
+test "normal flow block auto margins resolve against the containing block" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='width:100px;height:10px;margin-left:auto;margin-right:auto;background:#ff0000'></div>" ++
+        "<div style='width:80px;height:10px;margin-left:auto;background:#00ff00'></div>" ++
+        "<div style='width:60px;height:10px;margin-right:auto;background:#0000ff'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 300 });
+    defer result.deinit(allocator);
+
+    var centered: ?geometry.Rect = null;
+    var pushed_right: ?geometry.Rect = null;
+    var kept_left: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const background = fragment.background orelse continue;
+        if (background.red == 1 and background.green == 0 and background.blue == 0) centered = fragment.rect;
+        if (background.green == 1 and background.red == 0 and background.blue == 0) pushed_right = fragment.rect;
+        if (background.blue == 1 and background.red == 0 and background.green == 0) kept_left = fragment.rect;
+    }
+
+    try std.testing.expectApproxEqAbs(@as(f32, 100), centered.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 220), pushed_right.?.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), kept_left.?.x, 0.01);
 }
 
 test "adjacent block margins collapse instead of adding" {

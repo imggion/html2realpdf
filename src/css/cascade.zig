@@ -143,6 +143,7 @@ fn computeStylesRecursive(
         style.overflow_wrap = ps.overflow_wrap;
         style.direction = ps.direction;
         style.caption_side = ps.caption_side;
+        style.border_spacing = ps.border_spacing;
         style.list_style_type = ps.list_style_type;
         style.list_style_position = ps.list_style_position;
         style.orphans = ps.orphans;

@@ -6,7 +6,7 @@
  */
 
 import { CanvasToSvgError, InvalidSourceError, ResourceLoadError, UnsupportedCssError, UnsupportedEnvironmentError } from "./errors.js";
-import type { CanvasFallbackPolicy, CanvasToSvg, CssProfile, Diagnostic, FallbackPolicy, HtmlSource, MediaType, ResourceResolver, UnsupportedCssPolicy, ViewportOptions } from "./types.js";
+import type { CanvasFallbackPolicy, CanvasToSvg, CssProfile, Diagnostic, FallbackPolicy, HtmlSource, LayoutContext, MediaType, ResourceResolver, UnsupportedCssPolicy, ViewportOptions } from "./types.js";
 import type { NormalizedPage } from "./page.js";
 
 /** Internal snapshot policy derived from public per-render options. */
@@ -17,6 +17,7 @@ export interface SnapshotOptions {
   strict?: boolean;
   cssProfile?: CssProfile;
   mediaType?: MediaType;
+  layoutContext?: LayoutContext;
   viewport?: ViewportOptions;
   unsupportedCss?: UnsupportedCssPolicy;
   fallback?: FallbackPolicy;
@@ -157,6 +158,7 @@ const SUPPORTED_COMPUTED_PROPERTIES = [
   "border-bottom-color",
   "border-left-color",
   "border-collapse",
+  "border-spacing",
   "caption-side",
   "border-top-left-radius",
   "border-top-right-radius",
@@ -239,6 +241,7 @@ const INHERITED_SNAPSHOT_ELISION = new Set<string>([
   "word-break",
   "word-spacing",
   "overflow-wrap",
+  "border-spacing",
 ]);
 
 /** Browser initial values that map exactly to an unmodified native Style. */
@@ -256,6 +259,7 @@ const NATIVE_INITIAL_COMPUTED_VALUES: Readonly<Record<string, readonly string[]>
   "border-bottom-style": ["none"],
   "border-bottom-width": ["0px"],
   "border-collapse": ["separate"],
+  "border-spacing": ["0px"],
   "border-left-style": ["none"],
   "border-left-width": ["0px"],
   "border-right-style": ["none"],
@@ -350,6 +354,17 @@ const AUTHORED_FLOW_DIMENSION_MIRRORS = {
   "max-height": "--html2realpdf-authored-max-height",
 } as const;
 type FlowDimensionProperty = keyof typeof AUTHORED_FLOW_DIMENSION_MIRRORS;
+const AUTHORED_AUTO_MARGIN_MIRRORS = {
+  "margin-top": "--html2realpdf-authored-margin-top",
+  "margin-right": "--html2realpdf-authored-margin-right",
+  "margin-bottom": "--html2realpdf-authored-margin-bottom",
+  "margin-left": "--html2realpdf-authored-margin-left",
+} as const;
+type AutoMarginProperty = keyof typeof AUTHORED_AUTO_MARGIN_MIRRORS;
+const AUTHORED_FLOW_MIRRORS = {
+  ...AUTHORED_FLOW_DIMENSION_MIRRORS,
+  ...AUTHORED_AUTO_MARGIN_MIRRORS,
+} as const;
 const VECTOR_SVG_ELEMENTS = new Set([
   "svg", "g", "defs", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
   "text", "tspan", "linearGradient", "radialGradient", "stop", "clipPath", "title", "desc",
@@ -374,6 +389,21 @@ const SUPPORTED_CSS_PROPERTIES = new Set<string>([
   "grid", "grid-template", "grid-column", "grid-row", "grid-area",
   "place-content", "place-items", "place-self",
 ]);
+const NO_OP_SERIALIZED_FONT_LONGHANDS: Readonly<Record<string, readonly string[]>> = {
+  "font-feature-settings": ["normal"],
+  "font-kerning": ["auto"],
+  "font-optical-sizing": ["auto"],
+  "font-size-adjust": ["none"],
+  "font-variant-alternates": ["normal"],
+  "font-variant-caps": ["normal"],
+  "font-variant-east-asian": ["normal"],
+  "font-variant-emoji": ["normal"],
+  "font-variant-ligatures": ["normal"],
+  "font-variant-numeric": ["normal"],
+  "font-variant-position": ["normal"],
+  "font-variation-settings": ["normal"],
+  "font-width": ["normal"],
+};
 
 /**
  * Selects the inert-string or live-element snapshot path.
@@ -1231,18 +1261,18 @@ function collectAuthoredPageMirrorRules(rules: CSSRuleList, view: Window, output
 }
 
 /**
- * Preserves whether normal-flow dimensions were authored so browser used values
- * do not accidentally freeze otherwise reflowable PDF geometry.
+ * Preserves normal-flow dimensions and auto margins before browser used values
+ * erase the authored page-relative intent.
  */
-function installAuthoredFlowDimensionMirrors(document: Document): () => void {
+function installAuthoredFlowMirrors(document: Document): () => void {
   const view = document.defaultView ?? window;
-  const reset = Object.values(AUTHORED_FLOW_DIMENSION_MIRRORS)
+  const reset = Object.values(AUTHORED_FLOW_MIRRORS)
     .map((property) => `${property}:initial`)
     .join(";");
   const rules: string[] = [`*{${reset}}`];
   for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])]) {
     try {
-      collectAuthoredFlowDimensionMirrorRules(sheet.cssRules, view, rules);
+      collectAuthoredFlowMirrorRules(sheet.cssRules, view, rules);
     } catch {
       // Cross-origin declarations fall back to their computed dimensions.
     }
@@ -1256,7 +1286,7 @@ function installAuthoredFlowDimensionMirrors(document: Document): () => void {
   for (const element of document.querySelectorAll("[style]")) {
     if (!("style" in element)) continue;
     const style = (element as HTMLElement | SVGElement).style;
-    for (const [property, mirror] of Object.entries(AUTHORED_FLOW_DIMENSION_MIRRORS) as Array<[FlowDimensionProperty, string]>) {
+    for (const [property, mirror] of Object.entries(AUTHORED_FLOW_MIRRORS)) {
       const value = style.getPropertyValue(property).trim();
       if (!value) continue;
       restorations.push({
@@ -1278,13 +1308,13 @@ function installAuthoredFlowDimensionMirrors(document: Document): () => void {
   };
 }
 
-function collectAuthoredFlowDimensionMirrorRules(rules: CSSRuleList, view: Window, output: string[]): void {
+function collectAuthoredFlowMirrorRules(rules: CSSRuleList, view: Window, output: string[]): void {
   for (const rule of [...rules]) {
     if (rule.type === CSS_STYLE_RULE && "style" in rule && "selectorText" in rule) {
       const styleRule = rule as CSSStyleRule;
       if (styleRule.selectorText.includes("::")) continue;
       const declarations: string[] = [];
-      for (const [property, mirror] of Object.entries(AUTHORED_FLOW_DIMENSION_MIRRORS) as Array<[FlowDimensionProperty, string]>) {
+      for (const [property, mirror] of Object.entries(AUTHORED_FLOW_MIRRORS)) {
         const value = styleRule.style.getPropertyValue(property).trim();
         if (!value) continue;
         const important = styleRule.style.getPropertyPriority(property) === "important" ? "!important" : "";
@@ -1296,7 +1326,7 @@ function collectAuthoredFlowDimensionMirrorRules(rules: CSSRuleList, view: Windo
     if (!("cssRules" in rule) || !(rule as CSSGroupingRule).cssRules) continue;
     if (rule.type === CSS_MEDIA_RULE && "conditionText" in rule && !view.matchMedia(String(rule.conditionText)).matches) continue;
     if (rule.type === CSS_SUPPORTS_RULE && "conditionText" in rule && !CSS.supports(String(rule.conditionText))) continue;
-    collectAuthoredFlowDimensionMirrorRules((rule as CSSGroupingRule).cssRules, view, output);
+    collectAuthoredFlowMirrorRules((rule as CSSGroupingRule).cssRules, view, output);
   }
 }
 
@@ -1361,7 +1391,7 @@ async function snapshotElement(
 }> {
   const diagnostics: Diagnostic[] = [];
   const removePageMirror = installAuthoredPageMirror(element.ownerDocument);
-  const removeFlowDimensionMirrors = installAuthoredFlowDimensionMirrors(element.ownerDocument);
+  const removeFlowMirrors = installAuthoredFlowMirrors(element.ownerDocument);
   try {
     inspectAuthoredCss(element, options, diagnostics);
     const computedStyles = new SnapshotStyleCache();
@@ -1388,7 +1418,7 @@ async function snapshotElement(
       ...(pageStyle.rules.length > 0 ? { pageRules: pageStyle.rules } : {}),
     };
   } finally {
-    removeFlowDimensionMirrors();
+    removeFlowMirrors();
     removePageMirror();
   }
 }
@@ -1929,17 +1959,22 @@ function materializeComputedStyle(
     const authoredFlowDimension = isFlowDimension(property)
       ? computed.getPropertyValue(AUTHORED_FLOW_DIMENSION_MIRRORS[property]).trim()
       : "";
+    const authoredAutoMargin = isAutoMargin(property)
+      ? computed.getPropertyValue(AUTHORED_AUTO_MARGIN_MIRRORS[property]).trim()
+      : "";
     const value = property === "display"
       ? display
       : property === "page"
         ? nativePage && nativePage !== "auto" ? nativePage : mirroredPage || nativePage
+      : options.layoutContext === "page" && authoredAutoMargin === "auto"
+        ? "auto"
       : authoredFlowDimension.endsWith("%")
         ? authoredFlowDimension
       : authoredInsets && property in authoredInsets
         ? authoredInsets[property as keyof typeof authoredInsets]!
         : computed.getPropertyValue(property);
     if (isFlowDimension(property)) {
-      if (authoredFlowDimension === "auto" || !shouldMaterializeFlowDimension(original, property, isSnapshotRoot)) continue;
+      if (authoredFlowDimension === "auto" || !shouldMaterializeFlowDimension(original, property, isSnapshotRoot, options.layoutContext)) continue;
     }
     // A fully transparent background has no paint effect. Omitting it keeps
     // the display list compact while semi-transparent colors retain real PDF
@@ -2252,8 +2287,17 @@ function isFlowDimension(property: string): property is FlowDimensionProperty {
   return property in AUTHORED_FLOW_DIMENSION_MIRRORS;
 }
 
-function shouldMaterializeFlowDimension(original: Element, property: string, isSnapshotRoot: boolean): boolean {
-  if (property === "width" && isSnapshotRoot) return true;
+function isAutoMargin(property: string): property is AutoMarginProperty {
+  return property in AUTHORED_AUTO_MARGIN_MIRRORS;
+}
+
+function shouldMaterializeFlowDimension(
+  original: Element,
+  property: string,
+  isSnapshotRoot: boolean,
+  layoutContext: LayoutContext | undefined,
+): boolean {
+  if (property === "width" && isSnapshotRoot && layoutContext !== "page") return true;
   if (isReplacedOrControl(original)) return true;
   return hasAuthoredProperty(original, property);
 }
@@ -2912,6 +2956,9 @@ function inspectAuthoredCss(root: ParentNode, options: SnapshotOptions, diagnost
       const property = match[1]?.toLowerCase();
       const value = (match[2]?.trim().toLowerCase() ?? "").replace(/\s*!important\s*$/, "");
       if (!property || property.startsWith("--")) continue;
+      // WebKit may serialize the supported `font` shorthand as these no-op
+      // longhands when HTML is moved into the isolated print environment.
+      if (NO_OP_SERIALIZED_FONT_LONGHANDS[property]?.includes(value)) continue;
       validateAuthoredLayout(property, value, options);
       if (property === "background" && !usesWebLayout(options) && /(?:url|(?:repeating-)?(?:linear|radial|conic)-gradient)\s*\(/.test(value)) {
         reportUnsupportedCss("background-image", options, diagnostics);

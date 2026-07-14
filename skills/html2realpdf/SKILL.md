@@ -74,6 +74,7 @@ Pass these options to `renderPdf` or `renderer.render`:
 | `cssProfile` | `"document"` (default), `"web"`, or `"strict"` | Select stable report layout, broader browser layout, or broader layout with rejection defaults. |
 | `strict` | `false` | Promote unsupported snapshot CSS to errors without selecting the web profile. Explicit `unsupportedCss` wins. |
 | `mediaType` | `"screen"` (default) or `"print"` | Select the media environment used for computed styles and media queries. |
+| `layoutContext` | `"source"` (default) or `"page"` | Preserve the mounted root width or reflow an implicit root width and auto inline margins against the PDF content box. |
 | `viewport` | `{ width, height }`; source environment by default | Make responsive layout deterministic in CSS pixels. |
 | `unsupportedCss` | `"warn"` (default), `"error"`, or `"ignore"`; strict modes default to `"error"` | Choose whether unsupported CSS records diagnostics, rejects, or is omitted silently. |
 | `fallback` | `"error"` (default) or `"rasterize-subtree"` | Keep unsupported SVG native-only or allow explicit scoped rasterization. |
