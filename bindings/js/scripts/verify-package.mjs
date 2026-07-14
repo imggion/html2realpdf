@@ -25,7 +25,7 @@ async function main() {
     ], packageRoot, true);
     const [artifact] = JSON.parse(pack.stdout);
     assert.equal(artifact.name, "@imggion/html2realpdf");
-    assert.equal(artifact.version, "0.1.0-rc2");
+    assert.equal(artifact.version, "0.1.0-rc3");
     verifyTarballFiles(artifact.files.map((file) => file.path));
 
     const consumerRoot = join(temporaryRoot, "consumer");

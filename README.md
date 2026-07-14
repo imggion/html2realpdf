@@ -1,8 +1,9 @@
 <div align="center">
+  <img src="docs/assets/html2realpdf-logo.webp" alt="html2realpdf logo" width="180">
   <h1>html2realpdf</h1>
   <p><strong>A real PDF, not a screenshot.</strong></p>
   <p>
-    <a href="https://github.com/imggion/html2realpdf/releases/tag/0.1.0-rc2"><img src="https://img.shields.io/badge/release-0.1.0--rc2-2ea44f?style=flat-square" alt="Latest release: 0.1.0-rc2"></a>
+    <a href="https://github.com/imggion/html2realpdf/releases/tag/0.1.0-rc3"><img src="https://img.shields.io/badge/release-0.1.0--rc3-2ea44f?style=flat-square" alt="Latest release: 0.1.0-rc3"></a>
     <img src="https://img.shields.io/badge/-zig-f39b34?style=flat-square&amp;logo=zig&amp;logoColor=white" alt="Zig">
     <img src="https://img.shields.io/badge/-WASM-654ff0?style=flat-square&amp;logo=webassembly&amp;logoColor=white" alt="WebAssembly">
     <img src="https://img.shields.io/badge/-TypeScript-3178c6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript">
@@ -19,6 +20,7 @@
 - [Install](#install)
 - [Quick start](#quick-start)
 - [React](#react)
+- [Vue](#vue)
 - [Preview](#preview)
 - [Page layouts](#page-layouts)
 - [Benchmark](#benchmark)
@@ -98,6 +100,45 @@ return <Report ref={reportRef} />;
 `Report` can be a component that forwards its ref to its root element. Pass the
 mounted ref, not an unmounted component definition.
 
+## Vue
+
+Pass the mounted DOM element behind a template ref. With Vue 3.5 or newer,
+`useTemplateRef()` keeps the element typed without wrapping the renderer in a
+Vue-specific adapter.
+
+```vue
+<script setup lang="ts">
+import { useTemplateRef } from "vue";
+import { renderPdf } from "@imggion/html2realpdf";
+
+const report = useTemplateRef<HTMLElement>("report");
+
+async function downloadReport() {
+  if (!report.value) return;
+
+  const pdf = await renderPdf(report.value);
+  try {
+    pdf.download("report.pdf");
+  } finally {
+    pdf.dispose();
+  }
+}
+</script>
+
+<template>
+  <article ref="report">
+    <h1>Quarterly report</h1>
+    <p>This content stays selectable in the PDF.</p>
+  </article>
+
+  <button type="button" @click="downloadReport">Download PDF</button>
+</template>
+```
+
+On Vue 3.4 or earlier, use
+`const report = ref<HTMLElement | null>(null)` with the same template ref and
+pass `report.value` to `renderPdf()`.
+
 ## Preview
 
 The preview renders the actual generated PDF inside your page. It uses isolated
@@ -155,6 +196,19 @@ between the production-style document fixtures, including a deterministic
 30-page stress report with charts, dense tables, diagrams, and narrative
 sections. Run `make react` to benchmark either that same stress report or the
 currently mounted, controlled React report.
+
+One recorded run of the deterministic 30-page stress report produced:
+
+| Engine | First PDF | Warm render | File size | Pages | Content model | Output | Difference vs `html2pdf.js` |
+| --- | ---: | ---: | ---: | ---: | --- | --- | --- |
+| `html2realpdf` | 1595.9 ms | 1451.2 ms | 441.1 kB | 30 | Native/selectable PDF | Download | 33.1% faster first PDF, 34.5% faster warm, 85.8% smaller |
+| `html2pdf.js` | 2124.6 ms | 1952.4 ms | 3.11 MB | 30 | Raster image PDF | Download | Baseline |
+
+The speed percentages compare render rate (`html2pdf.js` time divided by
+`html2realpdf` time). Expressed as latency, the same run took 24.9% less time
+for the first PDF and 25.7% less time when warm. Timings vary by machine; the
+fixture, page count, measurement boundary, and content classification remain
+the same.
 
 ## Contributing
 
