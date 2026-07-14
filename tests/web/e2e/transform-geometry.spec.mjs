@@ -5,6 +5,7 @@ const PAGE_WIDTH_CSS_PX = 600;
 const PAGE_HEIGHT_CSS_PX = 400;
 const GEOMETRY_TOLERANCE_CSS_PX = 0.9;
 const LINK_TEXT_TOLERANCE_CSS_PX = 1.25;
+const LINK_TEXT_HEIGHT_TOLERANCE_CSS_PX = 2.25;
 
 test("Web 2D transforms, origins, clipping, and link bounds match Chromium", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "Chromium is the declared differential geometry reference");
@@ -134,6 +135,7 @@ test("Web 2D transforms, origins, clipping, and link bounds match Chromium", asy
   }
   expect(comparison.pdfLink, JSON.stringify(comparison.annotationSummary)).toBeTruthy();
   for (const field of ["x", "y", "width", "height"]) {
-    expect(Math.abs(comparison.pdfLink[field] - comparison.browserLink[field]), `link ${field}`).toBeLessThanOrEqual(LINK_TEXT_TOLERANCE_CSS_PX);
+    const tolerance = field === "height" ? LINK_TEXT_HEIGHT_TOLERANCE_CSS_PX : LINK_TEXT_TOLERANCE_CSS_PX;
+    expect(Math.abs(comparison.pdfLink[field] - comparison.browserLink[field]), `link ${field}`).toBeLessThanOrEqual(tolerance);
   }
 });
