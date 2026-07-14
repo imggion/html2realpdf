@@ -184,19 +184,24 @@ const pdf = await renderPdf(postcard, {
 
 ## Benchmark
 
-One recorded run of the deterministic 30-page stress report produced:
+One recorded run of the deterministic 30-page stress report produced the
+following workload-specific snapshot:
 
 | Engine | First PDF | Warm render | File size | Pages | Content model |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `html2realpdf` | 1595.9 ms | 1451.2 ms | 441.1 kB | 30 | Native/selectable PDF |
 | `html2pdf.js` | 2124.6 ms | 1952.4 ms | 3.11 MB | 30 | Raster image PDF |
 
-**Main differences versus html2pdf.js**
+**Observed differences versus html2pdf.js in that run**
 
-- **33.1% faster first PDF**
-- **34.5% faster warm render**
+- **24.9% less time to the first PDF**
+- **25.7% less time for the warm render**
 - **85.8% smaller file**
-- and, of course, a REAL PDF 😏
+- native, selectable PDF content instead of rasterized page images
+
+Timing results depend on the document, browser, and hardware. Treat this table
+as a fixture result, not a universal performance guarantee, and rerun the
+included benchmark against your own templates before making a decision.
 
 ## Contributing
 
