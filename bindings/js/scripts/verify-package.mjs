@@ -190,11 +190,27 @@ const invalidResourceKind: ResourceRequest["kind"] = "font";
 void [invalidRenderOptions, invalidCompatOptions, invalidResourceKind];
 `;
 
-const browserSource = `import { renderPdf } from "@imggion/html2realpdf";
+const browserSource = `import {
+  CanvasToSvgError,
+  Html2RealPdfError,
+  InvalidSourceError,
+  ResourceLoadError,
+  UnsupportedCompatibilityFeatureError,
+  UnsupportedCssError,
+  UnsupportedEnvironmentError,
+  WasmRenderError,
+  renderPdf,
+} from "@imggion/html2realpdf";
 
 declare global {
   interface Window {
-    __html2realpdfConsumer?: { pageCount?: number; blobType?: string; previewPages?: number; error?: string };
+    __html2realpdfConsumer?: {
+      pageCount?: number;
+      blobType?: string;
+      previewPages?: number;
+      errorNames?: string[];
+      error?: string;
+    };
   }
 }
 
@@ -210,6 +226,16 @@ async function run() {
         pageCount: pdf.pageCount,
         blobType: pdf.toBlob().type,
         previewPages: target.querySelector<HTMLElement>("[data-html2realpdf-preview]")?.shadowRoot?.querySelectorAll("canvas").length ?? 0,
+        errorNames: [
+          new Html2RealPdfError("base", "TEST_ERROR"),
+          new UnsupportedEnvironmentError(),
+          new InvalidSourceError("invalid"),
+          new UnsupportedCssError("unsupported"),
+          new WasmRenderError("render failed", -1),
+          new ResourceLoadError("fixture.png"),
+          new CanvasToSvgError("conversion failed", "body > canvas"),
+          new UnsupportedCompatibilityFeatureError("toCanvas"),
+        ].map((error) => error.name),
       };
     } finally {
       preview.dispose();
@@ -262,6 +288,16 @@ async function verifyBrowserBundle(consumerRoot) {
       assert.equal(result?.pageCount, 1);
       assert.equal(result?.blobType, "application/pdf");
       assert.ok((result?.previewPages ?? 0) >= 1);
+      assert.deepEqual(result?.errorNames, [
+        "Html2RealPdfError",
+        "UnsupportedEnvironmentError",
+        "InvalidSourceError",
+        "UnsupportedCssError",
+        "WasmRenderError",
+        "ResourceLoadError",
+        "CanvasToSvgError",
+        "UnsupportedCompatibilityFeatureError",
+      ]);
     } finally {
       await browser.close();
     }
