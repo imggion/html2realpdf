@@ -102,11 +102,13 @@ browser package build copies that file to `dist/LICENSE.md`.
   styled-components, and Tailwind-style selector fixtures.
 - `make baseline` captures the document-profile PDFs and first-page Poppler
   images; `make test-baseline` rejects byte-level renderer regressions.
-- `.github/workflows/ci.yml` runs `make test-release` for pull requests into
-  `main` and pushes to `main`. A successful main push stores its npm tarball as
-  `npm-package-<commit-sha>`; the manual `publish-npm.yml` workflow publishes
-  only that artifact after checking the package version, latest SemVer tag,
-  main HEAD, and originating CI run. Pushing a tag never publishes by itself.
+- `.github/workflows/ci.yml` only runs `make test-release` for pull requests
+  into `main` and pushes to `main`; it does not retain or upload an npm release
+  artifact. The manual `prepare-npm-artifact.yml` workflow checks out an
+  explicit release tag, builds and validates its tarball, and stores it as
+  `npm-package-<release-sha>`. The separate manual `publish-npm.yml` workflow
+  accepts the same release tag, downloads the prepared artifact, validates it
+  again, and publishes it. Pushing a tag never starts any workflow.
 - `NPM_TOKEN=... make deploy` is a separate local fallback that builds through
   the npm `prepack` lifecycle and publishes directly to the public registry.
   Prerelease versions use `next`, stable versions use `latest`, and local

@@ -43,21 +43,3 @@ jobs:
 
       - name: Run complete release gate
         run: make test-release
-
-      - name: Pack validated npm package
-        if: github.event_name == 'push'
-        working-directory: bindings/js
-        env:
-          PACKAGE_OUTPUT: ${{ runner.temp }}/npm-package
-        run: |
-          mkdir -p "$PACKAGE_OUTPUT"
-          npm pack --ignore-scripts --pack-destination "$PACKAGE_OUTPUT"
-
-      - name: Upload validated npm package
-        if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-package-${{ github.sha }}
-          path: ${{ runner.temp }}/npm-package/*.tgz
-          if-no-files-found: error
-          retention-days: 90
