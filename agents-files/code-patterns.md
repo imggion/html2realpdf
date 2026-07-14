@@ -116,6 +116,10 @@
 
 ## JavaScript package
 
+- Keep the root `README.md` and `bindings/js/README.md` byte-identical. Use the
+  absolute GitHub URL for the shared logo so npm's rendered README does not
+  depend on a package-relative asset path; the package-consumer gate enforces
+  both contracts.
 - Keep public TypeScript exports documented with concise English TSDoc. Explain
   defaults, precedence, lifecycle, ownership, and fallback contracts; document
   internal helpers only when they preserve a non-obvious phase boundary or

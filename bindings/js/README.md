@@ -1,292 +1,233 @@
-# @imggion/html2realpdf
+<div align="center">
+  <img src="https://raw.githubusercontent.com/imggion/html2realpdf/main/docs/assets/html2realpdf-logo.webp" alt="html2realpdf logo" width="180">
+  <h1>html2realpdf</h1>
+  <p><strong>A real PDF, not a screenshot.</strong></p>
+  <p>
+    <a href="https://github.com/imggion/html2realpdf/releases/tag/0.1.0"><img src="https://img.shields.io/badge/release-0.1.0-2ea44f?style=flat-square" alt="Latest release: 0.1.0"></a>
+    <img src="https://img.shields.io/badge/-zig-f39b34?style=flat-square&amp;logo=zig&amp;logoColor=white" alt="Zig">
+    <img src="https://img.shields.io/badge/-WASM-654ff0?style=flat-square&amp;logo=webassembly&amp;logoColor=white" alt="WebAssembly">
+    <img src="https://img.shields.io/badge/-TypeScript-3178c6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript">
+  </p>
+  <p>
+    Generate selectable, searchable, vector-based PDFs from HTML in the browser.<br>
+    Written in Zig, compiled to WebAssembly, and packaged with a typed TypeScript API.
+  </p>
+</div>
 
-Browser-first HTML-to-PDF rendering powered by Zig and WebAssembly. Text,
-vectors, links, and images are emitted as native PDF objects instead of a
-full-page screenshot.
+## Contents
+
+- [Why real PDFs](#why-real-pdfs)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [React](#react)
+- [Vue](#vue)
+- [Preview](#preview)
+- [Page layouts](#page-layouts)
+- [Benchmark](#benchmark)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Why real PDFs
+
+Screenshot-based PDF tools turn a page into an image. `html2realpdf` keeps text
+as text, links as PDF annotations, fonts as embedded subsets, and supported
+graphics as vectors.
+
+The text includes Unicode mappings, so people can select, copy, and search the
+result. Tools and LLMs can read the document text without first running OCR.
+Text-heavy documents are also often smaller and stay sharp at every zoom level.
+
+Zig performs the layout and PDF writing, while WebAssembly brings the renderer
+to the browser. The result is one portable pipeline for invoices, reports,
+tickets, letters, slides, and other web-generated documents.
+
+See the [CSS support matrix](docs/css-support.md) for the current layout and
+rendering coverage. The current release provides machine-readable text and accessible
+preview controls; it does not claim PDF/UA or fully tagged PDF compliance.
 
 ## Install
 
+Install the stable release with your package manager:
+
 ```sh
 npm install @imggion/html2realpdf
+pnpm add @imggion/html2realpdf
+yarn add @imggion/html2realpdf
+bun add @imggion/html2realpdf
 ```
 
-The package is ESM and includes TypeScript declarations, its Worker, WASM, and
-PDF.js preview assets. Imports are SSR-safe; rendering requires browser DOM APIs.
-Import values and types only from `@imggion/html2realpdf`.
+## Quick start
 
-## Choose an API
-
-| Need | API | Lifetime |
-| --- | --- | --- |
-| Default rendering with minimal setup | `renderPdf` | Cached package Worker for the application lifetime |
-| Repeated renders, custom fonts, or explicit cleanup | `createRenderer` | Caller-owned renderer |
-| Migration from supported html2pdf.js chains | Default `html2pdf` export | Compatibility worker with a cached PDF |
-
-Use the modern API for new integrations. The compatibility API deliberately
-rejects stages that depend on html2canvas or rasterized PDF pages.
-
-## Sources
-
-`renderPdf` and `renderer.render` accept:
+Render an HTML element, download the PDF, then release its resources:
 
 ```ts
-type HtmlSource = string | Element | { readonly current: Element | null };
+import { renderPdf } from "@imggion/html2realpdf";
+
+const invoice = document.querySelector<HTMLElement>("#invoice");
+if (!invoice) throw new Error("Invoice not found");
+
+const pdf = await renderPdf(invoice);
+pdf.download("invoice.pdf");
+pdf.dispose();
 ```
 
-- A mounted `Element` preserves computed styles, pseudo-elements, live form
-  state, canvas pixels, and other browser state.
-- A ref-shaped object supports React refs without adding React as a dependency.
-- An HTML string runs in an inert, CSP-restricted document. Scripts, event
-  handlers, refresh directives, and active elements are removed.
-
-Prefer a mounted source when output must match live UI state. Render refs only
-after they are mounted; a null ref produces `InvalidSourceError`.
-
-## Render once
+HTML strings are supported too:
 
 ```ts
-import { renderPdf, type RenderOptions } from "@imggion/html2realpdf";
+const pdf = await renderPdf("<h1>Hello from a real PDF</h1>");
+```
 
-const options: RenderOptions = {
-  page: { format: "a4", unit: "mm", margin: [15, 12] },
-  cssProfile: "web",
-  mediaType: "print",
-  fallback: "error",
-  metadata: { title: "Invoice 2026-001" },
-};
+## React
 
-const pdf = await renderPdf(document.querySelector("#invoice")!, options);
-try {
-  pdf.download("invoice.pdf");
-} finally {
+Pass a ref to a mounted element. The package understands React-shaped refs
+without depending on React itself.
+
+```tsx
+const reportRef = useRef<HTMLDivElement>(null);
+
+async function downloadReport() {
+  if (!reportRef.current) return;
+
+  const pdf = await renderPdf(reportRef);
+  pdf.download("report.pdf");
   pdf.dispose();
 }
+
+return <Report ref={reportRef} />;
 ```
 
-`renderPdf` lazily creates and caches a default Worker renderer. Use an explicit
-renderer when the backend must be disposed, configured with fonts, or forced to
-the main thread.
+`Report` can be a component that forwards its ref to its root element. Pass the
+mounted ref, not an unmounted component definition.
 
-## Reuse a renderer
+## Vue
 
-```ts
-import { createRenderer } from "@imggion/html2realpdf";
+Pass the mounted DOM element behind a template ref. With Vue 3.5 or newer,
+`useTemplateRef()` keeps the element typed without wrapping the renderer in a
+Vue-specific adapter.
 
-const renderer = await createRenderer({
-  execution: "worker",
-  fonts: [{
-    family: "Inter",
-    data: await (await fetch("/fonts/Inter-Regular.ttf")).arrayBuffer(),
-    weight: 400,
-    style: "normal",
-  }],
-});
+```vue
+<script setup lang="ts">
+import { useTemplateRef } from "vue";
+import { renderPdf } from "@imggion/html2realpdf";
 
-try {
-  const pdf = await renderer.render(
-    '<p style="font-family: Inter">Selectable text</p>',
-  );
+const report = useTemplateRef<HTMLElement>("report");
+
+async function downloadReport() {
+  if (!report.value) return;
+
+  const pdf = await renderPdf(report.value);
   try {
-    const blob = pdf.toBlob();
-    // Store or upload the Blob.
+    pdf.download("report.pdf");
   } finally {
     pdf.dispose();
   }
-} finally {
-  renderer.dispose();
 }
+</script>
+
+<template>
+  <article ref="report">
+    <h1>Quarterly report</h1>
+    <p>This content stays selectable in the PDF.</p>
+  </article>
+
+  <button type="button" @click="downloadReport">Download PDF</button>
+</template>
 ```
 
-Worker execution is the default because synchronous WASM work would otherwise
-occupy the UI thread. Use `execution: "main"` only when Workers are unavailable
-or a controlled environment requires it. Override `wasmUrl` only when a deploy
-cannot serve package-relative assets. The published default asset is built with
-`ReleaseFast`. Repository consumers that prioritize transfer size can build the
-same ABI with `npm run build:small` and serve that asset through `wasmUrl`.
+On Vue 3.4 or earlier, use
+`const report = ref<HTMLElement | null>(null)` with the same template ref and
+pass `report.value` to `renderPdf()`.
 
-## Render options
+## Preview
 
-### Page and CSS
-
-| Option | Default | Contract |
-| --- | --- | --- |
-| `page` | Captured `@page`, then A4 portrait with zero margins | Explicit API geometry wins over captured page geometry. Custom dimensions and margins use `page.unit`. |
-| `cssProfile` | `"document"` | `document` favors paged reports; `web` adds broader browser layout; `strict` uses web layout and rejects unsupported CSS by default. |
-| `unsupportedCss` | `"error"` in strict mode, otherwise `"warn"` | `warn` records diagnostics, `error` rejects, and `ignore` omits silently. |
-| `strict` | `false` | Promotes unsupported snapshot CSS to errors but does not select the `web` layout profile. Explicit `unsupportedCss` wins. |
-| `mediaType` | `"screen"` | Selects the media environment used during style resolution. |
-| `layoutContext` | `"source"` | `"page"` lets an implicit root width and authored auto inline margins resolve against the PDF content box. |
-| `viewport` | Source environment | Makes responsive layout and media queries deterministic. |
-
-Named page formats retain their physical dimensions regardless of `unit`.
-Custom `[width, height]` formats use that unit. Four-value margins follow
-html2pdf.js order `[top, left, bottom, right]`, not CSS shorthand order.
-
-### Resources and browser state
-
-| Option | Default | Contract |
-| --- | --- | --- |
-| `baseUrl` | Source document URL | Resolves relative stylesheets and images. |
-| `resourcePolicy` | `"error"` | `omit` removes failed resources and records `RESOURCE_OMITTED`. |
-| `resourceResolver` | None | Resolves protected or virtual images and stylesheets. Fonts are renderer registrations. |
-| `includeShadowDom` | `false` | Flattens open Shadow DOM only. Closed roots are inaccessible. |
-| `enableLinks` | `true` | Set to `false` to remove link targets before rendering. |
-
-The resolver receives `{ kind: "image" | "stylesheet", url }`. For a
-stylesheet, a returned string is CSS source. For an image, a string is a
-supported data URL or replacement URL. Returning `null` applies
-`resourcePolicy`.
-
-External stylesheets in HTML-string input are inert and must be supplied by the
-resolver. Mounted DOM input can use stylesheets already accessible through the
-browser CSSOM.
-
-### SVG and canvas
-
-| Option | Default | Contract |
-| --- | --- | --- |
-| `fallback` | `"error"` | Unsupported SVG fails unless `"rasterize-subtree"` explicitly permits scoped rasterization. |
-| `canvasToSvg` | None | Converts live canvases through a chart library's SVG exporter. Without it, canvases become transparent PNG images. |
-| `canvasFallback` | `"error"` | `"rasterize"` applies only when the adapter returns `null`. |
+The preview renders the actual generated PDF inside your page. It uses isolated
+Shadow DOM and canvas pages instead of an iframe, browser PDF plugin, or fake
+HTML copy.
 
 ```ts
-const pdf = await renderer.render(dashboardElement, {
-  canvasToSvg: ({ canvas, cssWidth, cssHeight }) =>
-    chartFor(canvas).toSvg({ width: cssWidth, height: cssHeight }),
-  canvasFallback: "error",
-  fallback: "error",
-});
-```
+const pdf = await renderPdf(invoice);
+const previewTarget = document.querySelector<HTMLElement>("#pdf-preview");
+if (!previewTarget) throw new Error("Preview target not found");
 
-The adapter may return a complete SVG string, an `image/svg+xml` Blob, an
-`SVGSVGElement`, or a promise. A thrown error or malformed SVG produces
-`CanvasToSvgError`; it does not activate `canvasFallback`. A valid SVG that uses
-unsupported vector features follows the separate `fallback` policy.
-
-Scoped rasterization records `CSS_SUBTREE_RASTERIZED` or
-`CANVAS_SUBTREE_RASTERIZED`. Inspect diagnostics before describing output as
-fully vector.
-
-### Pagination, metadata, cancellation, and progress
-
-`pageBreak.before`, `after`, and `avoid` accept selectors or selector arrays.
-`legacy` honors `.html2pdf__page-break`; `avoidAll` applies
-`break-inside: avoid` globally. These rules override computed snapshot defaults
-without overriding authored inline `!important` declarations.
-
-`metadata` accepts `title`, `author`, `subject`, `keywords`, and `creator`.
-`keywords` may be a string or an array.
-
-`signal` rejects at snapshot and render boundaries. It cannot preempt a
-synchronous WASM render already running. `onProgress` reports the coarse phases
-`snapshot`, `wasm`, and `complete`; it is not per-page progress.
-
-## PDF output and preview
-
-`PdfDocument` exposes immutable output through:
-
-- `toUint8Array()`, `toArrayBuffer()`, and `toBlob()`;
-- `download(filename)`;
-- `createObjectURL()` and `revokeObjectURL(url)`;
-- `preview(target, options)`;
-- `pageCount` and `diagnostics`.
-
-Byte methods return defensive copies. `PdfDocument.dispose()` disposes every
-preview it owns, revokes tracked object URLs, and invalidates future exports.
-Manually revoke long-lived object URLs earlier when possible.
-
-```ts
-const preview = await pdf.preview(document.querySelector("#preview")!, {
+const preview = await pdf.preview(previewTarget, {
   initialScale: "fit-width",
-  minScale: 0.25,
-  maxScale: 3,
-  zoomStep: 0.25,
-  maxPixelRatio: 2,
-  onProgress: (completed, total) => updatePreviewProgress(completed, total),
 });
 
-await preview.setScale(1.25);
-await preview.fitToWidth();
+// Later, when closing the preview:
 preview.dispose();
+pdf.dispose();
 ```
 
-The preview renders every page into an isolated Shadow DOM canvas viewer. It
-does not use iframe, object, embed, or the browser PDF plugin.
+## Page layouts
 
-## Diagnostics and errors
-
-Successful documents may contain structured diagnostics with a stable `code`,
-`severity`, and `message`, plus optional `property`, `nodePath`, `phase`, and
-`fallback`. Use `unsupportedCss: "error"`, `fallback: "error"`, and
-`resourcePolicy: "error"` when omissions must reject the operation.
-
-The package exports these error classes:
-
-- `Html2RealPdfError`, the base class with a machine-readable `code`;
-- `UnsupportedEnvironmentError`;
-- `InvalidSourceError`;
-- `UnsupportedCssError`;
-- `WasmRenderError`, including a native or bridge `status`;
-- `ResourceLoadError`;
-- `CanvasToSvgError`, including `nodePath`;
-- `UnsupportedCompatibilityFeatureError`.
-
-Cancellation normally rejects with `AbortError`. Invalid page margins produce a
-`RangeError`; lifecycle misuse after disposal produces a regular `Error`.
-
-## html2pdf.js compatibility
+Use the named `a4` and `letter` formats in portrait or landscape mode. A4
+landscape works well for presentation decks:
 
 ```ts
-import html2pdf from "@imggion/html2realpdf";
-
-await html2pdf()
-  .set({
-    filename: "invoice.pdf",
-    margin: [10, 12],
-    pagebreak: { mode: ["css", "legacy"], avoid: ".line-item" },
-    jsPDF: { format: "a4", unit: "mm", orientation: "portrait" },
-  })
-  .from(document.querySelector("#invoice")!)
-  .save();
+const pdf = await renderPdf(slides, {
+  page: {
+    format: "a4",
+    orientation: "landscape",
+    unit: "mm",
+    margin: [12, 12],
+  },
+});
 ```
 
-| Compatibility surface | Status |
-| --- | --- |
-| `from(string | Element | ref)` | Supported |
-| `set`, `using` | Supported for typed PDF options |
-| `toPdf`, `save`, `saveAs` | Supported |
-| `outputPdf`, `output`, `export` | Blob, ArrayBuffer, Blob URL, and data URL supported |
-| `get`, Promise-like chaining | Supported |
-| `toContainer` | Chain-preserving no-op; no intermediate container is exposed |
-| `to("container")` | Schedules PDF output directly |
-| Canvas or image input stages | Unsupported |
-| `toCanvas`, `toImg`, `outputImg` | Throw `UnsupportedCompatibilityFeatureError` |
-| `html2canvas` and raster `image` options | Rejected explicitly |
+For postcards or any other size, pass custom `[width, height]` dimensions:
 
-Passing a source directly to `html2pdf(source, options)` also schedules `save`,
-matching the shorthand compatibility behavior.
+```ts
+const pdf = await renderPdf(postcard, {
+  page: { format: [148, 105], unit: "mm", margin: 8 },
+});
+```
 
-Blob URL outputs remain owned by the cached `PdfDocument`. Retrieve it with
-`await worker.get("pdf")` to revoke an individual URL or dispose the document.
+## Benchmark
 
-## Runtime and licensing
+One recorded run of the deterministic 30-page stress report produced:
 
-- Rendering requires a browser with DOM, WebAssembly, Worker, and Blob support.
-- Node.js `20.16+` is required for package build tooling, not browser rendering.
-- Project code is MIT licensed. `dist/LICENSE.md` contains the consolidated
-  project and third-party license inventory.
+| Engine | First PDF | Warm render | File size | Pages | Content model |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `html2realpdf` | 1595.9 ms | 1451.2 ms | 441.1 kB | 30 | Native/selectable PDF |
+| `html2pdf.js` | 2124.6 ms | 1952.4 ms | 3.11 MB | 30 | Raster image PDF |
 
-## Share without the npm registry
+**Main differences versus html2pdf.js**
 
-Run `npm pack` from this package directory and send the generated
-`imggion-html2realpdf-0.1.0.tgz` file. A consumer can install it with:
+- **33.1% faster first PDF**
+- **34.5% faster warm render**
+- **85.8% smaller file**
+- and, of course, a REAL PDF 😏
+
+## Contributing
+
+You need Zig `0.16.0`, Node.js `20.16+`, npm, and Make. On a fresh checkout,
+install the JavaScript dependencies once:
 
 ```sh
-npm install ./imggion-html2realpdf-0.1.0.tgz
-# or
-pnpm add ./imggion-html2realpdf-0.1.0.tgz
-# or
-yarn add file:./imggion-html2realpdf-0.1.0.tgz
+npm ci --prefix bindings/js
+npm ci --prefix tests/react
+npm ci --prefix tests/web
 ```
 
-The packaged model instructions live at `skills/html2realpdf/SKILL.md`.
+| Command | Purpose |
+| --- | --- |
+| `make test` | Run the Zig and renderer tests |
+| `make release` | Build the native release binary |
+| `make wasm` | Build the default `ReleaseFast` WebAssembly and browser package |
+| `make wasm-small` | Build the optional size-oriented `ReleaseSmall` package asset |
+| `make react` | Start the React integration app |
+| `make test-release` | Run the complete release gate |
+
+To open the small browser test harness:
+
+```sh
+make wasm
+python3 -m http.server 8765
+```
+
+Visit [http://localhost:8765/tests/web/index.html](http://localhost:8765/tests/web/index.html).
+
+## License
+
+The project code is released under the MIT License. See [LICENSE.md](LICENSE.md)
+for the complete project and third-party license inventory.

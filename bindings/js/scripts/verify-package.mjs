@@ -13,6 +13,7 @@ const typesOnly = process.argv.includes("--types-only");
 async function main() {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "html2realpdf-consumer-"));
   try {
+    await verifyReadmeCopy();
     verifySkillCopies();
     verifySelfContainedMaps();
 
@@ -56,6 +57,19 @@ async function main() {
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+}
+
+async function verifyReadmeCopy() {
+  const [rootReadme, packageReadme] = await Promise.all([
+    readFile(join(repositoryRoot, "README.md"), "utf8"),
+    readFile(join(packageRoot, "README.md"), "utf8"),
+  ]);
+  assert.equal(packageReadme, rootReadme, "Package README must match the root README exactly");
+  assert.match(
+    packageReadme,
+    /https:\/\/raw\.githubusercontent\.com\/imggion\/html2realpdf\/main\/docs\/assets\/html2realpdf-logo\.webp/,
+    "Package README logo must use an npm-safe absolute URL",
+  );
 }
 
 function verifySkillCopies() {

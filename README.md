@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/html2realpdf-logo.webp" alt="html2realpdf logo" width="180">
+  <img src="https://raw.githubusercontent.com/imggion/html2realpdf/main/docs/assets/html2realpdf-logo.webp" alt="html2realpdf logo" width="180">
   <h1>html2realpdf</h1>
   <p><strong>A real PDF, not a screenshot.</strong></p>
   <p>

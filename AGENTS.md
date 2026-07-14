@@ -116,6 +116,8 @@ Read these local docs before changing code:
 - Keep `skills/html2realpdf/` and `bindings/js/skills/html2realpdf/`
   byte-identical; the former is the repository skill and the latter ships in
   the npm tarball.
+- Keep `README.md` and `bindings/js/README.md` byte-identical. The shared hero
+  logo must use its absolute GitHub asset URL so it renders in npm documentation.
 - Serve the built React fixture in Playwright. Vite dev mode exposes raw PDF.js worker modules and is not the release integration path.
 - Use Zig doc comments deliberately: `//!` for module intent and `///` for exported types/functions or private helpers with non-obvious tradeoffs.
 - Documentation should explain why a shape exists, ownership/lifetime constraints, or phase boundaries; do not restate obvious names like `toString` returning a string.
