@@ -12,12 +12,13 @@ pub const NodeId = usize;
 
 /// Parsed document plus the source bytes it borrows from.
 ///
-/// Text, tag names, and attribute name/value bytes point back into `source`.
-/// Attribute slices are copied from tokenizer tokens so the document can outlive
-/// the token list, but it still does not own the original HTML bytes.
+/// Most strings point into `source`. Decoded character references are owned by
+/// `owned_strings`, while attribute slices are copied so the document can
+/// outlive the token list.
 pub const Document = struct {
     source: []const u8,
     nodes: std.ArrayList(Node),
+    owned_strings: std.ArrayList([]u8),
     root: NodeId,
 
     /// Frees node storage and copied attribute slices.
@@ -31,6 +32,8 @@ pub const Document = struct {
                 if (element.attributes.len > 0) allocator.free(element.attributes);
             }
         }
+        for (self.owned_strings.items) |owned| allocator.free(owned);
+        self.owned_strings.deinit(allocator);
 
         self.nodes.deinit(allocator);
     }
@@ -114,6 +117,7 @@ pub const Tag = enum {
     span,
     strong,
     em,
+    a,
     img,
     br,
     ul,
@@ -141,9 +145,14 @@ pub const Parser = struct {
             try nodes.append(allocator, .{ .kind = .document });
         }
 
+        const owned_strings = std.ArrayList([]u8).initCapacity(allocator, 0) catch |err| {
+            nodes.deinit(allocator);
+            return err;
+        };
         var document = Document{
             .source = source,
             .nodes = nodes,
+            .owned_strings = owned_strings,
             .root = 0,
         };
         errdefer document.deinit(allocator);
@@ -157,14 +166,19 @@ pub const Parser = struct {
             switch (token) {
                 .text => |text| {
                     if (text.len > 0) {
-                        _ = try document.appendNode(allocator, .{ .text = text }, stack.items[stack.items.len - 1]);
+                        const parent = stack.items[stack.items.len - 1];
+                        const node_text = if (isRawTextParent(&document, parent))
+                            text
+                        else
+                            try decodeAndOwn(&document, allocator, text);
+                        _ = try document.appendNode(allocator, .{ .text = node_text }, parent);
                     }
                 },
                 .tag_open => |open_tag| {
                     const tag = tagFromName(open_tag.name);
                     closeImpliedElements(&document, &stack, tag);
 
-                    const attributes = try copyAttributes(allocator, open_tag.attributes);
+                    const attributes = try copyAttributes(&document, allocator, open_tag.attributes);
                     const node_id = document.appendNode(
                         allocator,
                         .{ .element = .{
@@ -197,12 +211,23 @@ pub const Parser = struct {
     ///
     /// This lets tokenizer tokens be freed immediately after parsing while DOM
     /// elements still expose their attributes.
-    fn copyAttributes(allocator: std.mem.Allocator, attributes: []const html.Attribute) ![]const html.Attribute {
+    fn copyAttributes(document: *Document, allocator: std.mem.Allocator, attributes: []const html.Attribute) ![]const html.Attribute {
         if (attributes.len == 0) return &.{};
 
         const copied = try allocator.alloc(html.Attribute, attributes.len);
+        errdefer allocator.free(copied);
         @memcpy(copied, attributes);
+        for (copied) |*attribute| {
+            if (attribute.value) |value| attribute.value = try decodeAndOwn(document, allocator, value);
+        }
         return copied;
+    }
+
+    fn decodeAndOwn(document: *Document, allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+        const decoded = try decodeCharacterReferences(allocator, value) orelse return value;
+        errdefer allocator.free(decoded);
+        try document.owned_strings.append(allocator, decoded);
+        return decoded;
     }
 
     /// Recovers from mismatched close tags by popping back to the first matching
@@ -262,6 +287,95 @@ pub const Parser = struct {
     }
 };
 
+fn isRawTextParent(document: *const Document, node_id: NodeId) bool {
+    return switch (document.nodes.items[node_id].kind) {
+        .element => |element| std.ascii.eqlIgnoreCase(element.name, "style") or
+            std.ascii.eqlIgnoreCase(element.name, "script"),
+        else => false,
+    };
+}
+
+/// Decodes the character references commonly used in report templates plus
+/// decimal and hexadecimal numeric references. Unknown names remain literal.
+fn decodeCharacterReferences(allocator: std.mem.Allocator, value: []const u8) !?[]u8 {
+    if (std.mem.indexOfScalar(u8, value, '&') == null) return null;
+
+    var output = std.Io.Writer.Allocating.init(allocator);
+    errdefer output.deinit();
+    var changed = false;
+    var index: usize = 0;
+    while (index < value.len) {
+        if (value[index] != '&') {
+            try output.writer.writeByte(value[index]);
+            index += 1;
+            continue;
+        }
+
+        const search_end = @min(index + 34, value.len);
+        const relative_end = std.mem.indexOfScalar(u8, value[index + 1 .. search_end], ';') orelse {
+            try output.writer.writeByte('&');
+            index += 1;
+            continue;
+        };
+        const semicolon = index + 1 + relative_end;
+        const body = value[index + 1 .. semicolon];
+        const codepoint = parseCharacterReference(body) orelse {
+            try output.writer.writeByte('&');
+            index += 1;
+            continue;
+        };
+        var encoded: [4]u8 = undefined;
+        const length = std.unicode.utf8Encode(codepoint, &encoded) catch {
+            _ = try std.unicode.utf8Encode(0xFFFD, &encoded);
+            try output.writer.writeAll(encoded[0..3]);
+            index = semicolon + 1;
+            changed = true;
+            continue;
+        };
+        try output.writer.writeAll(encoded[0..length]);
+        index = semicolon + 1;
+        changed = true;
+    }
+
+    if (!changed) {
+        output.deinit();
+        return null;
+    }
+    return @as(?[]u8, try output.toOwnedSlice());
+}
+
+fn parseCharacterReference(body: []const u8) ?u21 {
+    if (std.mem.eql(u8, body, "amp")) return '&';
+    if (std.mem.eql(u8, body, "lt")) return '<';
+    if (std.mem.eql(u8, body, "gt")) return '>';
+    if (std.mem.eql(u8, body, "quot")) return '"';
+    if (std.mem.eql(u8, body, "apos")) return '\'';
+    if (std.mem.eql(u8, body, "nbsp")) return 0x00A0;
+    if (std.mem.eql(u8, body, "copy")) return 0x00A9;
+    if (std.mem.eql(u8, body, "reg")) return 0x00AE;
+    if (std.mem.eql(u8, body, "trade")) return 0x2122;
+    if (std.mem.eql(u8, body, "euro")) return 0x20AC;
+    if (std.mem.eql(u8, body, "pound")) return 0x00A3;
+    if (std.mem.eql(u8, body, "yen")) return 0x00A5;
+    if (std.mem.eql(u8, body, "cent")) return 0x00A2;
+    if (std.mem.eql(u8, body, "deg")) return 0x00B0;
+    if (std.mem.eql(u8, body, "ndash")) return 0x2013;
+    if (std.mem.eql(u8, body, "mdash")) return 0x2014;
+    if (std.mem.eql(u8, body, "hellip")) return 0x2026;
+    if (std.mem.eql(u8, body, "bull")) return 0x2022;
+    if (std.mem.eql(u8, body, "middot")) return 0x00B7;
+    if (std.mem.eql(u8, body, "laquo")) return 0x00AB;
+    if (std.mem.eql(u8, body, "raquo")) return 0x00BB;
+    if (body.len < 2 or body[0] != '#') return null;
+
+    const hexadecimal = body[1] == 'x' or body[1] == 'X';
+    const digits = if (hexadecimal) body[2..] else body[1..];
+    if (digits.len == 0) return null;
+    const parsed = std.fmt.parseInt(u32, digits, if (hexadecimal) 16 else 10) catch return null;
+    if (parsed == 0 or parsed > 0x10FFFF or (parsed >= 0xD800 and parsed <= 0xDFFF)) return 0xFFFD;
+    return @intCast(parsed);
+}
+
 /// Maps known tag names to enum values without losing unknown tag names.
 pub fn tagFromName(name: []const u8) Tag {
     if (eqlTag(name, "h1")) return .h1;
@@ -275,6 +389,7 @@ pub fn tagFromName(name: []const u8) Tag {
     if (eqlTag(name, "span")) return .span;
     if (eqlTag(name, "strong")) return .strong;
     if (eqlTag(name, "em")) return .em;
+    if (eqlTag(name, "a")) return .a;
     if (eqlTag(name, "img")) return .img;
     if (eqlTag(name, "br")) return .br;
     if (eqlTag(name, "ul")) return .ul;
@@ -400,6 +515,32 @@ test "parse nested elements into a DOM tree" {
 
     const world_id = document.nodes.items[strong_id].first_child.?;
     try expectText(&document, world_id, "world");
+}
+
+test "decode named and numeric character references in text and attributes" {
+    const allocator = std.testing.allocator;
+    const source = "<p title=\"Tom &amp; Jerry\">A &lt; B &amp;&amp; C &#x20AC; &#233; &nbsp; end</p>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const paragraph_id = document.nodes.items[document.root].first_child.?;
+    const paragraph = document.nodes.items[paragraph_id].kind.element;
+    try std.testing.expectEqualStrings("Tom & Jerry", paragraph.attributes[0].value.?);
+    try expectText(&document, document.nodes.items[paragraph_id].first_child.?, "A < B && C € é \xC2\xA0 end");
+}
+
+test "preserve character references inside raw style text" {
+    const allocator = std.testing.allocator;
+    const source = "<style>.x::before { content: '&amp;'; }</style>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const style_id = document.nodes.items[document.root].first_child.?;
+    try expectText(&document, document.nodes.items[style_id].first_child.?, ".x::before { content: '&amp;'; }");
 }
 
 test "parse mismatched closing tags tolerantly" {

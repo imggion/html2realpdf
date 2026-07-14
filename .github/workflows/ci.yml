@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install JavaScript dependencies
+        run: |
+          npm ci --prefix bindings/js
+          npm ci --prefix tests/react
+          npm ci --prefix tests/web
+
+      - name: Install browser and PDF test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes poppler-utils
+          npm --prefix tests/web exec -- playwright install --with-deps chromium firefox webkit
+
+      - name: Run complete release gate
+        run: make test-release
+
+      - name: Pack validated npm package
+        if: github.event_name == 'push'
+        working-directory: bindings/js
+        env:
+          PACKAGE_OUTPUT: ${{ runner.temp }}/npm-package
+        run: |
+          mkdir -p "$PACKAGE_OUTPUT"
+          npm pack --ignore-scripts --pack-destination "$PACKAGE_OUTPUT"
+
+      - name: Upload validated npm package
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package-${{ github.sha }}
+          path: ${{ runner.temp }}/npm-package/*.tgz
+          if-no-files-found: error
+          retention-days: 90

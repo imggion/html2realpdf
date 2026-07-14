@@ -1,1182 +1,66 @@
-//! CSS parser, selector matching, and cascade engine.
+//! Stable CSS facade for parser, selectors, cascade, values, and computed style.
 //!
-//! Parses CSS text from `<style>` elements into rules, matches selectors
-//! against DOM nodes, resolves specificity, and produces `box.Style` values
-//! indexed by `dom.NodeId` for Box Tree construction.
-//!
-//! Selector support: type, class, id, universal, compound, descendant combinator,
-//! and child combinator. At-rules are skipped. `!important` is ignored.
-//!
-//! The cascade walks the DOM in tree order and applies UA → inherited → author
-//! styles, respecting specificity and source-order.
+//! The public API remains source-compatible while phase ownership lives in
+//! focused modules under src/css/.
 
 const std = @import("std");
 const dom = @import("dom.zig");
 const box = @import("box.zig");
 const html = @import("html.zig");
 
-// ---------------------------------------------------------------
-// Type definitions
-// ---------------------------------------------------------------
-
-pub const Combinator = enum {
-    descendant,
-    child,
-};
-
-pub const SelectorTest = union(enum) {
-    tag: []const u8,
-    class: []const u8,
-    id: []const u8,
-    universal,
-};
-
-pub const SelectorPart = struct {
-    tests: []const SelectorTest,
-    combinator: ?Combinator = null,
-};
-
-pub const Selector = struct {
-    parts: []const SelectorPart,
-};
-
-pub const Declaration = struct {
-    name: []const u8,
-    value: []const u8,
-};
-
-pub const Rule = struct {
-    selectors: []const Selector,
-    declarations: []const Declaration,
-};
-
-pub const Stylesheet = struct {
-    rules: []const Rule,
-
-    pub fn deinit(self: *Stylesheet, allocator: std.mem.Allocator) void {
-        for (self.rules) |*rule| {
-            for (rule.selectors) |*sel| {
-                for (sel.parts) |*part| {
-                    allocator.free(part.tests);
-                }
-                allocator.free(sel.parts);
-            }
-            allocator.free(rule.selectors);
-            allocator.free(rule.declarations);
-        }
-        allocator.free(self.rules);
-    }
-};
-
-pub const Specificity = struct {
-    id_count: u32 = 0,
-    class_count: u32 = 0,
-    type_count: u32 = 0,
-};
-
-// ---------------------------------------------------------------
-// CSS Parser
-// ---------------------------------------------------------------
-
-pub fn parseStylesheet(allocator: std.mem.Allocator, css_text: []const u8) !Stylesheet {
-    var parser = CssParser{
-        .input = css_text,
-        .pos = 0,
-        .allocator = allocator,
-    };
-    const rules = try parser.parseRules();
-    return Stylesheet{ .rules = rules };
-}
-
-const CssParser = struct {
-    input: []const u8,
-    pos: usize,
-    allocator: std.mem.Allocator,
-
-    fn eof(self: *const CssParser) bool {
-        return self.pos >= self.input.len;
-    }
-
-    fn peek(self: *const CssParser) u8 {
-        if (self.eof()) return 0;
-        return self.input[self.pos];
-    }
-
-    fn next(self: *CssParser) u8 {
-        if (self.eof()) return 0;
-        const c = self.input[self.pos];
-        self.pos += 1;
-        return c;
-    }
-
-    fn advance(self: *CssParser, n: usize) void {
-        self.pos = @min(self.pos + n, self.input.len);
-    }
-
-    fn skipWs(self: *CssParser) void {
-        while (!self.eof() and cssWhitespace(self.peek())) {
-            _ = self.next();
-        }
-    }
-
-    fn skipComment(self: *CssParser) void {
-        if (self.peek() != '/') return;
-        if (self.pos + 1 >= self.input.len) return;
-        if (self.input[self.pos + 1] != '*') return;
-        self.advance(2);
-        while (!self.eof()) {
-            if (self.peek() == '*' and self.pos + 1 < self.input.len and self.input[self.pos + 1] == '/') {
-                self.advance(2);
-                return;
-            }
-            _ = self.next();
-        }
-    }
-
-    fn skipWsAndComments(self: *CssParser) void {
-        while (true) {
-            self.skipWs();
-            if (self.peek() == '/' and self.pos + 1 < self.input.len and self.input[self.pos + 1] == '*') {
-                self.skipComment();
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn parseRules(self: *CssParser) ![]Rule {
-        var rules = try std.ArrayList(Rule).initCapacity(self.allocator, 0);
-        errdefer self.freeRuleList(rules.items);
-
-        while (!self.eof()) {
-            self.skipWsAndComments();
-            if (self.eof()) break;
-
-            if (self.peek() == '@') {
-                self.skipAtRule();
-                continue;
-            }
-
-            if (self.parseRule()) |rule| {
-                try rules.append(self.allocator, rule);
-            } else {
-                self.skipInvalidContent();
-            }
-        }
-
-        return rules.toOwnedSlice(self.allocator);
-    }
-
-    fn skipInvalidContent(self: *CssParser) void {
-        while (!self.eof()) {
-            const c = self.peek();
-            if (c == '{') {
-                _ = self.next();
-                self.skipBalancedBlock();
-                return;
-            } else if (c == '}' or c == ';') {
-                _ = self.next();
-                return;
-            } else if (c == '"' or c == '\'') {
-                const quote = self.next();
-                while (!self.eof()) {
-                    const inner = self.next();
-                    if (inner == '\\') {
-                        _ = self.next();
-                    } else if (inner == quote) {
-                        break;
-                    }
-                }
-            } else {
-                _ = self.next();
-            }
-        }
-    }
-
-    fn freeRuleList(self: *CssParser, rules: []Rule) void {
-        for (rules) |*rule| {
-            for (rule.selectors) |*sel| {
-                for (sel.parts) |*part| {
-                    self.allocator.free(part.tests);
-                }
-                self.allocator.free(sel.parts);
-            }
-            self.allocator.free(rule.selectors);
-            self.allocator.free(rule.declarations);
-        }
-        self.allocator.free(rules);
-    }
-
-    fn skipAtRule(self: *CssParser) void {
-        _ = self.next();
-        _ = self.parseIdent();
-
-        while (!self.eof()) {
-            self.skipWsAndComments();
-            if (self.eof()) return;
-
-            if (self.peek() == '{') {
-                _ = self.next();
-                self.skipBalancedBlock();
-                return;
-            }
-            if (self.peek() == ';') {
-                _ = self.next();
-                return;
-            }
-            _ = self.next();
-        }
-    }
-
-    fn skipBalancedBlock(self: *CssParser) void {
-        var depth: u32 = 1;
-        while (depth > 0 and !self.eof()) {
-            const c = self.next();
-            if (c == '"' or c == '\'') {
-                const quote = c;
-                while (!self.eof()) {
-                    const inner = self.next();
-                    if (inner == '\\') {
-                        _ = self.next();
-                    } else if (inner == quote) {
-                        break;
-                    }
-                }
-            } else if (c == '{') {
-                depth += 1;
-            } else if (c == '}') {
-                depth -= 1;
-            } else if (c == '/' and self.peek() == '*') {
-                self.pos -= 1;
-                self.skipComment();
-            }
-        }
-    }
-
-    fn parseRule(self: *CssParser) ?Rule {
-        const selectors = self.parseSelectorList() catch return null;
-        if (selectors.len == 0) {
-            self.allocator.free(selectors);
-            return null;
-        }
-
-        self.skipWsAndComments();
-        if (self.peek() != '{') {
-            self.freeSelectorList(selectors);
-            return null;
-        }
-        _ = self.next();
-
-        const declarations = self.parseDeclarations() catch {
-            self.freeSelectorList(selectors);
-            return null;
-        };
-
-        return Rule{
-            .selectors = selectors,
-            .declarations = declarations,
-        };
-    }
-
-    fn freeSelectorList(self: *CssParser, selectors: []Selector) void {
-        for (selectors) |*sel| {
-            for (sel.parts) |*part| {
-                self.allocator.free(part.tests);
-            }
-            self.allocator.free(sel.parts);
-        }
-        self.allocator.free(selectors);
-    }
-
-    fn parseSelectorList(self: *CssParser) ![]Selector {
-        var selectors = try std.ArrayList(Selector).initCapacity(self.allocator, 0);
-        errdefer self.freeSelectorList(selectors.items);
-
-        while (true) {
-            self.skipWsAndComments();
-            if (self.eof() or self.peek() == '{') break;
-
-            if (try self.parseSelector()) |sel| {
-                try selectors.append(self.allocator, sel);
-            } else break;
-
-            self.skipWsAndComments();
-            if (self.peek() == ',') {
-                _ = self.next();
-            } else {
-                break;
-            }
-        }
-
-        if (selectors.items.len == 0) {
-            selectors.deinit(self.allocator);
-            return &.{};
-        }
-        return selectors.toOwnedSlice(self.allocator);
-    }
-
-    fn parseSelector(self: *CssParser) !?Selector {
-        var parts = try std.ArrayList(SelectorPart).initCapacity(self.allocator, 0);
-        errdefer {
-            for (parts.items) |p| self.allocator.free(p.tests);
-            parts.deinit(self.allocator);
-        }
-
-        const first_tests = try self.parseCompoundSelector() orelse {
-            parts.deinit(self.allocator);
-            return null;
-        };
-        try parts.append(self.allocator, .{ .tests = first_tests, .combinator = null });
-
-        while (true) {
-            self.skipWsAndComments();
-            const c = self.peek();
-            if (c == 0 or c == '{' or c == '}' or c == ',') break;
-
-            const combinator: Combinator = if (c == '>') blk: {
-                _ = self.next();
-                self.skipWsAndComments();
-                break :blk .child;
-            } else blk: {
-                break :blk .descendant;
-            };
-
-            const tests = try self.parseCompoundSelector() orelse {
-                break;
-            };
-
-            if (parts.items.len > 0) {
-                parts.items[parts.items.len - 1].combinator = combinator;
-            }
-            try parts.append(self.allocator, .{ .tests = tests, .combinator = null });
-        }
-
-        if (parts.items.len == 0) {
-            parts.deinit(self.allocator);
-            return null;
-        }
-        return Selector{ .parts = try parts.toOwnedSlice(self.allocator) };
-    }
-
-    fn parseCompoundSelector(self: *CssParser) !?[]SelectorTest {
-        var tests = try std.ArrayList(SelectorTest).initCapacity(self.allocator, 0);
-        errdefer tests.deinit(self.allocator);
-
-        self.skipWsAndComments();
-        var has_any = false;
-
-        if (self.peek() == '*') {
-            _ = self.next();
-            tests.append(self.allocator, .universal) catch {
-                tests.deinit(self.allocator);
-                return null;
-            };
-            has_any = true;
-        } else if (cssIdentStart(self.peek())) {
-            const name = self.parseIdent();
-            if (name.len > 0) {
-                tests.append(self.allocator, .{ .tag = name }) catch {
-                    tests.deinit(self.allocator);
-                    return null;
-                };
-                has_any = true;
-            }
-        }
-
-        while (true) {
-            if (self.peek() == '.') {
-                _ = self.next();
-                const name = self.parseIdent();
-                if (name.len == 0) break;
-                tests.append(self.allocator, .{ .class = name }) catch {
-                    tests.deinit(self.allocator);
-                    return null;
-                };
-                has_any = true;
-            } else if (self.peek() == '#') {
-                _ = self.next();
-                const name = self.parseIdent();
-                if (name.len == 0) break;
-                tests.append(self.allocator, .{ .id = name }) catch {
-                    tests.deinit(self.allocator);
-                    return null;
-                };
-                has_any = true;
-            } else {
-                break;
-            }
-        }
-
-        if (!has_any) {
-            tests.deinit(self.allocator);
-            return null;
-        }
-        return tests.toOwnedSlice(self.allocator) catch {
-            tests.deinit(self.allocator);
-            return null;
-        };
-    }
-
-    fn parseIdent(self: *CssParser) []const u8 {
-        const start = self.pos;
-        if (!cssIdentStart(self.peek())) return "";
-
-        _ = self.next();
-        while (!self.eof() and cssIdentChar(self.peek())) {
-            _ = self.next();
-        }
-        return self.input[start..self.pos];
-    }
-
-    fn parseDeclarations(self: *CssParser) ![]Declaration {
-        var declarations = try std.ArrayList(Declaration).initCapacity(self.allocator, 0);
-        errdefer {
-            self.allocator.free(declarations.items);
-            declarations.deinit(self.allocator);
-        }
-
-        while (!self.eof()) {
-            self.skipWsAndComments();
-            if (self.eof()) break;
-
-            if (self.peek() == '}') {
-                _ = self.next();
-                break;
-            }
-
-            if (self.parseDeclaration()) |decl| {
-                try declarations.append(self.allocator, decl);
-            }
-        }
-
-        if (declarations.items.len == 0) {
-            declarations.deinit(self.allocator);
-            return &.{};
-        }
-        return declarations.toOwnedSlice(self.allocator);
-    }
-
-    fn parseDeclaration(self: *CssParser) ?Declaration {
-        self.skipWsAndComments();
-        if (!cssIdentStart(self.peek())) {
-            self.skipMalformedDeclaration();
-            return null;
-        }
-
-        const name_start = self.pos;
-        const name = self.parseIdent();
-        if (name.len == 0) {
-            self.skipMalformedDeclaration();
-            return null;
-        }
-
-        self.skipWsAndComments();
-        if (self.peek() != ':') {
-            self.pos = name_start;
-            self.skipMalformedDeclaration();
-            return null;
-        }
-        _ = self.next();
-
-        self.skipWsAndComments();
-        const value_start = self.pos;
-
-        var paren_depth: u32 = 0;
-        while (!self.eof()) {
-            const c = self.peek();
-            if (c == '"' or c == '\'') {
-                _ = self.next();
-                while (!self.eof()) {
-                    const inner = self.next();
-                    if (inner == '\\') {
-                        _ = self.next();
-                    } else if (inner == c) {
-                        break;
-                    }
-                }
-            } else if (c == '(') {
-                paren_depth += 1;
-                _ = self.next();
-            } else if (c == ')') {
-                if (paren_depth > 0) paren_depth -= 1;
-                _ = self.next();
-            } else if (c == '{') {
-                paren_depth += 1;
-                _ = self.next();
-            } else if (c == '}') {
-                if (paren_depth > 0) {
-                    paren_depth -= 1;
-                    _ = self.next();
-                } else {
-                    break;
-                }
-            } else if (paren_depth == 0 and (c == ';' or c == '/')) {
-                if (c == '/') {
-                    if (self.pos + 1 < self.input.len and self.input[self.pos + 1] == '*') break;
-                    _ = self.next();
-                } else {
-                    break;
-                }
-            } else {
-                _ = self.next();
-            }
-        }
-
-        const value_raw = self.input[value_start..self.pos];
-        const value = std.mem.trim(u8, value_raw, " \t\n\r\x0C");
-
-        if (self.peek() == ';') {
-            _ = self.next();
-        }
-
-        self.skipToImportant();
-
-        return Declaration{ .name = name, .value = value };
-    }
-
-    fn skipToImportant(self: *CssParser) void {
-        const saved = self.pos;
-        self.skipWsAndComments();
-        if (self.peek() == '!') {
-            _ = self.next();
-            self.skipWsAndComments();
-            _ = self.parseIdent();
-        } else {
-            self.pos = saved;
-        }
-    }
-
-    fn skipMalformedDeclaration(self: *CssParser) void {
-        while (!self.eof()) {
-            const c = self.peek();
-            if (c == ';' or c == '}' or c == '{') break;
-            _ = self.next();
-        }
-        if (self.peek() == ';') _ = self.next();
-    }
-};
-
-fn cssWhitespace(c: u8) bool {
-    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C;
-}
-
-fn cssIdentStart(c: u8) bool {
-    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c > 0x7F;
-}
-
-fn cssIdentChar(c: u8) bool {
-    return cssIdentStart(c) or (c >= '0' and c <= '9') or c == '-';
-}
-
-// ---------------------------------------------------------------
-// Selector matching
-// ---------------------------------------------------------------
-
-pub fn matchesSelector(selector: Selector, node_id: dom.NodeId, document: *const dom.Document) bool {
-    if (selector.parts.len == 0) return false;
-
-    const last_idx = selector.parts.len - 1;
-    if (!matchesCompound(selector.parts[last_idx].tests, node_id, document)) return false;
-
-    var current_id = node_id;
-    var part_idx = last_idx;
-
-    while (part_idx > 0) : (part_idx -= 1) {
-        const combinator = selector.parts[part_idx - 1].combinator orelse break;
-
-        switch (combinator) {
-            .descendant => {
-                const found = findAncestorMatching(selector.parts[part_idx - 1].tests, current_id, document);
-                if (found) |ancestor_id| {
-                    current_id = ancestor_id;
-                } else {
-                    return false;
-                }
-            },
-            .child => {
-                const parent_id = document.nodes.items[current_id].parent orelse return false;
-                if (!matchesCompound(selector.parts[part_idx - 1].tests, parent_id, document)) return false;
-                current_id = parent_id;
-            },
-        }
-    }
-
-    return true;
-}
-
-fn matchesCompound(tests: []const SelectorTest, node_id: dom.NodeId, document: *const dom.Document) bool {
-    const node = document.nodes.items[node_id];
-    const element = switch (node.kind) {
-        .element => |e| e,
-        .document, .text => {
-            for (tests) |t| {
-                if (t != .universal) return false;
-            }
-            return true;
-        },
-    };
-
-    for (tests) |t| {
-        switch (t) {
-            .universal => {},
-            .tag => |tag| {
-                if (!std.ascii.eqlIgnoreCase(element.name, tag)) return false;
-            },
-            .class => |class_name| {
-                if (!matchesClass(element, class_name)) return false;
-            },
-            .id => |id_value| {
-                if (!matchesId(element, id_value)) return false;
-            },
-        }
-    }
-    return true;
-}
-
-fn findAncestorMatching(tests: []const SelectorTest, node_id: dom.NodeId, document: *const dom.Document) ?dom.NodeId {
-    var current_id: ?dom.NodeId = document.nodes.items[node_id].parent;
-    while (current_id) |id| {
-        if (matchesCompound(tests, id, document)) return id;
-        current_id = document.nodes.items[id].parent;
-    }
-    return null;
-}
-
-fn matchesClass(element: dom.Element, class_name: []const u8) bool {
-    const attr_value = getAttributeValue(element.attributes, "class") orelse return false;
-    return hasToken(attr_value, class_name);
-}
-
-fn matchesId(element: dom.Element, id_value: []const u8) bool {
-    const attr_value = getAttributeValue(element.attributes, "id") orelse return false;
-    return std.ascii.eqlIgnoreCase(attr_value, id_value);
-}
-
-fn hasToken(value: []const u8, token: []const u8) bool {
-    var iter = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
-    while (iter.next()) |t| {
-        if (std.mem.eql(u8, t, token)) return true;
-    }
-    return false;
-}
-
-// ---------------------------------------------------------------
-// Specificity
-// ---------------------------------------------------------------
-
-pub fn selectorSpecificity(selector: Selector) Specificity {
-    var spec = Specificity{};
-    for (selector.parts) |part| {
-        for (part.tests) |t| {
-            switch (t) {
-                .id => spec.id_count += 1,
-                .class => spec.class_count += 1,
-                .tag => spec.type_count += 1,
-                .universal => {},
-            }
-        }
-    }
-    return spec;
-}
-
-pub fn compareSpecificity(a: Specificity, b: Specificity) std.math.Order {
-    if (a.id_count != b.id_count) return std.math.order(a.id_count, b.id_count);
-    if (a.class_count != b.class_count) return std.math.order(a.class_count, b.class_count);
-    return std.math.order(a.type_count, b.type_count);
-}
-
-// ---------------------------------------------------------------
-// Value parsing helpers
-// ---------------------------------------------------------------
-
-fn applyDeclaration(style: *box.Style, name: []const u8, value: []const u8) void {
-    if (eqlProp(name, "display")) {
-        if (parseDisplay(value)) |d| style.display = d;
-    } else if (eqlProp(name, "position")) {
-        if (parsePosition(value)) |p| style.position = p;
-    } else if (eqlProp(name, "float")) {
-        if (parseFloatValue(value)) |f| style.float_direction = f;
-    } else if (eqlProp(name, "white-space")) {
-        if (parseWhiteSpace(value)) |w| style.white_space = w;
-    } else if (eqlProp(name, "font-size")) {
-        if (parseLength(value)) |fs| style.font_size = fs;
-    } else if (eqlProp(name, "font-family")) {
-        style.font_family = value;
-    } else if (eqlProp(name, "color")) {
-        style.color = value;
-    } else if (eqlProp(name, "background") or eqlProp(name, "background-color")) {
-        style.background = value;
-    } else if (eqlProp(name, "width")) {
-        if (parseLength(value)) |w| style.width = w;
-    } else if (eqlProp(name, "height")) {
-        if (parseLength(value)) |h| style.height = h;
-    } else if (eqlProp(name, "min-width")) {
-        if (parseLength(value)) |w| style.min_width = w;
-    } else if (eqlProp(name, "max-width")) {
-        if (parseLength(value)) |w| style.max_width = w;
-    } else if (eqlProp(name, "min-height")) {
-        if (parseLength(value)) |h| style.min_height = h;
-    } else if (eqlProp(name, "max-height")) {
-        if (parseLength(value)) |h| style.max_height = h;
-    } else if (eqlProp(name, "line-height")) {
-        if (parseLength(value)) |lh| style.line_height = lh;
-    } else if (eqlProp(name, "text-align")) {
-        if (parseTextAlign(value)) |ta| style.text_align = ta;
-    } else if (eqlProp(name, "box-sizing")) {
-        if (parseBoxSizing(value)) |bs| style.box_sizing = bs;
-    } else if (eqlProp(name, "page-break-before")) {
-        if (parsePageBreak(value)) |pb| style.page_break_before = pb;
-    } else if (eqlProp(name, "page-break-after")) {
-        if (parsePageBreak(value)) |pb| style.page_break_after = pb;
-    } else if (eqlProp(name, "orphans")) {
-        if (parsePositiveInteger(value)) |o| style.orphans = o;
-    } else if (eqlProp(name, "widows")) {
-        if (parsePositiveInteger(value)) |w| style.widows = w;
-    } else if (eqlProp(name, "margin")) {
-        style.margin = parseEdges(value);
-    } else if (eqlProp(name, "margin-top")) {
-        if (parseLength(value)) |l| style.margin.top = l;
-    } else if (eqlProp(name, "margin-right")) {
-        if (parseLength(value)) |l| style.margin.right = l;
-    } else if (eqlProp(name, "margin-bottom")) {
-        if (parseLength(value)) |l| style.margin.bottom = l;
-    } else if (eqlProp(name, "margin-left")) {
-        if (parseLength(value)) |l| style.margin.left = l;
-    } else if (eqlProp(name, "padding")) {
-        style.padding = parseEdges(value);
-    } else if (eqlProp(name, "padding-top")) {
-        if (parseLength(value)) |l| style.padding.top = l;
-    } else if (eqlProp(name, "padding-right")) {
-        if (parseLength(value)) |l| style.padding.right = l;
-    } else if (eqlProp(name, "padding-bottom")) {
-        if (parseLength(value)) |l| style.padding.bottom = l;
-    } else if (eqlProp(name, "padding-left")) {
-        if (parseLength(value)) |l| style.padding.left = l;
-    } else if (eqlProp(name, "border")) {
-        const len = parseFirstLength(value);
-        style.border = .{ .top = len, .right = len, .bottom = len, .left = len };
-    } else if (eqlProp(name, "border-top")) {
-        style.border.top = parseFirstLength(value);
-    } else if (eqlProp(name, "border-right")) {
-        style.border.right = parseFirstLength(value);
-    } else if (eqlProp(name, "border-bottom")) {
-        style.border.bottom = parseFirstLength(value);
-    } else if (eqlProp(name, "border-left")) {
-        style.border.left = parseFirstLength(value);
-    } else if (eqlProp(name, "border-style")) {
-        if (parseBorderStyle(value)) |bs| {
-            style.border_top_style = bs;
-            style.border_right_style = bs;
-            style.border_bottom_style = bs;
-            style.border_left_style = bs;
-        }
-    } else if (eqlProp(name, "border-top-style")) {
-        if (parseBorderStyle(value)) |bs| style.border_top_style = bs;
-    } else if (eqlProp(name, "border-right-style")) {
-        if (parseBorderStyle(value)) |bs| style.border_right_style = bs;
-    } else if (eqlProp(name, "border-bottom-style")) {
-        if (parseBorderStyle(value)) |bs| style.border_bottom_style = bs;
-    } else if (eqlProp(name, "border-left-style")) {
-        if (parseBorderStyle(value)) |bs| style.border_left_style = bs;
-    } else if (eqlProp(name, "border-color")) {
-        style.border_top_color = value;
-        style.border_right_color = value;
-        style.border_bottom_color = value;
-        style.border_left_color = value;
-    } else if (eqlProp(name, "border-top-color")) {
-        style.border_top_color = value;
-    } else if (eqlProp(name, "border-right-color")) {
-        style.border_right_color = value;
-    } else if (eqlProp(name, "border-bottom-color")) {
-        style.border_bottom_color = value;
-    } else if (eqlProp(name, "border-left-color")) {
-        style.border_left_color = value;
-    } else if (eqlProp(name, "border-top-width")) {
-        if (parseLength(value)) |l| style.border.top = l;
-    } else if (eqlProp(name, "border-right-width")) {
-        if (parseLength(value)) |l| style.border.right = l;
-    } else if (eqlProp(name, "border-bottom-width")) {
-        if (parseLength(value)) |l| style.border.bottom = l;
-    } else if (eqlProp(name, "border-left-width")) {
-        if (parseLength(value)) |l| style.border.left = l;
-    }
-}
-
-fn eqlProp(a: []const u8, b: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(a, b);
-}
-
-fn parseDisplay(value: []const u8) ?box.Display {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "none")) return .none;
-    if (eqlProp(v, "block")) return .block;
-    if (eqlProp(v, "inline")) return .inlineBox;
-    if (eqlProp(v, "inline-block")) return .inlineBlock;
-    if (eqlProp(v, "table")) return .table;
-    if (eqlProp(v, "table-row")) return .tableRow;
-    if (eqlProp(v, "table-cell")) return .tableCell;
-    if (eqlProp(v, "table-row-group")) return .tableRowGroup;
-    return null;
-}
-
-fn parsePosition(value: []const u8) ?box.Position {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "static")) return .static;
-    if (eqlProp(v, "relative")) return .relative;
-    if (eqlProp(v, "absolute")) return .absolute;
-    if (eqlProp(v, "fixed")) return .fixed;
-    return null;
-}
-
-fn parseFloatValue(value: []const u8) ?box.Float {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "none")) return .none;
-    if (eqlProp(v, "left")) return .left;
-    if (eqlProp(v, "right")) return .right;
-    return null;
-}
-
-fn parseWhiteSpace(value: []const u8) ?box.WhiteSpace {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "normal")) return .normal;
-    if (eqlProp(v, "nowrap")) return .nowrap;
-    if (eqlProp(v, "pre")) return .pre;
-    if (eqlProp(v, "pre-wrap")) return .preWrap;
-    if (eqlProp(v, "pre-line")) return .preLine;
-    return null;
-}
-
-fn parseLength(value: []const u8) ?f32 {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (v.len == 0) return null;
-
-    var end: usize = 0;
-    while (end < v.len) : (end += 1) {
-        const c = v[end];
-        if (!((c >= '0' and c <= '9') or c == '.' or c == '-')) break;
-    }
-
-    const num_str = v[0..end];
-    if (num_str.len == 0) return null;
-
-    const num = std.fmt.parseFloat(f32, num_str) catch return null;
-
-    if (end < v.len and v[end] != ' ') {
-        const unit = std.mem.trim(u8, v[end..], " \t\n\r\x0C");
-        if (eqlProp(unit, "px") or unit.len == 0) return num;
-        // ponytail: em/rem/% need font-size context, defer
-        if (eqlProp(unit, "em") or eqlProp(unit, "rem") or unit[0] == '%') return num;
-        return null;
-    }
-
-    return num;
-}
-
-fn parseFirstLength(value: []const u8) f32 {
-    var iter = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
-    while (iter.next()) |token| {
-        if (parseLength(token)) |len| return len;
-    }
-    return 0;
-}
-
-fn parseEdges(value: []const u8) box.EdgeSizes {
-    var parts: [4]?f32 = .{ null, null, null, null };
-    var i: usize = 0;
-    var iter = std.mem.tokenizeAny(u8, value, " \t\n\r\x0C");
-
-    while (iter.next()) |token| : (i += 1) {
-        if (i >= 4) break;
-        parts[i] = parseLength(token);
-    }
-
-    return switch (i) {
-        0 => .{},
-        1 => .{ .top = parts[0].?, .right = parts[0].?, .bottom = parts[0].?, .left = parts[0].? },
-        2 => .{ .top = parts[0].?, .right = parts[1].?, .bottom = parts[0].?, .left = parts[1].? },
-        3 => .{ .top = parts[0].?, .right = parts[1].?, .bottom = parts[2].?, .left = parts[1].? },
-        else => .{ .top = parts[0].?, .right = parts[1].?, .bottom = parts[2].?, .left = parts[3].? },
-    };
-}
-
-fn parseTextAlign(value: []const u8) ?box.TextAlign {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "left")) return .left;
-    if (eqlProp(v, "center")) return .center;
-    if (eqlProp(v, "right")) return .right;
-    if (eqlProp(v, "justify")) return .justify;
-    return null;
-}
-
-fn parseBoxSizing(value: []const u8) ?box.BoxSizing {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "content-box")) return .contentBox;
-    if (eqlProp(v, "border-box")) return .borderBox;
-    return null;
-}
-
-fn parsePageBreak(value: []const u8) ?box.PageBreak {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "auto")) return .auto;
-    if (eqlProp(v, "always")) return .always;
-    if (eqlProp(v, "avoid")) return .avoid;
-    return null;
-}
-
-fn parseBorderStyle(value: []const u8) ?box.BorderStyle {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "none")) return .none;
-    if (eqlProp(v, "solid")) return .solid;
-    if (eqlProp(v, "dashed")) return .dashed;
-    if (eqlProp(v, "dotted")) return .dotted;
-    return null;
-}
-
-fn parsePositiveInteger(value: []const u8) ?u32 {
-    const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    const n = std.fmt.parseInt(u32, v, 10) catch return null;
-    if (n == 0) return null;
-    return n;
-}
-
-fn getAttributeValue(attributes: []const html.Attribute, name: []const u8) ?[]const u8 {
-    for (attributes) |attr| {
-        if (std.ascii.eqlIgnoreCase(attr.name, name)) return attr.value;
-    }
-    return null;
-}
-
-// ---------------------------------------------------------------
-// Cascade engine
-// ---------------------------------------------------------------
-
-const Match = struct {
-    stylesheet_idx: u32,
-    rule_idx: u32,
-    specificity: Specificity,
-};
-
-pub fn computeStyles(
-    arena: std.mem.Allocator,
-    document: *const dom.Document,
-    stylesheets: []const Stylesheet,
-) ![]box.Style {
-    const styles = try arena.alloc(box.Style, document.nodes.items.len);
-    @memset(styles, box.Style{});
-
-    // ponytail: fixed buffer for match collection, enlarge if complex stylesheets overflow
-    var match_buf: [64]Match = undefined;
-
-    computeStylesRecursive(document, stylesheets, styles, document.root, null, &match_buf, arena);
-
-    return styles;
-}
-
-fn computeStylesRecursive(
-    document: *const dom.Document,
-    stylesheets: []const Stylesheet,
-    styles: []box.Style,
-    node_id: dom.NodeId,
-    parent_style: ?*const box.Style,
-    match_buf: []Match,
-    scratch: std.mem.Allocator,
-) void {
-    var style = box.defaultStyleForNode(document, node_id);
-
-    if (parent_style) |ps| {
-        style.font_size = ps.font_size;
-        style.font_family = ps.font_family;
-        style.color = ps.color;
-        style.white_space = ps.white_space;
-    }
-
-    var match_count: usize = 0;
-
-    for (stylesheets, 0..) |ss, ss_idx| {
-        for (ss.rules, 0..) |rule, rule_idx| {
-            for (rule.selectors) |sel| {
-                if (matchesSelector(sel, node_id, document)) {
-                    if (match_count < match_buf.len) {
-                        match_buf[match_count] = Match{
-                            .stylesheet_idx = @intCast(ss_idx),
-                            .rule_idx = @intCast(rule_idx),
-                            .specificity = selectorSpecificity(sel),
-                        };
-                        match_count += 1;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    std.mem.sort(Match, match_buf[0..match_count], {}, compareMatchBySpecificity);
-
-    for (match_buf[0..match_count]) |m| {
-        const rule = stylesheets[m.stylesheet_idx].rules[m.rule_idx];
-        for (rule.declarations) |decl| {
-            applyDeclaration(&style, decl.name, decl.value);
-        }
-    }
-
-    styles[node_id] = style;
-
-    const node = document.nodes.items[node_id];
-    var child = node.first_child;
-    while (child) |child_id| {
-        computeStylesRecursive(document, stylesheets, styles, child_id, &style, match_buf, scratch);
-        child = document.nodes.items[child_id].next_sibling;
-    }
-}
-
-fn compareMatchBySpecificity(_: void, a: Match, b: Match) bool {
-    const order = compareSpecificity(a.specificity, b.specificity);
-    if (order != .eq) return order == .lt;
-    if (a.stylesheet_idx != b.stylesheet_idx) return a.stylesheet_idx < b.stylesheet_idx;
-    return a.rule_idx < b.rule_idx;
-}
-
-// ---------------------------------------------------------------
-// DOM helpers for CSS extraction
-// ---------------------------------------------------------------
-
-pub fn collectStyleText(allocator: std.mem.Allocator, document: *const dom.Document) ![]const u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
-    errdefer buf.deinit(allocator);
-
-    try collectStyleTextFrom(document, document.root, &buf, allocator);
-    if (buf.items.len > 0) {
-        try buf.append(allocator, '\n');
-    }
-
-    return buf.toOwnedSlice(allocator);
-}
-
-fn collectStyleTextFrom(document: *const dom.Document, node_id: dom.NodeId, buf: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
-    const node = document.nodes.items[node_id];
-
-    if (node.kind == .element) {
-        const element = node.kind.element;
-        if (std.ascii.eqlIgnoreCase(element.name, "style")) {
-            var child = node.first_child;
-            while (child) |child_id| {
-                const child_node = document.nodes.items[child_id];
-                if (child_node.kind == .text) {
-                    try buf.appendSlice(allocator, child_node.kind.text);
-                }
-                child = child_node.next_sibling;
-            }
-        }
-    }
-
-    var child = node.first_child;
-    while (child) |child_id| {
-        try collectStyleTextFrom(document, child_id, buf, allocator);
-        child = document.nodes.items[child_id].next_sibling;
-    }
-}
-
-// ---------------------------------------------------------------
-// Cascade dump for debugging and WASM output
-// ---------------------------------------------------------------
-
-pub fn dumpCascade(
-    document: *const dom.Document,
-    styles: []const box.Style,
-    writer: *std.Io.Writer,
-) !void {
-    try dumpCascadeNode(document, styles, document.root, 0, writer);
-}
-
-fn dumpCascadeNode(
-    document: *const dom.Document,
-    styles: []const box.Style,
-    node_id: dom.NodeId,
-    depth: usize,
-    writer: *std.Io.Writer,
-) !void {
-    var i: usize = 0;
-    while (i < depth) : (i += 1) {
-        try writer.writeAll("  ");
-    }
-
-    const node = document.nodes.items[node_id];
-    const style = if (node_id < styles.len) styles[node_id] else box.Style{};
-
-    switch (node.kind) {
-        .document => try writer.print("#document [display={s}]\n", .{style.display.toString()}),
-        .text => |text| try writer.print("#text \"{s}\" [display={s} font-size={d:.2} font-family={s} color={s}]\n", .{
-            text, style.display.toString(), style.font_size, style.font_family, style.color,
-        }),
-        .element => |element| {
-            try writer.print("{s}", .{element.name});
-            for (element.attributes) |attr| {
-                if (std.ascii.eqlIgnoreCase(attr.name, "class")) {
-                    if (attr.value) |v| try writer.print(".{s}", .{v});
-                } else if (std.ascii.eqlIgnoreCase(attr.name, "id")) {
-                    if (attr.value) |v| try writer.print("#{s}", .{v});
-                }
-            }
-            try writer.print(" [display={s} font-size={d:.2} font-family={s} color={s}", .{
-                style.display.toString(), style.font_size, style.font_family, style.color,
-            });
-            if (style.background) |bg| {
-                try writer.print(" background={s}", .{bg});
-            }
-            if (!edgeIsZero(style.margin)) {
-                try writer.print(" margin={d:.2},{d:.2},{d:.2},{d:.2}", .{
-                    style.margin.top, style.margin.right, style.margin.bottom, style.margin.left,
-                });
-            }
-            if (!edgeIsZero(style.padding)) {
-                try writer.print(" padding={d:.2},{d:.2},{d:.2},{d:.2}", .{
-                    style.padding.top, style.padding.right, style.padding.bottom, style.padding.left,
-                });
-            }
-            if (!edgeIsZero(style.border)) {
-                try writer.print(" border={d:.2},{d:.2},{d:.2},{d:.2}", .{
-                    style.border.top, style.border.right, style.border.bottom, style.border.left,
-                });
-            }
-            try writer.writeAll("]\n");
-        },
-    }
-
-    var child = node.first_child;
-    while (child) |child_id| {
-        try dumpCascadeNode(document, styles, child_id, depth + 1, writer);
-        child = document.nodes.items[child_id].next_sibling;
-    }
-}
-
-fn edgeIsZero(e: box.EdgeSizes) bool {
-    return e.top == 0 and e.right == 0 and e.bottom == 0 and e.left == 0;
-}
-
-// ---------------------------------------------------------------
-// Convenience: full pipeline from DOM to Style array
-// ---------------------------------------------------------------
-
-pub fn styleArrayFromDocument(
-    arena: std.mem.Allocator,
-    document: *const dom.Document,
-) ![]box.Style {
-    const css_text = collectStyleText(arena, document) catch &.{};
-    if (css_text.len == 0) {
-        return computeStyles(arena, document, &.{});
-    }
-
-    const stylesheet = parseStylesheet(arena, css_text) catch {
-        return computeStyles(arena, document, &.{});
-    };
-    // ponytail: stylesheet memory freed by arena
-
-    return computeStyles(arena, document, &.{stylesheet});
-}
-
-// ---------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------
+pub const syntax = @import("css/syntax.zig");
+pub const selectors = @import("css/selectors.zig");
+pub const values = @import("css/values.zig");
+pub const expressions = @import("css/expressions.zig");
+pub const variables = @import("css/variables.zig");
+pub const shorthands = @import("css/shorthands.zig");
+pub const computed = @import("css/computed.zig");
+pub const cascade = @import("css/cascade.zig");
+pub const properties = @import("css/properties.zig");
+
+pub const Combinator = syntax.Combinator;
+pub const SelectorTest = syntax.SelectorTest;
+pub const SelectorPart = syntax.SelectorPart;
+pub const Selector = syntax.Selector;
+pub const Declaration = syntax.Declaration;
+pub const Rule = syntax.Rule;
+pub const Stylesheet = syntax.Stylesheet;
+pub const Specificity = syntax.Specificity;
+
+pub const parseStylesheet = syntax.parseStylesheet;
+pub const matchesSelector = selectors.matchesSelector;
+pub const selectorSpecificity = selectors.selectorSpecificity;
+pub const compareSpecificity = selectors.compareSpecificity;
+pub const computeStyles = cascade.computeStyles;
+pub const computeStylesWithContext = cascade.computeStylesWithContext;
+pub const collectStyleText = cascade.collectStyleText;
+pub const dumpCascade = cascade.dumpCascade;
+pub const styleArrayFromDocument = cascade.styleArrayFromDocument;
+pub const styleArrayFromDocumentWithContext = cascade.styleArrayFromDocumentWithContext;
+
+const parseLength = values.parseLength;
+const parseDimension = values.parseDimension;
+const parseDisplay = values.parseDisplay;
+const parseFontWeight = values.parseFontWeight;
+const parseFontStyle = values.parseFontStyle;
+const parseEdges = values.parseEdges;
+const parseTextAlign = values.parseTextAlign;
+const parseDirection = values.parseDirection;
+const parseTextTransform = values.parseTextTransform;
+const parseWordBreak = values.parseWordBreak;
+const parseOverflowWrap = values.parseOverflowWrap;
+const parseOverflow = values.parseOverflow;
+const parseTextOverflow = values.parseTextOverflow;
+const parseAspectRatio = values.parseAspectRatio;
+const parseObjectFit = values.parseObjectFit;
+const parseObjectPosition = values.parseObjectPosition;
+const parseVerticalAlignKeyword = values.parseVerticalAlignKeyword;
+const parseBoxSizing = values.parseBoxSizing;
+const parseBorderCollapse = values.parseBorderCollapse;
+const parsePageBreak = values.parsePageBreak;
+const parsePageName = values.parsePageName;
+const parseBorderStyle = values.parseBorderStyle;
+const parsePositiveInteger = values.parsePositiveInteger;
 
 fn deinitTokens(allocator: std.mem.Allocator, tokens: *std.ArrayList(html.Token)) void {
     for (tokens.items) |token| {
@@ -1268,6 +152,15 @@ test "parse multiple declarations" {
     try std.testing.expectEqualStrings("10px 20px", decls[2].value);
 }
 
+test "parse and strip important declarations" {
+    const allocator = std.testing.allocator;
+    var stylesheet = try parseStylesheet(allocator, "p { color: red !important; width: 10px; }");
+    defer stylesheet.deinit(allocator);
+    try std.testing.expectEqualStrings("red", stylesheet.rules[0].declarations[0].value);
+    try std.testing.expect(stylesheet.rules[0].declarations[0].important);
+    try std.testing.expect(!stylesheet.rules[0].declarations[1].important);
+}
+
 test "parse comma-separated selectors" {
     const allocator = std.testing.allocator;
     const css = "h1, h2 { color: red; }";
@@ -1301,6 +194,14 @@ test "skip unparseable pseudo-element and recover" {
     try std.testing.expectEqual(@as(usize, 2), ss.rules.len);
     try std.testing.expectEqualStrings("p", ss.rules[0].selectors[0].parts[0].tests[0].tag);
     try std.testing.expectEqualStrings("div", ss.rules[1].selectors[0].parts[0].tests[0].tag);
+}
+
+test "recover from a malformed nested declaration block" {
+    var stylesheet = try parseStylesheet(std.testing.allocator, "h{bad{unterminated");
+    defer stylesheet.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), stylesheet.rules.len);
+    try std.testing.expectEqual(@as(usize, 0), stylesheet.rules[0].declarations.len);
 }
 
 test "cascade: skip style with pseudo-element" {
@@ -1443,6 +344,21 @@ test "child combinator does not match grandchild" {
     const span_id = document.nodes.items[div_id].first_child.?;
     const p_id = document.nodes.items[span_id].first_child.?;
     try std.testing.expect(!matchesSelector(ss.rules[0].selectors[0], p_id, &document));
+}
+
+test "CSS escapes match identifiers and declaration names" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>p.\\66 oo#\\62 ar, .\\31 23 { c\\6flor: rebeccapurple; }</style><p class='foo' id='bar'>escaped</p><div class='123'>digit</div>",
+    );
+    defer fixture.deinit(allocator);
+
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const paragraph = fixture.document.nodes.items[style_id].next_sibling.?;
+    const digit = fixture.document.nodes.items[paragraph].next_sibling.?;
+    try std.testing.expectEqualStrings("rebeccapurple", fixture.styles[paragraph].color);
+    try std.testing.expectEqualStrings("rebeccapurple", fixture.styles[digit].color);
 }
 
 test "specificity calculation" {
@@ -1757,11 +673,28 @@ test "parse value: font-size pixel" {
     try std.testing.expectEqual(@as(?f32, 16.5), parseLength("16.5px"));
 }
 
+test "parse dimensions preserve percentages and normalize absolute units" {
+    try std.testing.expectEqual(box.Length{ .percent = 1 }, parseDimension("100%", 16).?);
+    try std.testing.expectEqual(box.Length{ .px = 32 }, parseDimension("2em", 16).?);
+    try std.testing.expectApproxEqAbs(@as(f32, 96), parseDimension("25.4mm", 16).?.px, 0.001);
+    try std.testing.expect(parseDimension("min-content", 16).? == .minContent);
+    try std.testing.expect(parseDimension("max-content", 16).? == .maxContent);
+    try std.testing.expect(parseDimension("fit-content", 16).? == .fitContent);
+}
+
 test "parse value: display keywords" {
     try std.testing.expectEqual(box.Display.block, parseDisplay("block").?);
     try std.testing.expectEqual(box.Display.inlineBox, parseDisplay("inline").?);
     try std.testing.expectEqual(box.Display.none, parseDisplay("none").?);
     try std.testing.expectEqual(box.Display.inlineBlock, parseDisplay("inline-block").?);
+    try std.testing.expectEqual(box.Display.grid, parseDisplay("grid").?);
+    try std.testing.expectEqual(box.Display.inlineGrid, parseDisplay("inline-grid").?);
+}
+
+test "parse font weight and style" {
+    try std.testing.expectEqual(box.FontWeight.bold, parseFontWeight("700").?);
+    try std.testing.expectEqual(box.FontWeight.normal, parseFontWeight("400").?);
+    try std.testing.expectEqual(box.FontStyle.italic, parseFontStyle("oblique").?);
 }
 
 test "parse value: edges shorthand" {
@@ -1789,24 +722,88 @@ test "parse value: table display keywords" {
     try std.testing.expectEqual(box.Display.tableRow, parseDisplay("table-row").?);
     try std.testing.expectEqual(box.Display.tableCell, parseDisplay("table-cell").?);
     try std.testing.expectEqual(box.Display.tableRowGroup, parseDisplay("table-row-group").?);
+    try std.testing.expectEqual(box.Display.tableCaption, parseDisplay("table-caption").?);
+    try std.testing.expectEqual(box.Display.tableColumn, parseDisplay("table-column").?);
+    try std.testing.expectEqual(box.Display.tableColumnGroup, parseDisplay("table-column-group").?);
 }
 
 test "parse value: text-align" {
+    try std.testing.expectEqual(box.TextAlign.start, parseTextAlign("start").?);
+    try std.testing.expectEqual(box.TextAlign.end, parseTextAlign("end").?);
     try std.testing.expectEqual(box.TextAlign.left, parseTextAlign("left").?);
     try std.testing.expectEqual(box.TextAlign.center, parseTextAlign("center").?);
     try std.testing.expectEqual(box.TextAlign.right, parseTextAlign("right").?);
     try std.testing.expectEqual(box.TextAlign.justify, parseTextAlign("justify").?);
 }
 
+test "parse value: direction" {
+    try std.testing.expectEqual(box.Direction.ltr, parseDirection("ltr").?);
+    try std.testing.expectEqual(box.Direction.rtl, parseDirection("rtl").?);
+}
+
+test "parse CSS Text inline properties" {
+    try std.testing.expectEqual(box.TextTransform.uppercase, parseTextTransform("uppercase").?);
+    try std.testing.expectEqual(box.TextTransform.capitalize, parseTextTransform("capitalize").?);
+    try std.testing.expectEqual(box.WordBreak.breakAll, parseWordBreak("break-all").?);
+    try std.testing.expectEqual(box.WordBreak.keepAll, parseWordBreak("keep-all").?);
+    try std.testing.expectEqual(box.OverflowWrap.breakWord, parseOverflowWrap("break-word").?);
+    try std.testing.expectEqual(box.OverflowWrap.anywhere, parseOverflowWrap("anywhere").?);
+    try std.testing.expect(parseVerticalAlignKeyword("super").? == .super);
+    try std.testing.expect(parseVerticalAlignKeyword("text-bottom").? == .textBottom);
+    try std.testing.expectEqual(box.Overflow.hidden, parseOverflow("hidden").?);
+    try std.testing.expectEqual(box.Overflow.clip, parseOverflow("clip").?);
+    try std.testing.expectEqual(box.TextOverflow.ellipsis, parseTextOverflow("ellipsis").?);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0 / 9.0), parseAspectRatio("16 / 9").?.ratio.?, 0.001);
+    try std.testing.expectEqual(box.ObjectFit.cover, parseObjectFit("cover").?);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), parseObjectPosition("right 25%").?.x.resolve(1).?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), parseObjectPosition("right 25%").?.y.resolve(1).?, 0.001);
+}
+
 test "parse value: box-sizing" {
     try std.testing.expectEqual(box.BoxSizing.contentBox, parseBoxSizing("content-box").?);
     try std.testing.expectEqual(box.BoxSizing.borderBox, parseBoxSizing("border-box").?);
+    try std.testing.expectEqual(box.BorderCollapse.collapse, parseBorderCollapse("collapse").?);
 }
 
 test "parse value: page-break" {
     try std.testing.expectEqual(box.PageBreak.auto, parsePageBreak("auto").?);
-    try std.testing.expectEqual(box.PageBreak.always, parsePageBreak("always").?);
+    try std.testing.expectEqual(box.PageBreak.page, parsePageBreak("always").?);
     try std.testing.expectEqual(box.PageBreak.avoid, parsePageBreak("avoid").?);
+    try std.testing.expectEqual(box.PageBreak.page, parsePageBreak("page").?);
+    try std.testing.expectEqual(box.PageBreak.left, parsePageBreak("left").?);
+    try std.testing.expectEqual(box.PageBreak.right, parsePageBreak("right").?);
+    try std.testing.expectEqual(box.PageBreak.recto, parsePageBreak("recto").?);
+    try std.testing.expectEqual(box.PageBreak.verso, parsePageBreak("verso").?);
+    try std.testing.expectEqual(box.PageBreak.avoid, parsePageBreak("avoid-page").?);
+}
+
+test "parse value: named page" {
+    try std.testing.expectEqualStrings("auto", parsePageName("auto").?);
+    try std.testing.expectEqualStrings("ReportCover", parsePageName("ReportCover").?);
+    try std.testing.expect(parsePageName("default") == null);
+    try std.testing.expect(parsePageName("two words") == null);
+}
+
+test "cascade keeps page names case-sensitive and page non-inherited" {
+    const allocator = std.testing.allocator;
+    const source = "<style>.report { page: Report; } .explicit { page: inherit; }</style><section class=\"report\"><div></div><div class=\"explicit\"></div></section>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const styles = try styleArrayFromDocument(arena.allocator(), &document);
+
+    const style_node = document.nodes.items[document.root].first_child.?;
+    const section_id = document.nodes.items[style_node].next_sibling.?;
+    const auto_child_id = document.nodes.items[section_id].first_child.?;
+    const inherited_child_id = document.nodes.items[auto_child_id].next_sibling.?;
+    try std.testing.expectEqualStrings("Report", styles[section_id].page_name);
+    try std.testing.expectEqualStrings("auto", styles[auto_child_id].page_name);
+    try std.testing.expectEqualStrings("Report", styles[inherited_child_id].page_name);
 }
 
 test "parse value: border-style" {
@@ -1862,8 +859,19 @@ test "cascade: width and height properties" {
     defer ct.deinit(allocator);
     const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
     const div_id = ct.document.nodes.items[style_id].next_sibling.?;
-    try std.testing.expectEqual(@as(?f32, 200), ct.styles[div_id].width);
-    try std.testing.expectEqual(@as(?f32, 100), ct.styles[div_id].height);
+    try std.testing.expectEqual(box.Length{ .px = 200 }, ct.styles[div_id].width);
+    try std.testing.expectEqual(box.Length{ .px = 100 }, ct.styles[div_id].height);
+}
+
+test "cascade: preserve fit-content length-percentage limit" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='width:fit-content(calc(50% - 10px))'>box</div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    switch (ct.styles[div_id].width) {
+        .fitContent => |limit| try std.testing.expectApproxEqAbs(@as(f32, 140), limit.?.resolve(300).?, 0.001),
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "cascade: border-style per side" {
@@ -1878,6 +886,34 @@ test "cascade: border-style per side" {
     try std.testing.expectEqual(box.BorderStyle.none, ct.styles[div_id].border_left_style);
 }
 
+test "cascade: uniform border radius" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<style>.card { border-radius: 14px; }</style><div class='card'>rounded</div>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const div_id = ct.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(@as(f32, 14), ct.styles[div_id].border_radius);
+}
+
+test "cascade: elliptical border radius preserves per-corner percentages" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<style>.card { border-radius: 10% 20px 30% / 4px 8% 12px; }</style><div class='card'>rounded</div>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const div_id = ct.document.nodes.items[style_id].next_sibling.?;
+    const radii = ct.styles[div_id].border_radii;
+
+    try std.testing.expectEqual(box.Length{ .percent = 0.1 }, radii.top_left.x);
+    try std.testing.expectEqual(box.Length{ .px = 4 }, radii.top_left.y);
+    try std.testing.expectEqual(box.Length{ .px = 20 }, radii.top_right.x);
+    try std.testing.expectEqual(box.Length{ .percent = 0.08 }, radii.top_right.y);
+    try std.testing.expectEqual(box.Length{ .percent = 0.3 }, radii.bottom_right.x);
+    try std.testing.expectEqual(box.Length{ .px = 12 }, radii.bottom_right.y);
+    try std.testing.expectEqual(box.Length{ .px = 20 }, radii.bottom_left.x);
+    try std.testing.expectEqual(box.Length{ .percent = 0.08 }, radii.bottom_left.y);
+    try std.testing.expectEqual(@as(f32, 0), ct.styles[div_id].border_radius);
+}
+
 test "cascade: text-align and line-height" {
     const allocator = std.testing.allocator;
     var ct = try cascadeTestHelper(allocator, "<style>p { text-align: center; line-height: 1.5; }</style><p>centered</p>");
@@ -1885,17 +921,428 @@ test "cascade: text-align and line-height" {
     const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
     const p_id = ct.document.nodes.items[style_id].next_sibling.?;
     try std.testing.expectEqual(box.TextAlign.center, ct.styles[p_id].text_align);
-    try std.testing.expectEqual(@as(f32, 1.5), ct.styles[p_id].line_height);
+    try std.testing.expectEqual(@as(f32, 24), ct.styles[p_id].line_height);
+}
+
+test "cascade: direction and logical text alignment inherit" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<style>p { direction: rtl; text-align: start; } span { direction: inherit; text-align: inherit; }</style><p><span>שלום</span></p>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const p_id = ct.document.nodes.items[style_id].next_sibling.?;
+    const span_id = ct.document.nodes.items[p_id].first_child.?;
+    try std.testing.expectEqual(box.Direction.rtl, ct.styles[span_id].direction);
+    try std.testing.expectEqual(box.TextAlign.start, ct.styles[span_id].text_align);
+}
+
+test "cascade: logical box properties use final direction and shared physical priority" {
+    const allocator = std.testing.allocator;
+    const source =
+        "<style>" ++
+        "#rtl{margin-inline-start:11px;padding-inline-end:7px;border-inline-start:3px solid red;inline-size:120px;block-size:40px;direction:rtl}" ++
+        "#physical-last{direction:rtl;margin-inline-start:10px;margin-right:20px}" ++
+        "#logical-last{direction:rtl;margin-right:20px;margin-inline-start:10px}" ++
+        "#axes{margin-block:4px 8px;padding-inline:3px 9px;border-block:2px dashed blue;min-inline-size:50px;max-block-size:60px}" ++
+        "</style>" ++
+        "<div id='rtl'></div><div id='physical-last'></div><div id='logical-last'></div><div id='axes'></div>";
+    var ct = try cascadeTestHelper(allocator, source);
+    defer ct.deinit(allocator);
+
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const rtl_id = ct.document.nodes.items[style_id].next_sibling.?;
+    const physical_last_id = ct.document.nodes.items[rtl_id].next_sibling.?;
+    const logical_last_id = ct.document.nodes.items[physical_last_id].next_sibling.?;
+    const axes_id = ct.document.nodes.items[logical_last_id].next_sibling.?;
+
+    const rtl = ct.styles[rtl_id];
+    try std.testing.expectEqual(box.Direction.rtl, rtl.direction);
+    try std.testing.expectEqual(@as(f32, 11), rtl.margin.right);
+    try std.testing.expectEqual(@as(f32, 7), rtl.padding.left);
+    try std.testing.expectEqual(@as(f32, 3), rtl.border.right);
+    try std.testing.expectEqual(box.BorderStyle.solid, rtl.border_right_style);
+    try std.testing.expectEqualStrings("red", rtl.border_right_color);
+    try std.testing.expectEqual(box.Length{ .px = 120 }, rtl.width);
+    try std.testing.expectEqual(box.Length{ .px = 40 }, rtl.height);
+
+    try std.testing.expectEqual(@as(f32, 20), ct.styles[physical_last_id].margin.right);
+    try std.testing.expectEqual(@as(f32, 10), ct.styles[logical_last_id].margin.right);
+
+    const axes = ct.styles[axes_id];
+    try std.testing.expectEqual(@as(f32, 4), axes.margin.top);
+    try std.testing.expectEqual(@as(f32, 8), axes.margin.bottom);
+    try std.testing.expectEqual(@as(f32, 3), axes.padding.left);
+    try std.testing.expectEqual(@as(f32, 9), axes.padding.right);
+    try std.testing.expectEqual(@as(f32, 2), axes.border.top);
+    try std.testing.expectEqual(@as(f32, 2), axes.border.bottom);
+    try std.testing.expectEqual(box.BorderStyle.dashed, axes.border_top_style);
+    try std.testing.expectEqualStrings("blue", axes.border_bottom_color);
+    try std.testing.expectEqual(box.Length{ .px = 50 }, axes.min_width);
+    try std.testing.expectEqual(box.Length{ .px = 60 }, axes.max_height);
+}
+
+test "cascade: logical inherit keeps the parent's flow-relative side" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(
+        allocator,
+        "<div style='direction:ltr;margin-inline-start:13px;border-inline-start-color:red'>" ++
+            "<span style='display:block;direction:rtl;margin-inline-start:inherit;border-inline-start-color:inherit'></span>" ++
+            "</div>",
+    );
+    defer ct.deinit(allocator);
+
+    const parent_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const child_id = ct.document.nodes.items[parent_id].first_child.?;
+    try std.testing.expectEqual(@as(f32, 13), ct.styles[parent_id].margin.left);
+    try std.testing.expectEqual(@as(f32, 13), ct.styles[child_id].margin.right);
+    try std.testing.expectEqualStrings("red", ct.styles[parent_id].border_left_color);
+    try std.testing.expectEqualStrings("red", ct.styles[child_id].border_right_color);
+}
+
+test "cascade: CSS Text inline properties inherit as computed values" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<style>div { word-spacing: 3px; text-indent: 10%; text-transform: uppercase; word-break: break-all; overflow-wrap: anywhere; }</style>" ++
+        "<div><span>inline</span></div>");
+    defer ct.deinit(allocator);
+    const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const div_id = ct.document.nodes.items[style_id].next_sibling.?;
+    const span_id = ct.document.nodes.items[div_id].first_child.?;
+
+    try std.testing.expectEqual(@as(f32, 3), ct.styles[div_id].word_spacing);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), ct.styles[div_id].text_indent.resolve(200).?, 0.01);
+    try std.testing.expectEqual(box.TextTransform.uppercase, ct.styles[span_id].text_transform);
+    try std.testing.expectEqual(box.WordBreak.breakAll, ct.styles[span_id].word_break);
+    try std.testing.expectEqual(box.OverflowWrap.anywhere, ct.styles[span_id].overflow_wrap);
+    try std.testing.expectEqual(@as(f32, 3), ct.styles[span_id].word_spacing);
+}
+
+test "cascade: vertical-align keeps keyword and percentage computed values" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<span style='vertical-align:super'>super</span><span style='vertical-align:25%'>offset</span>");
+    defer ct.deinit(allocator);
+    const first_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const second_id = ct.document.nodes.items[first_id].next_sibling.?;
+    try std.testing.expect(ct.styles[first_id].vertical_align == .super);
+    switch (ct.styles[second_id].vertical_align) {
+        .offset => |offset| try std.testing.expectApproxEqAbs(@as(f32, 4.5), offset.resolve(18).?, 0.01),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "cascade: caption-side inherits and accepts bottom" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<table style='caption-side:bottom'><caption>summary</caption></table>");
+    defer ct.deinit(allocator);
+    const table_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const caption_id = ct.document.nodes.items[table_id].first_child.?;
+    try std.testing.expectEqual(box.CaptionSide.bottom, ct.styles[table_id].caption_side);
+    try std.testing.expectEqual(box.CaptionSide.bottom, ct.styles[caption_id].caption_side);
+}
+
+test "cascade: border-spacing parses absolute pairs and inherits" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='border-spacing:8px 4pt'><span>inherited</span><em style='border-spacing:initial'>initial</em></div>" ++
+        "<div style='border-spacing:-1px'>invalid</div>");
+    defer ct.deinit(allocator);
+    const parent_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const inherited_id = ct.document.nodes.items[parent_id].first_child.?;
+    const initial_id = ct.document.nodes.items[inherited_id].next_sibling.?;
+    const invalid_id = ct.document.nodes.items[parent_id].next_sibling.?;
+
+    try std.testing.expectApproxEqAbs(@as(f32, 8), ct.styles[parent_id].border_spacing.horizontal, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.3333), ct.styles[parent_id].border_spacing.vertical, 0.01);
+    try std.testing.expectEqual(ct.styles[parent_id].border_spacing, ct.styles[inherited_id].border_spacing);
+    try std.testing.expectEqual(box.BorderSpacing{}, ct.styles[initial_id].border_spacing);
+    try std.testing.expectEqual(box.BorderSpacing{}, ct.styles[invalid_id].border_spacing);
+}
+
+test "cascade: clear remains local to the clearing block" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='clear:both'><p>child</p></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const paragraph_id = ct.document.nodes.items[div_id].first_child.?;
+    try std.testing.expectEqual(box.Clear.both, ct.styles[div_id].clear_direction);
+    try std.testing.expectEqual(box.Clear.none, ct.styles[paragraph_id].clear_direction);
+}
+
+test "cascade: box-decoration-break remains local to the fragmented box" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='box-decoration-break:clone'><p>child</p></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const paragraph_id = ct.document.nodes.items[div_id].first_child.?;
+    try std.testing.expectEqual(box.BoxDecorationBreak.clone, ct.styles[div_id].box_decoration_break);
+    try std.testing.expectEqual(box.BoxDecorationBreak.slice, ct.styles[paragraph_id].box_decoration_break);
+}
+
+test "cascade: list marker styles inherit and display list-item is preserved" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<ol style='list-style:inside upper-roman'><li>first</li></ol><div style='display:list-item;list-style-type:square'>extra</div>");
+    defer ct.deinit(allocator);
+    const list_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const item_id = ct.document.nodes.items[list_id].first_child.?;
+    const extra_id = ct.document.nodes.items[list_id].next_sibling.?;
+    try std.testing.expectEqual(box.ListStyleType.upperRoman, ct.styles[item_id].list_style_type);
+    try std.testing.expectEqual(box.ListStylePosition.inside, ct.styles[item_id].list_style_position);
+    try std.testing.expectEqual(box.Display.listItem, ct.styles[extra_id].display);
+    try std.testing.expectEqual(box.ListStyleType.square, ct.styles[extra_id].list_style_type);
+}
+
+test "cascade: flex shorthands produce typed non-inherited item and container values" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='display:flex;flex-flow:row-reverse wrap;gap:8px 12px;justify-content:space-between;align-items:center'>" ++
+        "<span style='flex:2 3 40px;order:-1;align-self:flex-end;margin-left:auto'>item</span></div>");
+    defer ct.deinit(allocator);
+    const container_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const item_id = ct.document.nodes.items[container_id].first_child.?;
+    try std.testing.expectEqual(box.Display.flex, ct.styles[container_id].display);
+    try std.testing.expectEqual(box.FlexDirection.rowReverse, ct.styles[container_id].flex_direction);
+    try std.testing.expectEqual(box.FlexWrap.wrap, ct.styles[container_id].flex_wrap);
+    try std.testing.expectApproxEqAbs(@as(f32, 8), ct.styles[container_id].row_gap.resolve(200).?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 12), ct.styles[container_id].column_gap.resolve(200).?, 0.01);
+    try std.testing.expectEqual(box.JustifyContent.spaceBetween, ct.styles[container_id].justify_content);
+    try std.testing.expectEqual(box.AlignItems.center, ct.styles[container_id].align_items);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), ct.styles[item_id].flex_grow, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 3), ct.styles[item_id].flex_shrink, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), ct.styles[item_id].flex_basis.resolve(200).?, 0.01);
+    try std.testing.expectEqual(@as(i32, -1), ct.styles[item_id].order);
+    try std.testing.expectEqual(box.AlignSelf.flexEnd, ct.styles[item_id].align_self);
+    try std.testing.expect(ct.styles[item_id].margin_auto.left);
+    try std.testing.expectEqual(@as(f32, 0), ct.styles[item_id].margin.left);
+}
+
+test "cascade: Grid tracks placement areas and alignment remain canonical" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='display:grid;grid-template-columns:[start] repeat(2,minmax(0,1fr)) [end];grid-template-rows:auto 40px;grid-template-areas:&quot;hero hero&quot; &quot;side main&quot;;grid-auto-flow:row dense;grid-auto-columns:80px;justify-items:center'>" ++
+        "<span style='grid-area:main;grid-column:2 / span 1;justify-self:end'>item</span></div>");
+    defer ct.deinit(allocator);
+    const container_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const item_id = ct.document.nodes.items[container_id].first_child.?;
+    const container = ct.styles[container_id];
+    const item = ct.styles[item_id];
+    try std.testing.expectEqual(box.Display.grid, container.display);
+    try std.testing.expectEqualStrings("[start] repeat(2,minmax(0,1fr)) [end]", container.grid_template_columns);
+    try std.testing.expectEqualStrings("auto 40px", container.grid_template_rows);
+    try std.testing.expectEqualStrings("\"hero hero\" \"side main\"", container.grid_template_areas);
+    try std.testing.expectEqual(box.GridAutoFlow.rowDense, container.grid_auto_flow);
+    try std.testing.expectEqual(box.AlignItems.center, container.justify_items);
+    try std.testing.expectEqual(@as(i32, 2), item.grid_column_start.line);
+    try std.testing.expectEqual(@as(u16, 1), item.grid_column_end.span);
+    try std.testing.expectEqual(box.AlignSelf.flexEnd, item.justify_self);
+}
+
+test "cascade: positioned layout resolves physical logical and group properties" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='direction:rtl;position:sticky;inset-block:10px 20px;inset-inline:30px 40px;z-index:-2;opacity:75%'>positioned</div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const style = ct.styles[div_id];
+    try std.testing.expectEqual(box.Position.sticky, style.position);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), style.insets.top.resolve(100).?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), style.insets.bottom.resolve(100).?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), style.insets.right.resolve(100).?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), style.insets.left.resolve(100).?, 0.01);
+    try std.testing.expectEqual(@as(?i32, -2), style.z_index);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), style.opacity, 0.001);
+}
+
+test "cascade: 2D transforms retain typed operations percentages and origin" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='transform:translate(10%,20px) rotate(90deg) scale(2,.5) skewX(10deg);transform-origin:left 25%'><span>child</span></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const span_id = ct.document.nodes.items[div_id].first_child.?;
+    const style = ct.styles[div_id];
+
+    try std.testing.expectEqual(@as(usize, 4), style.transform.len);
+    try std.testing.expectEqual(box.Length{ .percent = 0.1 }, style.transform[0].translate.x);
+    try std.testing.expectEqual(box.Length{ .px = 20 }, style.transform[0].translate.y);
+    try std.testing.expectApproxEqAbs(@as(f32, std.math.pi / 2.0), style.transform[1].rotate, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), style.transform[2].scale.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), style.transform[2].scale.y, 0.001);
+    try std.testing.expectEqual(box.Length{ .percent = 0 }, style.transform_origin.x);
+    try std.testing.expectEqual(box.Length{ .percent = 0.25 }, style.transform_origin.y);
+    try std.testing.expectEqual(@as(usize, 0), ct.styles[span_id].transform.len);
+}
+
+test "cascade: background shorthand expands native image layers and paint controls" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='background:linear-gradient(90deg, red, blue) 25% 75% / 40px 50% no-repeat, #123456 radial-gradient(circle, white, black) center / cover repeat-x;box-shadow:2px 3px 4px #000;text-shadow:1px 1px red'>layers</div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const style = ct.styles[div_id];
+    try std.testing.expectEqualStrings("#123456", style.background.?);
+    try std.testing.expectEqualStrings("linear-gradient(90deg, red, blue), radial-gradient(circle, white, black)", style.background_image);
+    try std.testing.expectEqualStrings("25% 75%, center", style.background_position);
+    try std.testing.expectEqualStrings("40px 50%, cover", style.background_size);
+    try std.testing.expectEqualStrings("no-repeat, repeat-x", style.background_repeat);
+    try std.testing.expectEqualStrings("2px 3px 4px #000", style.box_shadow);
+    try std.testing.expectEqualStrings("1px 1px red", style.text_shadow);
+}
+
+test "cascade: text-decoration shorthand keeps line style color and thickness" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<p style='text-decoration:underline overline wavy rebeccapurple 2px'>decorated</p>");
+    defer ct.deinit(allocator);
+    const p_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const style = ct.styles[p_id];
+    try std.testing.expectEqual(box.TextDecoration.underlineOverline, style.text_decoration);
+    try std.testing.expectEqual(box.TextDecorationStyle.wavy, style.text_decoration_style);
+    try std.testing.expectEqualStrings("rebeccapurple", style.text_decoration_color.?);
+    switch (style.text_decoration_thickness) {
+        .length => |length| try std.testing.expectApproxEqAbs(@as(f32, 2), length.resolve(style.font_size).?, 0.01),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "cascade: overflow and text-overflow remain container properties" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='overflow:hidden;text-overflow:ellipsis'><span>clipped</span></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const span_id = ct.document.nodes.items[div_id].first_child.?;
+    try std.testing.expectEqual(box.Overflow.hidden, ct.styles[div_id].overflow);
+    try std.testing.expectEqual(box.TextOverflow.ellipsis, ct.styles[div_id].text_overflow);
+    try std.testing.expectEqual(box.Overflow.visible, ct.styles[span_id].overflow);
+    try std.testing.expectEqual(box.TextOverflow.clip, ct.styles[span_id].text_overflow);
+}
+
+test "cascade: replaced sizing and fit properties remain local" {
+    const allocator = std.testing.allocator;
+    var ct = try cascadeTestHelper(allocator, "<div style='aspect-ratio:16/9;object-fit:cover;object-position:right 25%'><img></div>");
+    defer ct.deinit(allocator);
+    const div_id = ct.document.nodes.items[ct.document.root].first_child.?;
+    const image_id = ct.document.nodes.items[div_id].first_child.?;
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0 / 9.0), ct.styles[div_id].aspect_ratio.ratio.?, 0.001);
+    try std.testing.expectEqual(box.ObjectFit.cover, ct.styles[div_id].object_fit);
+    try std.testing.expectEqual(box.ObjectFit.fill, ct.styles[image_id].object_fit);
+    try std.testing.expect(ct.styles[image_id].aspect_ratio.ratio == null);
 }
 
 test "cascade: page-break and orphans/widows" {
     const allocator = std.testing.allocator;
-    var ct = try cascadeTestHelper(allocator, "<style>div { page-break-before: always; page-break-after: avoid; orphans: 3; widows: 4; }</style><div>page</div>");
+    var ct = try cascadeTestHelper(allocator, "<style>div { break-before: page; page-break-after: avoid; break-inside: avoid-page; orphans: 3; widows: 4; }</style><div>page</div>");
     defer ct.deinit(allocator);
     const style_id = ct.document.nodes.items[ct.document.root].first_child.?;
     const div_id = ct.document.nodes.items[style_id].next_sibling.?;
-    try std.testing.expectEqual(box.PageBreak.always, ct.styles[div_id].page_break_before);
+    try std.testing.expectEqual(box.PageBreak.page, ct.styles[div_id].page_break_before);
     try std.testing.expectEqual(box.PageBreak.avoid, ct.styles[div_id].page_break_after);
+    try std.testing.expectEqual(box.PageBreak.avoid, ct.styles[div_id].page_break_inside);
     try std.testing.expectEqual(@as(u32, 3), ct.styles[div_id].orphans);
     try std.testing.expectEqual(@as(u32, 4), ct.styles[div_id].widows);
+}
+
+test "cascade: inline style overrides stylesheet declarations" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>p { color: red; width: 10px; }</style><p style=\"color: #123456; width: 240px\">inline</p>",
+    );
+    defer fixture.deinit(allocator);
+
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const paragraph = fixture.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqualStrings("#123456", fixture.styles[paragraph].color);
+    try std.testing.expectEqual(box.Length{ .px = 240 }, fixture.styles[paragraph].width);
+}
+
+test "cascade: important author rule overrides normal inline style" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>#target { color: blue; } .notice { color: red !important; }</style><p id=\"target\" class=\"notice\" style=\"color: green\">important</p>",
+    );
+    defer fixture.deinit(allocator);
+
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const paragraph = fixture.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqualStrings("red", fixture.styles[paragraph].color);
+}
+
+test "cascade: important inline style overrides important author rule" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>#target { color: red !important; }</style><p id=\"target\" style=\"color: green !important\">important</p>",
+    );
+    defer fixture.deinit(allocator);
+
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const paragraph = fixture.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqualStrings("green", fixture.styles[paragraph].color);
+}
+
+test "cascade: retains every match beyond the old fixed buffer limit" {
+    const allocator = std.testing.allocator;
+    var source = std.Io.Writer.Allocating.init(allocator);
+    defer source.deinit();
+    try source.writer.writeAll("<style>");
+    for (0..80) |index| try source.writer.print(".target {{ margin-left: {d}px; }}", .{index});
+    try source.writer.writeAll("</style><div class=\"target\">all rules match</div>");
+
+    var fixture = try cascadeTestHelper(allocator, source.written());
+    defer fixture.deinit(allocator);
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const div = fixture.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectEqual(@as(f32, 79), fixture.styles[div].margin.left);
+}
+
+test "cascade: custom properties inherit into calc dimensions" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>body { --gutter: 20px; } .card { width: calc(50% - var(--gutter)); }</style><body><div class='card'>card</div></body>",
+    );
+    defer fixture.deinit(allocator);
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const body = fixture.document.nodes.items[style_id].next_sibling.?;
+    const card = fixture.document.nodes.items[body].first_child.?;
+    try std.testing.expectApproxEqAbs(@as(f32, 180), fixture.styles[card].width.resolve(400).?, 0.001);
+}
+
+test "cascade: cached inline declarations resolve against each node scope" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<div style='--tone:red'><span style='color:var(--tone)'>first</span></div>" ++
+            "<div style='--tone:blue'><span style='color:var(--tone)'>second</span></div>",
+    );
+    defer fixture.deinit(allocator);
+
+    const first_parent = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const second_parent = fixture.document.nodes.items[first_parent].next_sibling.?;
+    const first = fixture.document.nodes.items[first_parent].first_child.?;
+    const second = fixture.document.nodes.items[second_parent].first_child.?;
+    try std.testing.expectEqualStrings("red", fixture.styles[first].color);
+    try std.testing.expectEqualStrings("blue", fixture.styles[second].color);
+}
+
+test "cascade: var fallback survives a custom-property cycle" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>.card { --a: var(--b); --b: var(--a); width: var(--a, clamp(120px, 50%, 300px)); }</style><div class='card'>card</div>",
+    );
+    defer fixture.deinit(allocator);
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const card = fixture.document.nodes.items[style_id].next_sibling.?;
+    try std.testing.expectApproxEqAbs(@as(f32, 250), fixture.styles[card].width.resolve(500).?, 0.001);
+}
+
+test "cascade: CSS-wide keywords and currentColor resolve at computed value time" {
+    const allocator = std.testing.allocator;
+    var fixture = try cascadeTestHelper(
+        allocator,
+        "<style>body { color: #123456; } h1 { color: inherit; display: initial; } .reset { color: unset; background-color: currentColor; width: 240px; max-width: initial; }</style><body><h1>Title</h1><div class='reset'>card</div></body>",
+    );
+    defer fixture.deinit(allocator);
+    const style_id = fixture.document.nodes.items[fixture.document.root].first_child.?;
+    const body = fixture.document.nodes.items[style_id].next_sibling.?;
+    const heading = fixture.document.nodes.items[body].first_child.?;
+    const card = fixture.document.nodes.items[heading].next_sibling.?;
+    try std.testing.expectEqualStrings("#123456", fixture.styles[heading].color);
+    try std.testing.expectEqual(box.Display.inlineBox, fixture.styles[heading].display);
+    try std.testing.expectEqualStrings("#123456", fixture.styles[card].color);
+    try std.testing.expectEqualStrings("#123456", fixture.styles[card].background.?);
+    try std.testing.expectEqual(box.Length.auto, fixture.styles[card].max_width);
 }

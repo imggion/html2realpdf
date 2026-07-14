@@ -7,6 +7,7 @@ zig-out/
 
 # Legacy cache directory (pre-0.16.0)
 zig-cache/
+zig-pkg/
 
 # Package manager lock file
 build.zig.lock
@@ -18,3 +19,19 @@ build.zig.lock
 # Personal docs
 TODO.md
 agents-files/
+
+# JavaScript package build artifacts
+bindings/js/node_modules/
+bindings/js/dist/
+bindings/js/.browser-build/
+bindings/js/*.tgz
+tests/react/node_modules/
+tests/react/dist/
+tests/web/node_modules/
+
+# Local PDF render verification artifacts
+tmp/
+output/
+
+# garbage
+.DS_Store

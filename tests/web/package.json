@@ -1,0 +1,14 @@
+{
+  "name": "html2realpdf-browser-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:update": "playwright test --update-snapshots"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "html2pdf.js": "0.14.0"
+  }
+}

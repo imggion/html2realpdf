@@ -1,0 +1,10 @@
+/* Compile libunibreak's UAX #14 implementation as one deterministic object. */
+#include "unibreakbase.c"
+#include "unibreakdef.c"
+#include "linebreakdata.c"
+#include "linebreakdef.c"
+#include "eastasianwidthdef.c"
+#include "emojidef.c"
+#include "linebreak.c"
+#include "graphemebreak.c"
+#include "wordbreak.c"

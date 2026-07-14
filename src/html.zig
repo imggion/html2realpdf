@@ -27,7 +27,7 @@ pub const html_hard =
     \\     <title>Test Tokenizer</title>
     \\ </head>
     \\ <body>
-    \\     <!-- Questo è un commento -->
+    \\     <!-- This is a comment -->
     \\     <h1 class="title" id="main-title">Titolo Principale</h1>
     \\
     \\     <div class="container" data-info="esempio">

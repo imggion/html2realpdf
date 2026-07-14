@@ -1,0 +1,96 @@
+//! Production-mode bidi/layout integration gate linked with SheenBidi and HarfBuzz.
+
+const std = @import("std");
+const html = @import("html.zig");
+const dom = @import("dom.zig");
+const css = @import("css.zig");
+const box = @import("box.zig");
+const layout = @import("layout.zig");
+
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.arena.allocator();
+    const source = "<p style=\"direction:rtl;text-align:start\">שלום hello עולם</p>";
+
+    const tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    const result = try layout.layout(allocator, &tree, &document, .{
+        .content_width = 400,
+        .shaping_mode = .harfbuzz,
+    });
+
+    var visual_texts: [5][]const u8 = undefined;
+    var count: usize = 0;
+    var previous_x: f32 = 0;
+    for (result.fragments.items) |fragment| {
+        const text = fragment.text orelse continue;
+        if (count >= visual_texts.len) return error.BidiLayoutMismatch;
+        if (count > 0 and fragment.rect.x < previous_x) return error.BidiLayoutMismatch;
+        visual_texts[count] = text;
+        previous_x = fragment.rect.x;
+        count += 1;
+    }
+
+    if (count != visual_texts.len or
+        !std.mem.eql(u8, visual_texts[0], "עולם") or
+        !std.mem.eql(u8, visual_texts[1], " ") or
+        !std.mem.eql(u8, visual_texts[2], "hello") or
+        !std.mem.eql(u8, visual_texts[3], " ") or
+        !std.mem.eql(u8, visual_texts[4], "שלום")) return error.BidiLayoutMismatch;
+
+    const break_source = "<p>alpha-beta-gamma</p>";
+    const break_tokens = try html.Tokenizer.tokenizeHtml(allocator, break_source);
+    var break_document = try dom.Parser.parse(allocator, break_source, break_tokens.items);
+    const break_styles = try css.styleArrayFromDocument(allocator, &break_document);
+    var break_tree = try box.Builder.build(allocator, &break_document, break_styles, break_document.root);
+    const break_result = try layout.layout(allocator, &break_tree, &break_document, .{
+        .content_width = 55,
+        .shaping_mode = .harfbuzz,
+    });
+    var first_line: ?usize = null;
+    var last_line: ?usize = null;
+    for (break_result.fragments.items) |fragment| {
+        if (fragment.kind != .text) continue;
+        first_line = first_line orelse fragment.line_id;
+        last_line = fragment.line_id;
+    }
+    if (first_line == null or last_line == null or first_line.? == last_line.?) return error.UnicodeLineBreakMismatch;
+
+    const grapheme_source = "<p style=\"word-break:break-all\">a\u{301}bc</p>";
+    const grapheme_tokens = try html.Tokenizer.tokenizeHtml(allocator, grapheme_source);
+    var grapheme_document = try dom.Parser.parse(allocator, grapheme_source, grapheme_tokens.items);
+    const grapheme_styles = try css.styleArrayFromDocument(allocator, &grapheme_document);
+    var grapheme_tree = try box.Builder.build(allocator, &grapheme_document, grapheme_styles, grapheme_document.root);
+    const grapheme_result = try layout.layout(allocator, &grapheme_tree, &grapheme_document, .{
+        .content_width = 5,
+        .shaping_mode = .harfbuzz,
+    });
+    var first_grapheme: ?[]const u8 = null;
+    var grapheme_lines: usize = 0;
+    var previous_line: ?usize = null;
+    for (grapheme_result.fragments.items) |fragment| {
+        if (fragment.kind != .text) continue;
+        const fragment_text = fragment.text orelse continue;
+        first_grapheme = first_grapheme orelse fragment_text;
+        if (previous_line == null or previous_line.? != fragment.line_id.?) grapheme_lines += 1;
+        previous_line = fragment.line_id;
+    }
+    if (first_grapheme == null or !std.mem.eql(u8, first_grapheme.?, "a\u{301}") or grapheme_lines < 2) return error.GraphemeWrapMismatch;
+
+    const case_source = "<p lang='fr' style='text-transform:capitalize'>élan—vital</p>" ++
+        "<p lang='tr' style='text-transform:uppercase'><span>iyi</span></p>";
+    const case_tokens = try html.Tokenizer.tokenizeHtml(allocator, case_source);
+    var case_document = try dom.Parser.parse(allocator, case_source, case_tokens.items);
+    const case_styles = try css.styleArrayFromDocument(allocator, &case_document);
+    var case_tree = try box.Builder.build(allocator, &case_document, case_styles, case_document.root);
+    const case_result = try layout.layout(allocator, &case_tree, &case_document, .{
+        .content_width = 400,
+        .shaping_mode = .harfbuzz,
+    });
+    var case_text = try std.ArrayList(u8).initCapacity(allocator, 32);
+    for (case_result.fragments.items) |fragment| {
+        if (fragment.text) |fragment_text| try case_text.appendSlice(allocator, fragment_text);
+    }
+    if (!std.mem.eql(u8, case_text.items, "Élan—VitalİYİ")) return error.UnicodeCaseMappingMismatch;
+}

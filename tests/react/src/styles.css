@@ -1,0 +1,95 @@
+:root {
+  color: #172033;
+  background: #f3f6fb;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input, select, textarea { font: inherit; }
+button { min-height: 44px; border: 1px solid #bcc7da; border-radius: 8px; background: #fff; color: #172033; padding: 8px 14px; cursor: pointer; touch-action: manipulation; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.28); outline-offset: 2px; }
+button:disabled { cursor: wait; opacity: 0.55; }
+button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
+
+.app-shell { width: min(1540px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 80px; }
+.app-header { max-width: 780px; margin-bottom: 24px; }
+.app-header h1 { margin: 5px 0 8px; font-size: clamp(30px, 4vw, 48px); letter-spacing: -0.035em; }
+.app-header p { color: #526079; }
+.app-kicker { margin: 0; color: #2563eb !important; font-size: 12px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+.controls { display: grid; grid-template-columns: 1fr 220px; gap: 16px; margin-bottom: 28px; border: 1px solid #dae1ed; border-radius: 16px; background: #fff; padding: 20px; box-shadow: 0 14px 36px rgba(35, 48, 73, 0.08); }
+.controls label { display: grid; gap: 6px; color: #34425b; font-size: 13px; font-weight: 700; }
+.controls input:not([type="checkbox"]), .controls select, .controls textarea { width: 100%; border: 1px solid #c9d2e2; border-radius: 7px; background: #fff; color: #172033; padding: 10px 12px; }
+.wide-control { grid-column: 1 / -1; }
+.check-control { display: flex !important; align-items: center; grid-column: 1 / -1; }
+.check-control input { width: 18px; height: 18px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; grid-column: 1 / -1; }
+.status { grid-column: 1 / -1; min-height: 20px; margin: 0; color: #526079; font-size: 13px; font-variant-numeric: tabular-nums; }
+.benchmark-panel { margin-bottom: 28px; border: 1px solid #dae1ed; border-radius: 16px; background: #fff; padding: 20px; box-shadow: 0 14px 36px rgba(35, 48, 73, 0.08); }
+.benchmark-panel h2 { margin: 5px 0 0; font-size: 20px; }
+.benchmark-note { max-width: 840px; margin: 8px 0 14px; color: #526079; font-size: 13px; line-height: 1.5; }
+.benchmark-table-scroll { margin-top: 12px; overflow-x: auto; }
+.benchmark-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
+.benchmark-table th, .benchmark-table td { border-bottom: 1px solid #dae1ed; padding: 11px 10px; text-align: left; vertical-align: middle; }
+.benchmark-table th { color: #475569; font-size: 12px; }
+.benchmark-table td[data-metric] { font-variant-numeric: tabular-nums; }
+.benchmark-table td:last-child { width: 1%; }
+.benchmark-error { color: #b42318; }
+.comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.comparison > div > h2 { margin: 0 0 10px; font-size: 16px; }
+.document-stage, .preview-stage { min-height: 420px; overflow: auto; border: 1px solid #dbe2ee; border-radius: 14px; background: #dfe5ef; padding: 20px; }
+.preview-stage > p { margin: 0; color: #6d7890; text-align: center; }
+
+/* Only this subtree is passed to html2realpdf. Keep it inside the supported
+   report layout profile while the surrounding QA application can use Grid. */
+.report-document { width: 680px; margin: 0 auto; background-color: #ffffff; color: #172033; padding: 32px; font-family: Arial, sans-serif; font-size: 13px; line-height: 1.45; }
+.report-header { margin: 0 0 22px; border-bottom: 2px solid #2563eb; padding-bottom: 18px; }
+.report-header h1 { margin: 5px 0 6px; color: #0f172a; font-size: 28px; line-height: 1.12; }
+.eyebrow { margin: 0; color: #2563eb; font-size: 10px; font-weight: 700; letter-spacing: 1.4px; }
+.report-subtitle { margin: 0; color: #64748b; }
+.kpi-table { width: 100%; margin: 0 0 22px; border-collapse: separate; border-spacing: 6px 0; table-layout: fixed; }
+.kpi-table td { width: 25%; border: 1px solid #dbeafe; background-color: #eff6ff; padding: 11px; }
+.kpi-table span, .kpi-table strong, .kpi-table small { display: block; }
+.kpi-label { color: #64748b; font-size: 9px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; }
+.kpi-table strong { margin: 4px 0 2px; color: #0f172a; font-size: 19px; line-height: 1.1; }
+.kpi-table small { font-size: 10px; font-weight: 700; }
+.positive { color: #16803c; }
+.negative { color: #b42318; }
+.report-section { margin: 0 0 22px; break-inside: avoid; }
+.report-section h2 { margin: 0 0 5px; color: #0f172a; font-size: 17px; }
+.report-section > p { margin: 0 0 10px; color: #526079; }
+.report-chart { display: block; width: 100%; height: 166px; border: 1px solid #dbeafe; }
+.data-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.data-table th { border: 1px solid #1d4ed8; background-color: #2563eb; color: #fff; padding: 8px; text-align: left; }
+.data-table td { border: 1px solid #d8e0ec; padding: 8px; }
+.data-table tbody tr:nth-child(even) td { background-color: #f8fafc; }
+.insight-section { border-left: 4px solid #2563eb; background-color: #eff6ff; padding: 14px 16px; }
+.insight-icon { display: inline-block; width: 38px; height: 38px; margin-right: 10px; }
+.insight-section h2 { display: inline; }
+.insight-section ul { margin: 8px 0; padding-left: 22px; }
+.insight-section li { margin: 3px 0; }
+.approval { color: #166534 !important; font-weight: 700; }
+.insight-section details { margin-top: 9px; color: #526079; }
+.report-footer { margin-top: 24px; border-top: 1px solid #d8e0ec; padding-top: 10px; color: #64748b; }
+.report-footer span { display: inline-block; width: 62%; }
+.report-footer a { color: #1d4ed8; }
+
+@media (hover: hover) and (pointer: fine) {
+  button:not(:disabled):hover { background: #edf3ff; }
+  button.primary:not(:disabled):hover { background: #1d4ed8; }
+}
+
+@media (max-width: 1050px) {
+  .comparison { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
+  .app-shell { width: min(100% - 20px, 1540px); padding-top: 24px; }
+  .controls { grid-template-columns: 1fr; }
+  .document-stage, .preview-stage { padding: 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; }
+}
