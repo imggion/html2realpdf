@@ -13,6 +13,7 @@ const typesOnly = process.argv.includes("--types-only");
 async function main() {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "html2realpdf-consumer-"));
   try {
+    const packageMetadata = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
     await verifyReadmeCopy();
     verifySkillCopies();
     verifySelfContainedMaps();
@@ -26,7 +27,7 @@ async function main() {
     ], packageRoot, true);
     const [artifact] = JSON.parse(pack.stdout);
     assert.equal(artifact.name, "@imggion/html2realpdf");
-    assert.equal(artifact.version, "0.1.0");
+    assert.equal(artifact.version, packageMetadata.version);
     verifyTarballFiles(artifact.files.map((file) => file.path));
 
     const consumerRoot = join(temporaryRoot, "consumer");

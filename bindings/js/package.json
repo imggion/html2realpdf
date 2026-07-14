@@ -1,6 +1,6 @@
 {
   "name": "@imggion/html2realpdf",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser-first HTML to real, selectable PDF rendering powered by Zig and WebAssembly",
   "type": "module",
   "main": "./dist/index.js",
