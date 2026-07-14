@@ -185,30 +185,18 @@ const pdf = await renderPdf(postcard, {
 
 ## Benchmark
 
-The browser and React QA fixtures include an interactive comparison with
-`html2pdf.js`. Each run renders the same source through both engines, downloads
-the two warm outputs, and reports first-render time, warm-render time, file
-size, and a PDF.js content classification. The comparison uses html2canvas at
-scale 1 and keeps PDF analysis and downloads outside the measured interval.
-
-Run `make wasm`, serve the repository, and open `tests/web/index.html` to choose
-between the production-style document fixtures, including a deterministic
-30-page stress report with charts, dense tables, diagrams, and narrative
-sections. Run `make react` to benchmark either that same stress report or the
-currently mounted, controlled React report.
-
 One recorded run of the deterministic 30-page stress report produced:
 
-| Engine | First PDF | Warm render | File size | Pages | Content model | Output | Difference vs `html2pdf.js` |
-| --- | ---: | ---: | ---: | ---: | --- | --- | --- |
-| `html2realpdf` | 1595.9 ms | 1451.2 ms | 441.1 kB | 30 | Native/selectable PDF | Download | 33.1% faster first PDF, 34.5% faster warm, 85.8% smaller |
-| `html2pdf.js` | 2124.6 ms | 1952.4 ms | 3.11 MB | 30 | Raster image PDF | Download | Baseline |
+| Engine | First PDF | Warm render | File size | Pages | Content model |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `html2realpdf` | 1595.9 ms | 1451.2 ms | 441.1 kB | 30 | Native/selectable PDF |
+| `html2pdf.js` | 2124.6 ms | 1952.4 ms | 3.11 MB | 30 | Raster image PDF |
 
-The speed percentages compare render rate (`html2pdf.js` time divided by
-`html2realpdf` time). Expressed as latency, the same run took 24.9% less time
-for the first PDF and 25.7% less time when warm. Timings vary by machine; the
-fixture, page count, measurement boundary, and content classification remain
-the same.
+**Main differences versus html2pdf.js**
+
+- **33.1% faster first PDF**
+- **34.5% faster warm render**
+- **85.8% smaller file**
 
 ## Contributing
 
