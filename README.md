@@ -197,6 +197,7 @@ One recorded run of the deterministic 30-page stress report produced:
 - **33.1% faster first PDF**
 - **34.5% faster warm render**
 - **85.8% smaller file**
+- and, of course, a REAL PDF 😏
 
 ## Contributing
 
