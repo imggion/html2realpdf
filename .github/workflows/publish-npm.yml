@@ -1,7 +1,13 @@
 name: Publish npm package
+run-name: Publish npm package for ${{ inputs.release_tag }}
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag whose prepared artifact should be published
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -16,10 +22,17 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out main with release tags
+      - name: Check out workflow tools from main
         uses: actions/checkout@v6
         with:
+          ref: main
+
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
           fetch-depth: 0
+          path: release
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -30,13 +43,8 @@ jobs:
 
       - name: Verify deploy context
         env:
-          DISPATCH_REF: ${{ github.ref }}
           REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
         run: |
-          if [[ "$DISPATCH_REF" != "refs/heads/main" ]]; then
-            echo "The publish workflow must be dispatched from main, got $DISPATCH_REF" >&2
-            exit 1
-          fi
           if [[ "$REPOSITORY_VISIBILITY" != "public" ]]; then
             echo "npm provenance requires the GitHub repository to be public" >&2
             exit 1
@@ -44,108 +52,66 @@ jobs:
 
       - name: Resolve release tag
         id: release
-        run: node .github/scripts/resolve-release-tag.mjs >> "$GITHUB_OUTPUT"
+        run: node release/.github/scripts/resolve-release-tag.mjs >> "$GITHUB_OUTPUT"
 
-      - name: Find successful main CI run
-        id: ci_run
+      - name: Verify requested release tag
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          RESOLVED_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if [[ "$REQUESTED_TAG" != "$RESOLVED_TAG" ]]; then
+            echo "Requested $REQUESTED_TAG, but package metadata resolves to $RESOLVED_TAG" >&2
+            exit 1
+          fi
+
+      - name: Find prepared npm artifact
+        id: artifact_run
         uses: actions/github-script@v8
         env:
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          ARTIFACT_NAME: npm-package-${{ steps.release.outputs.sha }}
         with:
           result-encoding: string
           script: |
-            const response = await github.rest.actions.listWorkflowRuns({
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: "ci.yml",
-              branch: "main",
-              event: "push",
-              head_sha: process.env.RELEASE_SHA,
+              workflow_id: "prepare-npm-artifact.yml",
+              event: "workflow_dispatch",
               status: "success",
               per_page: 100,
             });
-            const run = response.data.workflow_runs.find((candidate) =>
-              candidate.head_sha === process.env.RELEASE_SHA &&
-              candidate.head_branch === "main" &&
-              candidate.event === "push" &&
-              candidate.conclusion === "success"
-            );
-            if (!run) {
-              throw new Error(`No successful main CI run found for ${process.env.RELEASE_SHA}`);
+            for (const run of runs) {
+              const response = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                name: process.env.ARTIFACT_NAME,
+                per_page: 100,
+              });
+              const artifact = response.data.artifacts.find((candidate) =>
+                candidate.name === process.env.ARTIFACT_NAME && !candidate.expired
+              );
+              if (artifact) return String(run.id);
             }
-            return String(run.id);
+            throw new Error(
+              `No prepared artifact named ${process.env.ARTIFACT_NAME} was found. ` +
+              "Run the Prepare npm artifact workflow first."
+            );
 
-      - name: Download validated npm package
+      - name: Download prepared npm package
         uses: actions/download-artifact@v5
         with:
           name: npm-package-${{ steps.release.outputs.sha }}
           path: ${{ runner.temp }}/npm-package
           github-token: ${{ github.token }}
-          run-id: ${{ steps.ci_run.outputs.result }}
+          run-id: ${{ steps.artifact_run.outputs.result }}
 
-      - name: Validate package tarball
+      - name: Validate npm package
         id: package
         env:
           ARTIFACT_DIRECTORY: ${{ runner.temp }}/npm-package
           EXPECTED_VERSION: ${{ steps.release.outputs.version }}
-          PACKAGE_JSON_PATH: ${{ runner.temp }}/published-package.json
-        run: |
-          shopt -s nullglob
-          tarballs=("$ARTIFACT_DIRECTORY"/*.tgz)
-          if (( ${#tarballs[@]} != 1 )); then
-            echo "Expected exactly one npm tarball, found ${#tarballs[@]}" >&2
-            exit 1
-          fi
-
-          TARBALL="${tarballs[0]}"
-          CONTENTS="$(tar -tzf "$TARBALL")"
-          required=(
-            package/package.json
-            package/README.md
-            package/dist/LICENSE.md
-            package/dist/index.d.ts
-            package/dist/index.js
-            package/dist/libhtml2realpdf.wasm
-            package/dist/worker.js
-            package/dist/vendor/pdf.min.mjs
-            package/dist/vendor/pdf.worker.min.mjs
-            package/skills/html2realpdf/SKILL.md
-            package/skills/html2realpdf/agents/openai.yaml
-          )
-          for path in "${required[@]}"; do
-            if ! grep -Fxq "$path" <<< "$CONTENTS"; then
-              echo "Package tarball is missing $path" >&2
-              exit 1
-            fi
-          done
-          if grep -Eq '^package/(src|scripts)/' <<< "$CONTENTS"; then
-            echo "Package tarball contains private implementation sources" >&2
-            exit 1
-          fi
-          if grep -Fxq 'package/package-lock.json' <<< "$CONTENTS"; then
-            echo "Package tarball must not contain package-lock.json" >&2
-            exit 1
-          fi
-
-          tar -xOzf "$TARBALL" package/package.json > "$PACKAGE_JSON_PATH"
-          node --input-type=commonjs <<'NODE'
-          const { readFileSync } = require("node:fs");
-          const pkg = JSON.parse(readFileSync(process.env.PACKAGE_JSON_PATH, "utf8"));
-          if (pkg.name !== "@imggion/html2realpdf") {
-            throw new Error(`Unexpected package name: ${pkg.name}`);
-          }
-          if (pkg.version !== process.env.EXPECTED_VERSION) {
-            throw new Error(`Expected version ${process.env.EXPECTED_VERSION}, got ${pkg.version}`);
-          }
-          if (pkg.publishConfig?.access !== "public") {
-            throw new Error("Package publishConfig.access must be public");
-          }
-          if (pkg.publishConfig?.provenance !== true) {
-            throw new Error("Package publishConfig.provenance must be true");
-          }
-          NODE
-
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+        run: node .github/scripts/validate-npm-tarball.mjs
 
       - name: Publish package to npm
         env:
@@ -160,5 +126,5 @@ jobs:
           if [[ "$PACKAGE_VERSION" == *-* ]]; then
             npm publish "$TARBALL" --ignore-scripts --access public --provenance --tag next
           else
-            npm publish "$TARBALL" --ignore-scripts --access public --provenance
+            npm publish "$TARBALL" --ignore-scripts --access public --provenance --tag latest
           fi

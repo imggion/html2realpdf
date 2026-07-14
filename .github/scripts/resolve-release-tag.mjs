@@ -52,7 +52,7 @@ export function compareSemVer(left, right) {
   return 0;
 }
 
-export function resolveRelease({ tags, packageVersion, headSha, resolveTagSha }) {
+export function resolveRelease({ tags, packageVersion, sourceSha, resolveTagSha }) {
   const expectedTag = `v${packageVersion}`;
   const expectedVersion = parseReleaseTag(expectedTag);
   if (!expectedVersion) {
@@ -73,11 +73,11 @@ export function resolveRelease({ tags, packageVersion, headSha, resolveTagSha })
   }
 
   const tagSha = resolveTagSha(expectedTag);
-  if (tagSha !== headSha) {
-    throw new Error(`Release tag ${expectedTag} points to ${tagSha}, but main HEAD is ${headSha}`);
+  if (tagSha !== sourceSha) {
+    throw new Error(`Release tag ${expectedTag} points to ${tagSha}, but checked-out HEAD is ${sourceSha}`);
   }
 
-  return { tag: expectedTag, version: packageVersion, sha: headSha };
+  return { tag: expectedTag, version: packageVersion, sha: sourceSha };
 }
 
 function git(repositoryRoot, ...args) {
@@ -91,7 +91,7 @@ function main() {
   const release = resolveRelease({
     tags,
     packageVersion: packageJson.version,
-    headSha: git(repositoryRoot, "rev-parse", "HEAD"),
+    sourceSha: git(repositoryRoot, "rev-parse", "HEAD"),
     resolveTagSha: (tag) => git(repositoryRoot, "rev-list", "-n", "1", tag),
   });
 

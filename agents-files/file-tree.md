@@ -10,7 +10,7 @@
 ├── build.zig.zon
 ├── .github/
 │   ├── scripts/                 release-tag validation and tests
-│   └── workflows/               main CI and manual npm publication
+│   └── workflows/               test-only CI plus manual npm artifact/publish steps
 ├── assets/                       third-party source support directories
 ├── bindings/js/
 │   ├── package.json

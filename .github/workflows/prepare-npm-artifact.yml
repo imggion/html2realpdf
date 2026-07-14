@@ -1,0 +1,83 @@
+name: Prepare npm artifact
+run-name: Prepare npm artifact for ${{ inputs.release_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to package, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-artifact-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out workflow tools from main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          path: release
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Resolve release tag
+        id: release
+        run: node release/.github/scripts/resolve-release-tag.mjs >> "$GITHUB_OUTPUT"
+
+      - name: Verify requested release tag
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          RESOLVED_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if [[ "$REQUESTED_TAG" != "$RESOLVED_TAG" ]]; then
+            echo "Requested $REQUESTED_TAG, but package metadata resolves to $RESOLVED_TAG" >&2
+            exit 1
+          fi
+
+      - name: Install package dependencies
+        run: npm ci --prefix release/bindings/js
+
+      - name: Build and pack npm package
+        working-directory: release/bindings/js
+        env:
+          PACKAGE_OUTPUT: ${{ runner.temp }}/npm-package
+        run: |
+          mkdir -p "$PACKAGE_OUTPUT"
+          npm pack --pack-destination "$PACKAGE_OUTPUT"
+
+      - name: Validate npm package
+        env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/npm-package
+          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+        run: node .github/scripts/validate-npm-tarball.mjs
+
+      - name: Upload npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package-${{ steps.release.outputs.sha }}
+          path: ${{ runner.temp }}/npm-package/*.tgz
+          if-no-files-found: error
+          retention-days: 90
