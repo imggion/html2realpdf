@@ -2074,6 +2074,86 @@ test "repeat table headers when rows continue on another page" {
     try std.testing.expect(second_y >= 80);
 }
 
+test "Web table relayouts auto height rows after repeated headers" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:55px'></div>" ++
+        "<div style='overflow:hidden;border-radius:4px'>" ++
+        "<table style='width:100px;border-collapse:collapse'>" ++
+        "<thead><tr style='height:20px'><th>HEAD</th></tr></thead>" ++
+        "<tbody><tr style='height:20px'><td>FIRST</td></tr>" ++
+        "<tr style='background:#0000ff'><td><div style='height:20px'>AUTO</div></td></tr>" ++
+        "</tbody></table></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 100, .page_height = 100, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var header_count: usize = 0;
+    var first_count: usize = 0;
+    var auto_count: usize = 0;
+    var auto_text: ?geometry.Rect = null;
+    var auto_row: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.text) |text| {
+            if (std.mem.eql(u8, text, "HEAD")) header_count += 1;
+            if (std.mem.eql(u8, text, "FIRST")) first_count += 1;
+            if (std.mem.eql(u8, text, "AUTO")) {
+                auto_count += 1;
+                auto_text = fragment.rect;
+            }
+        }
+        if (fragment.background) |color| {
+            if (color.blue == 1 and color.red == 0 and tree.boxes.items[fragment.source_box].kind == .tableRow) {
+                auto_row = fragment.rect;
+            }
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), header_count);
+    try std.testing.expectEqual(@as(usize, 1), first_count);
+    try std.testing.expectEqual(@as(usize, 1), auto_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), auto_row.?.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), auto_row.?.height, 0.01);
+    try std.testing.expect(auto_text.?.y >= auto_row.?.y);
+    try std.testing.expect(auto_text.?.y + auto_text.?.height <= auto_row.?.y + auto_row.?.height + 0.01);
+}
+
+test "Web avoid sibling groups stop shifting after fragmentation" {
+    const FragmentList = struct { items: []Fragment };
+    const FakeState = struct {
+        fragments: FragmentList,
+
+        pub fn fragmentainer(_: *const @This()) ?fragmentation.Context {
+            return fragmentation.Context.init(100, .left_to_right);
+        }
+    };
+
+    var split_fragments = [_]Fragment{
+        .{ .kind = .box, .source_box = 0, .rect = .{ .y = 30, .width = 10, .height = 10 }, .table_id = 10 },
+        .{ .kind = .box, .source_box = 1, .rect = .{ .y = 100, .width = 10, .height = 10 }, .table_id = 10 },
+    };
+    var split_state = FakeState{ .fragments = .{ .items = &split_fragments } };
+    try std.testing.expect(block.fragmentedTableRangeSpansFragmentainers(&split_state, 0));
+
+    var atomic_fragments = [_]Fragment{
+        .{ .kind = .box, .source_box = 0, .rect = .{ .y = 30, .width = 10, .height = 10 }, .table_id = 10 },
+        .{ .kind = .box, .source_box = 1, .rect = .{ .y = 40, .width = 10, .height = 10 }, .table_id = 10 },
+    };
+    var atomic_state = FakeState{ .fragments = .{ .items = &atomic_fragments } };
+    try std.testing.expect(!block.fragmentedTableRangeSpansFragmentainers(&atomic_state, 0));
+}
+
 test "Web table reserves and repeats footer groups on every occupied page" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -3045,6 +3125,48 @@ test "Web flex baseline alignment and inline-flex intrinsic width" {
     }
     try std.testing.expectApproxEqAbs(large_baseline.?, small_baseline.?, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 85), inline_flex.?.width, 0.1);
+}
+
+test "Web inline flex direct text remains selectable and baseline aligned" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<p><span style='display:inline-flex;align-items:baseline;background:#00ff00;font-size:16px'>" ++
+        "N.R.<span style='font-size:24px'>Visible</span></span></p>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{ .content_width = 200, .web_sizing = true });
+    defer result.deinit(allocator);
+
+    var direct_text: ?Fragment = null;
+    var visible_text: ?Fragment = null;
+    var inline_flex: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        if (fragment.text) |text| {
+            if (std.mem.eql(u8, text, "N.R.")) direct_text = fragment;
+            if (std.mem.eql(u8, text, "Visible")) visible_text = fragment;
+        }
+        if (fragment.background) |color| {
+            if (color.green == 1 and color.red == 0) inline_flex = fragment.rect;
+        }
+    }
+
+    try std.testing.expect(direct_text != null);
+    try std.testing.expect(direct_text.?.rect.width > 0);
+    try std.testing.expect(direct_text.?.rect.height > 0);
+    try std.testing.expect(inline_flex.?.width >= direct_text.?.rect.width + visible_text.?.rect.width);
+    try std.testing.expect(inline_flex.?.height >= visible_text.?.rect.height);
+    const direct_baseline = direct_text.?.rect.y + direct_text.?.font_size * 0.8;
+    const visible_baseline = visible_text.?.rect.y + visible_text.?.font_size * 0.8;
+    try std.testing.expectApproxEqAbs(direct_baseline, visible_baseline, 0.01);
 }
 
 test "Web nowrap ignores align content and cross stretch honors max size" {

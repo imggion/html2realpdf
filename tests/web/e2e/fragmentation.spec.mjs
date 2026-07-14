@@ -1,4 +1,10 @@
 import { expect, test } from "@playwright/test";
+import {
+  REPORT360_FRAGMENTATION_FIXTURE_HTML,
+  REPORT360_FRAGMENTATION_PAGE,
+} from "../report360-fragmentation-fixture.js";
+
+const CSS_PX_TO_PDF_PT = 0.75;
 
 test("CSS fragmentation reaches real PDF page assignments", async ({ page }) => {
   await page.goto("/tests/web/index.html");
@@ -119,6 +125,129 @@ test("table header and footer groups repeat in the real PDF", async ({ page }) =
   expect(result.pages[1]).toContain("HEAD");
   expect(result.pages[1]).toContain("FOOT");
   expect(result.pages[1]).toContain("THREE");
+});
+
+test("Report 360 legend and auto-height table rows fragment without duplicate content", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async ({ fixtureHtml, pageSize, cssPxToPdfPt }) => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+    pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+
+    const fixture = document.createElement("section");
+    fixture.className = "report360-regression";
+    fixture.innerHTML = fixtureHtml;
+    document.body.append(fixture);
+    const pdf = await pkg.renderPdf(fixture, {
+      cssProfile: "web",
+      mediaType: "print",
+      page: { format: [pageSize.width, pageSize.height], unit: "px", margin: 0 },
+      viewport: { width: pageSize.width, height: pageSize.height },
+      unsupportedCss: "error",
+      execution: "main",
+    });
+    const diagnostics = pdf.diagnostics;
+    const bytes = pdf.toUint8Array();
+    pdf.dispose();
+    fixture.remove();
+
+    const documentHandle = await pdfjs.getDocument({ data: bytes }).promise;
+    const pages = [];
+    const trackedColors = new Set(["#47775c", "#e8eef5", "#f4eadf", "#e7f4ec", "#20c56a", "#f0b400"]);
+    for (let pageNumber = 1; pageNumber <= documentHandle.numPages; pageNumber += 1) {
+      const current = await documentHandle.getPage(pageNumber);
+      const textContent = await current.getTextContent();
+      const operators = await current.getOperatorList();
+      const text = textContent.items.flatMap((item) => {
+        if (!("str" in item) || !item.str.trim()) return [];
+        const height = item.height / cssPxToPdfPt;
+        return [{
+          value: item.str.trim(),
+          x: item.transform[4] / cssPxToPdfPt,
+          y: pageSize.height - (item.transform[5] + item.height) / cssPxToPdfPt,
+          width: item.width / cssPxToPdfPt,
+          height,
+        }];
+      });
+      const paths = [];
+      let fillColor = null;
+      let clipCount = 0;
+      let containsRasterImage = false;
+      for (let index = 0; index < operators.fnArray.length; index += 1) {
+        const operator = operators.fnArray[index];
+        const args = operators.argsArray[index];
+        if (operator === pdfjs.OPS.setFillRGBColor) fillColor = args[0];
+        if (operator === pdfjs.OPS.clip || operator === pdfjs.OPS.eoClip) clipCount += 1;
+        if (operator === pdfjs.OPS.paintImageXObject || operator === pdfjs.OPS.paintInlineImageXObject) containsRasterImage = true;
+        if (operator !== pdfjs.OPS.constructPath || !trackedColors.has(fillColor)) continue;
+        const [left, bottom, right, top] = Array.from(args[2]);
+        paths.push({
+          color: fillColor,
+          x: left / cssPxToPdfPt,
+          y: pageSize.height - top / cssPxToPdfPt,
+          width: (right - left) / cssPxToPdfPt,
+          height: (top - bottom) / cssPxToPdfPt,
+        });
+      }
+      pages.push({ text, paths, clipCount, containsRasterImage });
+    }
+    await documentHandle.destroy();
+    return { diagnostics, pageCount: pages.length, pages };
+  }, {
+    fixtureHtml: REPORT360_FRAGMENTATION_FIXTURE_HTML,
+    pageSize: REPORT360_FRAGMENTATION_PAGE,
+    cssPxToPdfPt: CSS_PX_TO_PDF_PT,
+  });
+
+  expect(result.diagnostics).toEqual([]);
+  expect(result.pageCount).toBe(2);
+  expect(result.pages.every((pdfPage) => !pdfPage.containsRasterImage)).toBe(true);
+  expect(result.pages.reduce((total, pdfPage) => total + pdfPage.clipCount, 0)).toBeGreaterThanOrEqual(2);
+
+  const occurrences = (value) => result.pages.flatMap((pdfPage, pageIndex) =>
+    pdfPage.text.filter((item) => item.value === value).map((item) => ({ ...item, pageIndex })));
+  expect(occurrences("SUBDIMENSION")).toHaveLength(2);
+  expect(occurrences("SUBDIMENSION").map((item) => item.pageIndex)).toEqual([0, 1]);
+  expect(occurrences("LEGEND")).toHaveLength(1);
+  expect(occurrences("LEGEND")[0].pageIndex).toBe(0);
+  expect(occurrences("ROW-1")).toHaveLength(1);
+  expect(occurrences("ROW-1")[0].pageIndex).toBe(0);
+  expect(occurrences("ROW-2")).toHaveLength(1);
+  expect(occurrences("ROW-2")[0].pageIndex).toBe(1);
+  expect(occurrences("ROW-3")).toHaveLength(1);
+  expect(occurrences("ROW-3")[0].pageIndex).toBe(1);
+  expect(occurrences("N.R.")).toHaveLength(2);
+  expect(occurrences("N.R.").map((item) => item.pageIndex)).toEqual([0, 1]);
+
+  const pageTwoHeader = occurrences("SUBDIMENSION")[1];
+  const rowTwoText = occurrences("ROW-2")[0];
+  const rowThreeText = occurrences("ROW-3")[0];
+  expect(pageTwoHeader.y).toBeLessThan(rowTwoText.y);
+  expect(rowTwoText.y).toBeLessThan(rowThreeText.y);
+
+  const rowColors = new Map([
+    ["ROW-1", "#e8eef5"],
+    ["ROW-2", "#f4eadf"],
+    ["ROW-3", "#e7f4ec"],
+  ]);
+  for (const [label, color] of rowColors) {
+    const item = occurrences(label)[0];
+    const rowRect = result.pages[item.pageIndex].paths.find((path) => path.color === color);
+    expect(rowRect, `missing vector row rectangle for ${label}`).toBeTruthy();
+    expect(item.y).toBeGreaterThanOrEqual(rowRect.y - 1);
+    expect(item.y + item.height).toBeLessThanOrEqual(rowRect.y + rowRect.height + 1);
+    expect(rowRect.y).toBeGreaterThanOrEqual(0);
+    expect(rowRect.y + rowRect.height).toBeLessThanOrEqual(REPORT360_FRAGMENTATION_PAGE.height + 1);
+  }
+
+  const rowTwoStatus = occurrences("N.R.").find((item) => item.pageIndex === 1);
+  const rowTwoRect = result.pages[1].paths.find((path) => path.color === "#f4eadf");
+  expect(rowTwoStatus.y).toBeGreaterThanOrEqual(rowTwoRect.y - 1);
+  expect(rowTwoStatus.y + rowTwoStatus.height).toBeLessThanOrEqual(rowTwoRect.y + rowTwoRect.height + 1);
+  expect(result.pages.flatMap((pdfPage) => pdfPage.paths).filter((path) => path.color === "#20c56a")).toHaveLength(2);
+  expect(result.pages.flatMap((pdfPage) => pdfPage.paths).filter((path) => path.color === "#f0b400")).toHaveLength(1);
 });
 
 test("fixed page furniture repeats at both page edges", async ({ page }) => {

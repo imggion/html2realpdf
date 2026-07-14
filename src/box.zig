@@ -1027,6 +1027,7 @@ pub const Builder = struct {
         };
         errdefer tree.deinit(allocator);
 
+        try normalizeAnonymousFlexItems(&tree, allocator, tree.root);
         try normalizeAnonymousBlocks(&tree, allocator, tree.root);
         try normalizeAnonymousTables(&tree, allocator, tree.root);
         return tree;
@@ -1417,7 +1418,24 @@ fn wrapInlineRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId
     }
 
     if (!has_inline or !has_block) return;
-    try wrapChildRuns(tree, allocator, parent_id, .anonymousBlock, isInlineLevelBox);
+    try wrapChildRuns(tree, allocator, parent_id, .anonymousBlock, isInlineLevelBox, anonymousStyle);
+}
+
+/// CSS turns direct text children of flex containers into anonymous flex items.
+/// Grouping consecutive text boxes here lets the normal block and inline
+/// formatters preserve selectable text without teaching flex layout about DOM
+/// text nodes.
+fn normalizeAnonymousFlexItems(tree: *BoxTree, allocator: std.mem.Allocator, box_id: BoxId) !void {
+    var child = tree.boxes.items[box_id].first_child;
+    while (child) |child_id| {
+        const next = tree.boxes.items[child_id].next_sibling;
+        try normalizeAnonymousFlexItems(tree, allocator, child_id);
+        child = next;
+    }
+
+    const display = tree.boxes.items[box_id].style.display;
+    if (display != .flex and display != .inlineFlex) return;
+    try wrapChildRuns(tree, allocator, box_id, .anonymousBlock, isTextBox, anonymousFlexItemStyle);
 }
 
 /// Runs after anonymous-block normalization, wrapping orphan table cells in
@@ -1426,7 +1444,7 @@ fn wrapInlineRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId
 /// Orphan rows remain direct table children because layout intentionally accepts
 /// both direct rows and row groups.
 fn wrapTableCellRuns(tree: *BoxTree, allocator: std.mem.Allocator, parent_id: BoxId) !void {
-    try wrapChildRuns(tree, allocator, parent_id, .anonymousTableRow, isTableWrappableBox);
+    try wrapChildRuns(tree, allocator, parent_id, .anonymousTableRow, isTableWrappableBox, anonymousStyle);
 }
 
 /// Common rebuild loop for anonymous box normalization.
@@ -1438,6 +1456,7 @@ fn wrapChildRuns(
     parent_id: BoxId,
     anon_kind: BoxType,
     shouldWrap: fn (Box) bool,
+    makeStyle: fn (Style) Style,
 ) !void {
     const old_first = tree.boxes.items[parent_id].first_child;
     var new_first: ?BoxId = null;
@@ -1455,7 +1474,7 @@ fn wrapChildRuns(
             if (current_run == null) {
                 const anonymous_id = try appendDetachedBox(tree, allocator, .{
                     .kind = anon_kind,
-                    .style = anonymousStyle(tree.boxes.items[parent_id].style),
+                    .style = makeStyle(tree.boxes.items[parent_id].style),
                 });
                 appendToRebuiltChildList(tree, parent_id, anonymous_id, &new_first, &new_last);
                 current_run = anonymous_id;
@@ -1475,6 +1494,16 @@ fn wrapChildRuns(
 
 fn isTableWrappableBox(box: Box) bool {
     return box.kind == .tableCell or isInlineLevelBox(box);
+}
+
+fn isTextBox(source: Box) bool {
+    return source.kind == .text;
+}
+
+fn anonymousFlexItemStyle(parent: Style) Style {
+    var style = anonymousStyle(parent);
+    style.display = .block;
+    return style;
 }
 
 fn anonymousStyle(parent: Style) Style {
@@ -1929,6 +1958,58 @@ test "wrap mixed block and inline children in anonymous blocks" {
         \\  anonymous-block
         \\    inline span
         \\      text "after"
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "wrap direct flex text in blockified anonymous items" {
+    const allocator = std.testing.allocator;
+    const source = "<span>N.R.<b>label</b>tail</span>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+
+    const span_id = document.nodes.items[document.root].first_child.?;
+    const styles = try allocator.alloc(Style, document.nodes.items.len);
+    defer allocator.free(styles);
+    for (styles, 0..) |*style, node_id| style.* = defaultStyleForNode(&document, node_id);
+    styles[span_id].display = .inlineFlex;
+    styles[span_id].font_size = 18;
+    styles[span_id].font_style = .italic;
+    styles[span_id].flex_grow = 3;
+
+    var tree = try Builder.build(allocator, &document, styles, span_id);
+    defer tree.deinit(allocator);
+
+    const first_item_id = tree.boxes.items[tree.root].first_child.?;
+    const first_item = tree.boxes.items[first_item_id];
+    try std.testing.expectEqual(BoxType.anonymousBlock, first_item.kind);
+    try std.testing.expectEqual(Display.block, first_item.style.display);
+    try std.testing.expectEqual(FontStyle.italic, first_item.style.font_style);
+    try std.testing.expectApproxEqAbs(@as(f32, 18), first_item.style.font_size, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), first_item.style.flex_grow, 0.01);
+
+    const label_id = first_item.next_sibling.?;
+    const last_item_id = tree.boxes.items[label_id].next_sibling.?;
+    try std.testing.expectEqual(BoxType.anonymousBlock, tree.boxes.items[last_item_id].kind);
+    try std.testing.expect(tree.boxes.items[last_item_id].next_sibling == null);
+
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try tree.dump(&document, &writer);
+    const expected =
+        \\inline-block span
+        \\  anonymous-block
+        \\    text "N.R."
+        \\  anonymous-block
+        \\    inline b
+        \\      text "label"
+        \\  anonymous-block
+        \\    text "tail"
         \\
     ;
     try std.testing.expectEqualStrings(expected, writer.buffered());

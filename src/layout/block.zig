@@ -376,6 +376,7 @@ pub fn layoutWithOptions(
                             state,
                             boundary_break,
                             sibling_group_fragment_start,
+                            child_fragment_start,
                             &sibling_group_y,
                             &child_cursor_y,
                         );
@@ -497,16 +498,39 @@ fn applyAvoidSiblingBoundary(
     state: anytype,
     boundary_break: box.PageBreak,
     group_fragment_start: ?usize,
+    latest_fragment_start: usize,
     group_y: *f32,
     cursor_y: *f32,
 ) void {
     if (!boundary_break.isAvoid()) return;
     const fragment_start = group_fragment_start orelse return;
+    if (fragmentedTableRangeSpansFragmentainers(state, latest_fragment_start)) return;
     const shift = state.atomicFragmentainerShift(group_y.*, @max(cursor_y.* - group_y.*, 0));
     if (shift <= 0) return;
     floats.shiftFragments(state.fragments.items[fragment_start..], 0, shift);
     group_y.* += shift;
     cursor_y.* += shift;
+}
+
+/// Once a table subtree has produced content on more than one fragmentainer it
+/// can no longer participate in a later atomic group shift. Moving it would
+/// translate page-dependent rows and repeated sections a second time. A normal
+/// sibling that moved intact remains eligible for `break-after: avoid`.
+pub fn fragmentedTableRangeSpansFragmentainers(state: anytype, fragment_start: usize) bool {
+    const context = state.fragmentainer() orelse return false;
+    var first_page: ?usize = null;
+    for (state.fragments.items[fragment_start..]) |fragment| {
+        if (fragment.fixed) continue;
+        if (fragment.table_id == null) continue;
+        if (fragment.rect.width <= 0 and fragment.rect.height <= 0) continue;
+        const page_index = context.pageIndex(fragment.rect.y);
+        if (first_page == null) {
+            first_page = page_index;
+        } else if (page_index != first_page.?) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn updateSiblingGroup(

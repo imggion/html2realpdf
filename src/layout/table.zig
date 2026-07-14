@@ -24,6 +24,40 @@ const CellLayout = struct {
     row_span: usize = 1,
 };
 
+const ActiveSpan = struct {
+    remaining: usize = 0,
+    cell: ?CellLayout = null,
+};
+
+const NewSpan = struct {
+    first_column: usize,
+    column_span: usize,
+    cell: CellLayout,
+};
+
+const LayoutCheckpoint = struct {
+    fragments_len: usize,
+    pending_positioned_len: usize,
+    page_name_transitions_len: usize,
+    blank_page_indices_len: usize,
+    next_line_id: usize,
+};
+
+const RowLayout = struct {
+    fragment_start: usize,
+    height: f32,
+    cell_layouts: std.ArrayList(CellLayout),
+    new_spans: std.ArrayList(NewSpan),
+    owned: bool = true,
+
+    fn deinit(self: *RowLayout, allocator: std.mem.Allocator) void {
+        if (!self.owned) return;
+        self.cell_layouts.deinit(allocator);
+        self.new_spans.deinit(allocator);
+        self.owned = false;
+    }
+};
+
 const PassResult = struct {
     height: f32,
     footer_height: f32 = 0,
@@ -44,13 +78,9 @@ pub fn layout(
     // page-end area. The measurement pass is rollback-only: fragments,
     // deferred positioned descendants, and line identifiers are restored
     // before the definitive fragmented layout.
-    const fragment_start = state.fragments.items.len;
-    const pending_start = state.pending_positioned.items.len;
-    const next_line_id = state.next_line_id;
+    const checkpoint = takeLayoutCheckpoint(state);
     const measured = try layoutPass(state, table_id, start_x, start_y, width, 0, false);
-    state.fragments.items.len = fragment_start;
-    state.pending_positioned.items.len = pending_start;
-    state.next_line_id = next_line_id;
+    restoreLayoutCheckpoint(state, checkpoint);
 
     const footer_reservation = if (state.fragmentainer()) |context|
         if (measured.footer_height > 0 and measured.footer_height < context.extentAt(start_y))
@@ -60,6 +90,134 @@ pub fn layout(
     else
         0;
     return (try layoutPass(state, table_id, start_x, start_y, width, footer_reservation, true)).height;
+}
+
+fn takeLayoutCheckpoint(state: anytype) LayoutCheckpoint {
+    return .{
+        .fragments_len = state.fragments.items.len,
+        .pending_positioned_len = state.pending_positioned.items.len,
+        .page_name_transitions_len = state.page_name_transitions.items.len,
+        .blank_page_indices_len = state.blank_page_indices.items.len,
+        .next_line_id = state.next_line_id,
+    };
+}
+
+fn restoreLayoutCheckpoint(state: anytype, checkpoint: LayoutCheckpoint) void {
+    state.fragments.items.len = checkpoint.fragments_len;
+    state.pending_positioned.items.len = checkpoint.pending_positioned_len;
+    state.page_name_transitions.items.len = checkpoint.page_name_transitions_len;
+    state.blank_page_indices.items.len = checkpoint.blank_page_indices_len;
+    state.next_line_id = checkpoint.next_line_id;
+}
+
+/// Lays out one row at its actual fragmentainer position. Callers may discard
+/// the returned fragments and invoke this again after a repeated header; no
+/// row-span or page-occupancy state is committed here.
+fn layoutTableRow(
+    state: anytype,
+    table_id: box.BoxId,
+    row_id: box.BoxId,
+    row_index: usize,
+    row_y: f32,
+    start_x: f32,
+    table_width: f32,
+    column_widths: []const f32,
+    active_spans: []const ActiveSpan,
+    occupied: []bool,
+    collapse_borders: bool,
+    is_header_row: bool,
+    is_footer_row: bool,
+) !RowLayout {
+    const row_source = state.tree.boxes.items[row_id];
+    const row_start_fragment = state.fragments.items.len;
+    const row_fragment_id = state.fragments.items.len;
+    try state.fragments.append(state.allocator, .{
+        .kind = .box,
+        .source_box = row_id,
+        .rect = .{ .x = start_x, .y = row_y, .width = table_width },
+        .background = if (row_source.style.background) |value| geometry.parseColor(value) else null,
+        .background_image = row_source.style.background_image,
+        .background_position = row_source.style.background_position,
+        .background_size = row_source.style.background_size,
+        .background_repeat = row_source.style.background_repeat,
+        .box_shadow = row_source.style.box_shadow,
+        .border = row_source.border,
+        .border_paint = borderPaint(row_source.style),
+        .border_radius = row_source.style.border_radius,
+        .border_radii = row_source.style.border_radii,
+        .box_decoration_break = row_source.style.box_decoration_break,
+        .legacy_fragment_borders = !state.web_sizing,
+        .page_break_before = row_source.style.page_break_before,
+        .page_break_after = row_source.style.page_break_after,
+        .page_break_inside = row_source.style.page_break_inside,
+    });
+
+    var cell_layouts = try std.ArrayList(CellLayout).initCapacity(state.allocator, column_widths.len);
+    errdefer cell_layouts.deinit(state.allocator);
+    var new_spans = try std.ArrayList(NewSpan).initCapacity(state.allocator, 0);
+    errdefer new_spans.deinit(state.allocator);
+
+    for (active_spans, 0..) |active, index| occupied[index] = active.remaining > 0;
+    var row_height: f32 = 0;
+    var column_index: usize = 0;
+    var cell = row_source.first_child;
+    while (cell) |cell_id| {
+        const cell_source = state.tree.boxes.items[cell_id];
+        if (cell_source.kind == .tableCell) {
+            const span = tableCellSpan(state, cell_id);
+            const row_span = tableCellRowSpan(state, cell_id);
+            column_index = findFreeColumns(occupied, column_index, span);
+            if (column_index + span > column_widths.len) break;
+            var cell_x = start_x;
+            for (column_widths[0..column_index]) |track_width| cell_x += track_width;
+            var cell_width: f32 = 0;
+            for (column_widths[column_index .. column_index + span]) |track_width| cell_width += track_width;
+            var cell_cursor = row_y;
+            const cell_fragment_id = state.fragments.items.len;
+            _ = try state.layoutBlockWithOptions(
+                cell_id,
+                .{ .x = cell_x, .y = row_y, .width = cell_width },
+                &cell_cursor,
+                .{ .fill_available_width = true },
+            );
+            if (collapse_borders) {
+                if (column_index > 0) state.fragments.items[cell_fragment_id].border.left = 0;
+                if (row_index > 0) state.fragments.items[cell_fragment_id].border.top = 0;
+            }
+            const cell_layout = CellLayout{
+                .root = cell_fragment_id,
+                .end = state.fragments.items.len,
+                .natural_height = state.fragments.items[cell_fragment_id].rect.height,
+                .row_span = row_span,
+            };
+            try cell_layouts.append(state.allocator, cell_layout);
+            for (occupied[column_index .. column_index + span]) |*slot| slot.* = true;
+            if (row_span > 1) try new_spans.append(state.allocator, .{
+                .first_column = column_index,
+                .column_span = span,
+                .cell = cell_layout,
+            });
+            row_height = @max(row_height, cell_cursor - row_y);
+            column_index += span;
+        }
+        cell = cell_source.next_sibling;
+    }
+
+    row_height = @max(row_height, row_source.style.height.resolve(state.page_height orelse 0) orelse 1);
+    state.fragments.items[row_fragment_id].rect.height = row_height;
+    alignCellContents(state, cell_layouts.items, row_height);
+    for (state.fragments.items[row_start_fragment..]) |*fragment| {
+        fragment.table_id = table_id;
+        fragment.is_table_header = is_header_row;
+        fragment.is_table_footer = is_footer_row;
+    }
+
+    return .{
+        .fragment_start = row_start_fragment,
+        .height = row_height,
+        .cell_layouts = cell_layouts,
+        .new_spans = new_spans,
+    };
 }
 
 fn layoutPass(
@@ -113,8 +271,6 @@ fn layoutPass(
     var previous_page_row: ?box.BoxId = null;
     var sibling_group_fragment_start: ?usize = null;
     var sibling_group_y: f32 = 0;
-    const ActiveSpan = struct { remaining: usize = 0, cell: ?CellLayout = null };
-    const NewSpan = struct { first_column: usize, column_span: usize, cell: CellLayout };
     const active_spans = try state.allocator.alloc(ActiveSpan, column_count);
     defer state.allocator.free(active_spans);
     @memset(active_spans, ActiveSpan{});
@@ -163,103 +319,24 @@ fn layoutPass(
                 state.recordPageName(target_page_start, fragmentation.startPageName(state.tree, row_id));
             }
         }
-        const row_start_fragment = state.fragments.items.len;
-        const row_fragment_id = state.fragments.items.len;
-        try state.fragments.append(state.allocator, .{
-            .kind = .box,
-            .source_box = row_id,
-            .rect = .{ .x = start_x, .y = row_y, .width = table_width },
-            .background = if (row_source.style.background) |value| geometry.parseColor(value) else null,
-            .background_image = row_source.style.background_image,
-            .background_position = row_source.style.background_position,
-            .background_size = row_source.style.background_size,
-            .background_repeat = row_source.style.background_repeat,
-            .box_shadow = row_source.style.box_shadow,
-            .border = row_source.border,
-            .border_paint = borderPaint(row_source.style),
-            .border_radius = row_source.style.border_radius,
-            .border_radii = row_source.style.border_radii,
-            .box_decoration_break = row_source.style.box_decoration_break,
-            .legacy_fragment_borders = !state.web_sizing,
-            .page_break_before = row_source.style.page_break_before,
-            .page_break_after = row_source.style.page_break_after,
-            .page_break_inside = row_source.style.page_break_inside,
-        });
-
-        var row_height: f32 = 0;
-        var column_index: usize = 0;
-        var cell_layouts = try std.ArrayList(CellLayout).initCapacity(state.allocator, column_count);
-        defer cell_layouts.deinit(state.allocator);
-        var new_spans = try std.ArrayList(NewSpan).initCapacity(state.allocator, 0);
-        defer new_spans.deinit(state.allocator);
-        var old_span_cells = try std.ArrayList(CellLayout).initCapacity(state.allocator, 0);
-        defer old_span_cells.deinit(state.allocator);
-        for (active_spans, 0..) |active, index| {
-            occupied[index] = active.remaining > 0;
-            const spanning_cell = active.cell orelse continue;
-            var already_added = false;
-            for (old_span_cells.items) |existing| if (existing.root == spanning_cell.root) {
-                already_added = true;
-                break;
-            };
-            if (!already_added) try old_span_cells.append(state.allocator, spanning_cell);
-        }
-
-        var cell = row_source.first_child;
-        while (cell) |cell_id| {
-            const cell_source = state.tree.boxes.items[cell_id];
-            if (cell_source.kind == .tableCell) {
-                const span = tableCellSpan(state, cell_id);
-                const row_span = tableCellRowSpan(state, cell_id);
-                column_index = findFreeColumns(occupied, column_index, span);
-                if (column_index + span > column_count) break;
-                var cell_x = start_x;
-                for (column_widths[0..column_index]) |track_width| cell_x += track_width;
-                var cell_width: f32 = 0;
-                for (column_widths[column_index .. column_index + span]) |track_width| cell_width += track_width;
-                var cell_cursor = row_y;
-                const cell_fragment_id = state.fragments.items.len;
-                _ = try state.layoutBlockWithOptions(
-                    cell_id,
-                    .{
-                        .x = cell_x,
-                        .y = row_y,
-                        .width = cell_width,
-                    },
-                    &cell_cursor,
-                    .{ .fill_available_width = true },
-                );
-                if (collapse_borders) {
-                    if (column_index > 0) state.fragments.items[cell_fragment_id].border.left = 0;
-                    if (row_index > 0) state.fragments.items[cell_fragment_id].border.top = 0;
-                }
-                const cell_layout = CellLayout{
-                    .root = cell_fragment_id,
-                    .end = state.fragments.items.len,
-                    .natural_height = state.fragments.items[cell_fragment_id].rect.height,
-                    .row_span = row_span,
-                };
-                try cell_layouts.append(state.allocator, cell_layout);
-                for (occupied[column_index .. column_index + span]) |*slot| slot.* = true;
-                if (row_span > 1) try new_spans.append(state.allocator, .{
-                    .first_column = column_index,
-                    .column_span = span,
-                    .cell = cell_layout,
-                });
-                row_height = @max(row_height, cell_cursor - row_y);
-                column_index += span;
-            }
-            cell = cell_source.next_sibling;
-        }
-
-        row_height = @max(row_height, row_source.style.height.resolve(state.page_height orelse 0) orelse 1);
-        state.fragments.items[row_fragment_id].rect.height = row_height;
-        alignCellContents(state, cell_layouts.items, row_height);
-        for (state.fragments.items[row_start_fragment..]) |*fragment| {
-            fragment.table_id = table_id;
-            fragment.is_table_header = is_header_row;
-            fragment.is_table_footer = is_footer_row;
-        }
+        const row_checkpoint = takeLayoutCheckpoint(state);
+        var row_layout = try layoutTableRow(
+            state,
+            table_id,
+            row_id,
+            row_index,
+            row_y,
+            start_x,
+            table_width,
+            column_widths,
+            active_spans,
+            occupied,
+            collapse_borders,
+            is_header_row,
+            is_footer_row,
+        );
+        defer row_layout.deinit(state.allocator);
+        var row_height = row_layout.height;
 
         if (!state.web_sizing and state.page_height != null) {
             const page_height = state.page_height.?;
@@ -272,7 +349,7 @@ fn layoutPass(
                     header_height + row_height <= page_height and
                     last_repeated_page != target_page;
                 const shift = page_height - page_y + (if (should_repeat_header) header_height else 0);
-                for (state.fragments.items[row_start_fragment..]) |*fragment| fragment.rect.y += shift;
+                for (state.fragments.items[row_layout.fragment_start..]) |*fragment| fragment.rect.y += shift;
                 row_y += shift;
                 if (should_repeat_header) {
                     try cloneTableSection(
@@ -302,6 +379,9 @@ fn layoutPass(
                     const target_page = context.pageIndex(target_page_start);
                     const should_repeat_header = can_repeat_for_group and last_repeated_page != target_page;
                     const shift = group_shift + (if (should_repeat_header) header_height else 0);
+
+                    row_layout.deinit(state.allocator);
+                    restoreLayoutCheckpoint(state, row_checkpoint);
                     for (state.fragments.items[sibling_group_fragment_start.?..]) |*fragment| shiftFragmentY(fragment, shift);
                     row_y += shift;
                     sibling_group_y += shift;
@@ -314,8 +394,24 @@ fn layoutPass(
                             header_start_y,
                             target_page_start,
                         );
-                        last_repeated_page = target_page;
                     }
+                    row_layout = try layoutTableRow(
+                        state,
+                        table_id,
+                        row_id,
+                        row_index,
+                        row_y,
+                        start_x,
+                        table_width,
+                        column_widths,
+                        active_spans,
+                        occupied,
+                        collapse_borders,
+                        is_header_row,
+                        is_footer_row,
+                    );
+                    row_height = row_layout.height;
+                    if (should_repeat_header) last_repeated_page = target_page;
                 }
             }
 
@@ -328,7 +424,9 @@ fn layoutPass(
                     header_height + row_height + footer_reservation <= context.extentForPage(target_page) and
                     last_repeated_page != target_page;
                 const shift = automatic_shift + (if (should_repeat_header) header_height else 0);
-                for (state.fragments.items[row_start_fragment..]) |*fragment| shiftFragmentY(fragment, shift);
+
+                row_layout.deinit(state.allocator);
+                restoreLayoutCheckpoint(state, row_checkpoint);
                 row_y += shift;
                 if (should_repeat_header) {
                     try cloneTableSection(
@@ -338,11 +436,27 @@ fn layoutPass(
                         header_start_y,
                         target_page_start,
                     );
-                    last_repeated_page = target_page;
                 }
+                row_layout = try layoutTableRow(
+                    state,
+                    table_id,
+                    row_id,
+                    row_index,
+                    row_y,
+                    start_x,
+                    table_width,
+                    column_widths,
+                    active_spans,
+                    occupied,
+                    collapse_borders,
+                    is_header_row,
+                    is_footer_row,
+                );
+                row_height = row_layout.height;
+                if (should_repeat_header) last_repeated_page = target_page;
             }
             if (!retain_group) {
-                sibling_group_fragment_start = row_start_fragment;
+                sibling_group_fragment_start = row_layout.fragment_start;
                 sibling_group_y = row_y;
             }
         }
@@ -353,7 +467,7 @@ fn layoutPass(
 
         if (is_header_row) {
             if (header_template_start == null) {
-                header_template_start = row_start_fragment;
+                header_template_start = row_layout.fragment_start;
                 header_start_y = row_y;
             }
             header_template_end = state.fragments.items.len;
@@ -361,13 +475,24 @@ fn layoutPass(
         }
         if (is_footer_row) {
             if (footer_template_start == null) {
-                footer_template_start = row_start_fragment;
+                footer_template_start = row_layout.fragment_start;
                 footer_start_y = row_y;
             }
             footer_template_end = state.fragments.items.len;
             footer_height = row_y + row_height - footer_start_y;
         }
 
+        var old_span_cells = try std.ArrayList(CellLayout).initCapacity(state.allocator, 0);
+        defer old_span_cells.deinit(state.allocator);
+        for (active_spans) |active| {
+            const spanning_cell = active.cell orelse continue;
+            var already_added = false;
+            for (old_span_cells.items) |existing| if (existing.root == spanning_cell.root) {
+                already_added = true;
+                break;
+            };
+            if (!already_added) try old_span_cells.append(state.allocator, spanning_cell);
+        }
         for (old_span_cells.items) |spanning_cell| {
             const fragment = &state.fragments.items[spanning_cell.root];
             const spanned_height = row_y + row_height - fragment.rect.y;
@@ -389,7 +514,7 @@ fn layoutPass(
             if (active.remaining > 0) active.remaining -= 1;
             if (active.remaining == 0) active.cell = null;
         }
-        for (new_spans.items) |new_span| {
+        for (row_layout.new_spans.items) |new_span| {
             for (active_spans[new_span.first_column .. new_span.first_column + new_span.column_span]) |*active| {
                 active.* = .{
                     .remaining = new_span.cell.row_span - 1,
