@@ -7,7 +7,7 @@ full-page screenshot.
 ## Install
 
 ```sh
-npm install @imggion/html2realpdf@next
+npm install @imggion/html2realpdf
 ```
 
 The package is ESM and includes TypeScript declarations, its Worker, WASM, and
@@ -279,14 +279,14 @@ Blob URL outputs remain owned by the cached `PdfDocument`. Retrieve it with
 ## Share without the npm registry
 
 Run `npm pack` from this package directory and send the generated
-`imggion-html2realpdf-0.1.0-rc3.tgz` file. A consumer can install it with:
+`imggion-html2realpdf-0.1.0.tgz` file. A consumer can install it with:
 
 ```sh
-npm install ./imggion-html2realpdf-0.1.0-rc3.tgz
+npm install ./imggion-html2realpdf-0.1.0.tgz
 # or
-pnpm add ./imggion-html2realpdf-0.1.0-rc3.tgz
+pnpm add ./imggion-html2realpdf-0.1.0.tgz
 # or
-yarn add file:./imggion-html2realpdf-0.1.0-rc3.tgz
+yarn add file:./imggion-html2realpdf-0.1.0.tgz
 ```
 
 The packaged model instructions live at `skills/html2realpdf/SKILL.md`.

@@ -3,7 +3,7 @@
   <h1>html2realpdf</h1>
   <p><strong>A real PDF, not a screenshot.</strong></p>
   <p>
-    <a href="https://github.com/imggion/html2realpdf/releases/tag/0.1.0-rc3"><img src="https://img.shields.io/badge/release-0.1.0--rc3-2ea44f?style=flat-square" alt="Latest release: 0.1.0-rc3"></a>
+    <a href="https://github.com/imggion/html2realpdf/releases/tag/0.1.0"><img src="https://img.shields.io/badge/release-0.1.0-2ea44f?style=flat-square" alt="Latest release: 0.1.0"></a>
     <img src="https://img.shields.io/badge/-zig-f39b34?style=flat-square&amp;logo=zig&amp;logoColor=white" alt="Zig">
     <img src="https://img.shields.io/badge/-WASM-654ff0?style=flat-square&amp;logo=webassembly&amp;logoColor=white" alt="WebAssembly">
     <img src="https://img.shields.io/badge/-TypeScript-3178c6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript">
@@ -42,19 +42,18 @@ to the browser. The result is one portable pipeline for invoices, reports,
 tickets, letters, slides, and other web-generated documents.
 
 See the [CSS support matrix](docs/css-support.md) for the current layout and
-rendering coverage. The RC provides machine-readable text and accessible
+rendering coverage. The current release provides machine-readable text and accessible
 preview controls; it does not claim PDF/UA or fully tagged PDF compliance.
 
 ## Install
 
-The release candidate is prepared for npm but is not published yet. Once it is
-available, install the `next` release with your package manager:
+Install the stable release with your package manager:
 
 ```sh
-npm install @imggion/html2realpdf@next
-pnpm add @imggion/html2realpdf@next
-yarn add @imggion/html2realpdf@next
-bun add @imggion/html2realpdf@next
+npm install @imggion/html2realpdf
+pnpm add @imggion/html2realpdf
+yarn add @imggion/html2realpdf
+bun add @imggion/html2realpdf
 ```
 
 ## Quick start
