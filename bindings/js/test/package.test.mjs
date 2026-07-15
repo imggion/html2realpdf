@@ -3,10 +3,17 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import html2pdf, {
+  CanvasToSvgError,
   CompatWorker,
+  Html2RealPdfError,
+  InvalidSourceError,
   PdfDocument,
   PdfPreview,
+  ResourceLoadError,
   UnsupportedCompatibilityFeatureError,
+  UnsupportedCssError,
+  UnsupportedEnvironmentError,
+  WasmRenderError,
   createRenderer,
   renderPdf,
 } from "../dist/index.js";
@@ -18,6 +25,29 @@ test("package entrypoint is safe to import without a browser", () => {
   assert.equal(typeof createRenderer, "function");
   assert.equal(typeof renderPdf, "function");
   assert.equal(typeof PdfPreview, "function");
+});
+
+test("public error names are stable", () => {
+  const errors = [
+    new Html2RealPdfError("base", "TEST_ERROR"),
+    new UnsupportedEnvironmentError(),
+    new InvalidSourceError("invalid"),
+    new UnsupportedCssError("unsupported"),
+    new WasmRenderError("render failed", -1),
+    new ResourceLoadError("fixture.png"),
+    new CanvasToSvgError("conversion failed", "body > canvas"),
+    new UnsupportedCompatibilityFeatureError("toCanvas"),
+  ];
+  assert.deepEqual(errors.map((error) => error.name), [
+    "Html2RealPdfError",
+    "UnsupportedEnvironmentError",
+    "InvalidSourceError",
+    "UnsupportedCssError",
+    "WasmRenderError",
+    "ResourceLoadError",
+    "CanvasToSvgError",
+    "UnsupportedCompatibilityFeatureError",
+  ]);
 });
 
 test("browser harness runtime uses a content-addressed package build", async () => {
