@@ -3,7 +3,12 @@
   <h1>html2realpdf</h1>
   <p><strong>A real PDF, not a screenshot.</strong></p>
   <p>
-    <a href="https://github.com/imggion/html2realpdf/releases/tag/v0.1.1"><img src="https://img.shields.io/badge/release-0.1.1-2ea44f?style=flat-square" alt="Latest release: 0.1.1"></a>
+    <a href="https://www.npmjs.com/package/@imggion/html2realpdf">
+      <img src="https://img.shields.io/npm/v/@imggion/html2realpdf.svg?style=flat-square" alt="npm version">
+    </a>
+    <a href="https://github.com/imggion/html2realpdf/releases/tag/v0.1.1">
+      <img src="https://img.shields.io/badge/release-0.1.1-2ea44f?style=flat-square" alt="Latest release: 0.1.1">
+    </a>
     <img src="https://img.shields.io/badge/-zig-f39b34?style=flat-square&amp;logo=zig&amp;logoColor=white" alt="Zig">
     <img src="https://img.shields.io/badge/-WASM-654ff0?style=flat-square&amp;logo=webassembly&amp;logoColor=white" alt="WebAssembly">
     <img src="https://img.shields.io/badge/-TypeScript-3178c6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript">
