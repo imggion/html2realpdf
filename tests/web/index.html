@@ -101,6 +101,10 @@
         padding: 32px;
         text-align: center;
       }
+      .preview-options { align-items: end; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+      .preview-options label { color: var(--muted); display: grid; font-size: 12px; gap: 4px; }
+      .preview-options input { border: 1px solid rgba(23, 32, 51, 0.18); border-radius: 9px; color: var(--ink); min-height: 44px; padding: 0 12px; width: 96px; }
+      .preview-options input:focus-visible { outline: 2px solid #111; outline-offset: 2px; }
       #package-source {
         background: #eff6ff;
         border-left: 4px solid #1d4ed8;
@@ -211,6 +215,10 @@
           <button id="download-pdf" type="button">Download selected PDF</button>
         </div>
         <p class="status" id="pdf-status" aria-live="polite">No PDF generated yet.</p>
+        <div class="preview-options">
+          <button id="toggle-preview-toolbar" type="button" aria-pressed="true" disabled>Hide toolbar</button>
+          <label for="preview-padding">Padding (px)<input id="preview-padding" type="number" min="0" step="1" placeholder="Auto"></label>
+        </div>
         <div id="pdf-preview" aria-label="Generated PDF preview">
           <div class="preview-empty">Generate a fixture to render its pages here.</div>
         </div>

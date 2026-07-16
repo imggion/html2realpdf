@@ -38,6 +38,9 @@ button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
 .benchmark-error { color: #b42318; }
 .comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
 .comparison > div > h2 { margin: 0 0 10px; font-size: 16px; }
+.preview-options { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.preview-options label { display: grid; gap: 4px; color: #526079; font-size: 12px; }
+.preview-options input { width: 96px; min-height: 44px; border: 1px solid #bcc7da; border-radius: 8px; background: #fff; color: #172033; padding: 8px 12px; }
 .document-stage, .preview-stage { min-height: 420px; overflow: auto; border: 1px solid #dbe2ee; border-radius: 14px; background: #dfe5ef; padding: 20px; }
 .preview-stage > p { margin: 0; color: #6d7890; text-align: center; }
 

@@ -6,6 +6,10 @@
 
 /** Display and rendering limits for `PdfDocument.preview`. */
 export interface PdfPreviewOptions {
+  /** Whether to show the page summary and zoom toolbar. Defaults to `true`. */
+  showToolbar?: boolean;
+  /** Padding around the rendered pages in CSS pixels. Defaults to `28`, or `16` on narrow screens. */
+  padding?: number;
   /** Initial zoom or automatic fit. Defaults to `fit-width`. */
   initialScale?: number | "fit-width";
   /** Lowest permitted zoom. Defaults to `0.25` and is never below `0.1`. */
@@ -77,6 +81,7 @@ const VIEWER_STYLES = `
     min-height: 520px;
     overflow: hidden;
   }
+  .viewer.toolbar-hidden { grid-template-rows: minmax(320px, 1fr); }
   .toolbar {
     align-items: center;
     background: rgba(255, 255, 255, 0.96);
@@ -87,6 +92,7 @@ const VIEWER_STYLES = `
     min-height: 60px;
     padding: 8px 12px;
   }
+  .toolbar[hidden] { display: none; }
   .summary {
     color: #52606d;
     font-size: 13px;
@@ -225,6 +231,8 @@ export class PdfPreview {
 
     const toolbar = document.createElement("div");
     toolbar.className = "toolbar";
+    toolbar.hidden = options.showToolbar === false;
+    if (toolbar.hidden) viewer.classList.add("toolbar-hidden");
     this.summaryElement = document.createElement("div");
     this.summaryElement.className = "summary";
     this.summaryElement.setAttribute("aria-live", "polite");
@@ -243,6 +251,9 @@ export class PdfPreview {
 
     this.pagesElement = document.createElement("div");
     this.pagesElement.className = "pages";
+    if (options.padding !== undefined && Number.isFinite(options.padding)) {
+      this.pagesElement.style.padding = `${Math.max(options.padding, 0)}px`;
+    }
     this.pagesElement.tabIndex = 0;
     this.pagesElement.setAttribute("aria-label", "PDF pages");
     viewer.append(toolbar, this.pagesElement);
@@ -302,8 +313,7 @@ export class PdfPreview {
     const firstPage = await pdf.getPage(1);
     const viewport = firstPage.getViewport({ scale: 1 });
     firstPage.cleanup();
-    const availableWidth = Math.max(this.pagesElement.clientWidth - 56, 120);
-    this.scale = clamp(availableWidth / viewport.width, this.minScale, this.maxScale);
+    this.scale = clamp(this.availablePageWidth() / viewport.width, this.minScale, this.maxScale);
     await this.renderPages();
   }
 
@@ -332,8 +342,7 @@ export class PdfPreview {
       const firstPage = await this.document.getPage(1);
       const viewport = firstPage.getViewport({ scale: 1 });
       firstPage.cleanup();
-      const availableWidth = Math.max(this.pagesElement.clientWidth - 56, 120);
-      this.scale = clamp(availableWidth / viewport.width, this.minScale, this.maxScale);
+      this.scale = clamp(this.availablePageWidth() / viewport.width, this.minScale, this.maxScale);
     } else {
       this.scale = clamp(initialScale, this.minScale, this.maxScale);
     }
@@ -398,6 +407,12 @@ export class PdfPreview {
     this.scaleElement.value = `${Math.round(this.scale * 100)}%`;
     this.zoomOutButton.disabled = this.scale <= this.minScale + 0.001;
     this.zoomInButton.disabled = this.scale >= this.maxScale - 0.001;
+  }
+
+  private availablePageWidth(): number {
+    const style = getComputedStyle(this.pagesElement);
+    const horizontalPadding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+    return Math.max(this.pagesElement.clientWidth - horizontalPadding, 120);
   }
 
   private showError(error: unknown): void {
