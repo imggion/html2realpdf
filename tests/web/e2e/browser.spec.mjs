@@ -31,6 +31,10 @@ test("browser harness passes structural, complex fixture, and PDF.js preview che
   await expect.poll(() => previewPages.evaluate((element) => getComputedStyle(element).paddingLeft)).toBe("12px");
   await page.getByRole("button", { name: "Show toolbar", exact: true }).click();
   await expect(previewToolbar).toBeVisible();
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(previewToolbar).toHaveCSS("background-color", "rgba(255, 255, 255, 0.96)");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(previewToolbar).toHaveCSS("background-color", "rgba(24, 32, 42, 0.96)");
   await page.getByRole("button", { name: "Hide toolbar", exact: true }).click();
   await expect(previewToolbar).toBeHidden();
   expect(failures, failures.join("\n")).toEqual([]);

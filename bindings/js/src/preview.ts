@@ -149,6 +149,23 @@ const VIEWER_STYLES = `
   @media (hover: hover) and (pointer: fine) {
     .zoom:not(:disabled):hover { background: #f5f7fa; }
   }
+  @media (prefers-color-scheme: dark) {
+    .toolbar {
+      background: rgba(24, 32, 42, 0.96);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12);
+    }
+    .summary { color: #b7c0ca; }
+    .zoom {
+      background: #26313c;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+      color: #f8fafc;
+    }
+    .zoom:focus-visible { outline-color: #fff; }
+    .scale { color: #d7dee7; }
+  }
+  @media (prefers-color-scheme: dark) and (hover: hover) and (pointer: fine) {
+    .zoom:not(:disabled):hover { background: #303c48; }
+  }
   @media (max-width: 560px) {
     .viewer { border-radius: 10px; min-height: 440px; }
     .toolbar { align-items: flex-start; flex-direction: column; }
