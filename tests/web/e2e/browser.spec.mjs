@@ -22,6 +22,11 @@ test("browser harness passes structural, complex fixture, and PDF.js preview che
   const results = await page.locator("#test-results").innerText();
   expect(results).toContain("24 passed, 0 failed");
   expect(await page.locator("html").getAttribute("data-test-status"), results).toBe("passed");
+  const previewToolbar = page.locator("[data-html2realpdf-preview] .toolbar");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(previewToolbar).toHaveCSS("background-color", "rgba(255, 255, 255, 0.96)");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(previewToolbar).toHaveCSS("background-color", "rgba(24, 32, 42, 0.96)");
   expect(failures, failures.join("\n")).toEqual([]);
 });
 
