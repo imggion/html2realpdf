@@ -169,6 +169,8 @@ const previewPdfButton = document.querySelector("#preview-pdf");
 const downloadPdfButton = document.querySelector("#download-pdf");
 const pdfStatus = document.querySelector("#pdf-status");
 const pdfPreview = document.querySelector("#pdf-preview");
+const previewToolbarButton = document.querySelector("#toggle-preview-toolbar");
+const previewPaddingInput = document.querySelector("#preview-padding");
 const pdfExport = document.querySelector("#pdf-export");
 const packageRenderButton = document.querySelector("#package-render");
 const packagePreviewButton = document.querySelector("#package-preview");
@@ -193,6 +195,10 @@ let generatedPdf;
 let selectedPdf;
 let selectedPdfFilename = "html2realpdf-document.pdf";
 let activePreview;
+let previewPdfDocument;
+let previewAriaLabel = "Generated PDF preview";
+let showPreviewToolbar = true;
+let previewPadding;
 let packageBuildPromise;
 let packageModulePromise;
 let packageRendererPromise;
@@ -494,6 +500,26 @@ function requirePreviewController(preview) {
   return preview;
 }
 
+function updatePreviewToolbarButton() {
+  previewToolbarButton.disabled = !previewPdfDocument;
+  previewToolbarButton.textContent = showPreviewToolbar ? "Hide toolbar" : "Show toolbar";
+  previewToolbarButton.setAttribute("aria-pressed", String(showPreviewToolbar));
+}
+
+async function renderPdfPreview(pdf, ariaLabel) {
+  disposeActivePreview();
+  activePreview = requirePreviewController(await pdf.preview(pdfPreview, {
+    initialScale: "fit-width",
+    ariaLabel,
+    showToolbar: showPreviewToolbar,
+    padding: previewPadding,
+  }));
+  previewPdfDocument = pdf;
+  previewAriaLabel = ariaLabel;
+  updatePreviewToolbarButton();
+  return activePreview;
+}
+
 async function selectRawPdf(rawPdf, filename, label) {
   const { PdfDocument } = await getPackageModule();
   selectPdfDocument(new PdfDocument(rawPdf.bytes, rawPdf.pageCount), filename, label);
@@ -504,6 +530,9 @@ function selectPdfDocument(pdf, filename, label) {
   selectedPdf?.dispose();
   selectedPdf = pdf;
   selectedPdfFilename = filename;
+  previewPdfDocument = pdf;
+  previewAriaLabel = `${filename} integrated preview`;
+  updatePreviewToolbarButton();
   window.__html2realpdfLastPdf = pdf.toUint8Array();
   pdfExport.setAttribute("data-pdf", bytesToBase64(window.__html2realpdfLastPdf));
   pdfPreview.replaceChildren(createPreviewEmpty(`Preview ${label} to inspect every generated page.`));
@@ -1437,14 +1466,43 @@ previewPdfButton.addEventListener("click", async () => {
       const rawPdf = await ensureGeneratedPdf();
       await selectRawPdf(rawPdf, "html2realpdf-smoke-invoice.pdf", "Smoke invoice");
     }
-    disposeActivePreview();
-    activePreview = requirePreviewController(await selectedPdf.preview(pdfPreview, {
-      initialScale: "fit-width",
-      ariaLabel: `${selectedPdfFilename} integrated preview`,
-    }));
+    await renderPdfPreview(selectedPdf, `${selectedPdfFilename} integrated preview`);
     pdfStatus.textContent = `${selectedPdfFilename} is rendered inside the page at ${Math.round(activePreview.currentScale * 100)}% zoom.`;
   } catch (error) {
     pdfStatus.textContent = `PDF preview failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+});
+
+previewToolbarButton.addEventListener("click", async () => {
+  const pdf = previewPdfDocument;
+  if (!pdf) return;
+  const previousValue = showPreviewToolbar;
+  showPreviewToolbar = !showPreviewToolbar;
+  previewToolbarButton.disabled = true;
+  try {
+    await renderPdfPreview(pdf, previewAriaLabel);
+    pdfStatus.textContent = `Preview toolbar ${showPreviewToolbar ? "shown" : "hidden"}.`;
+  } catch (error) {
+    showPreviewToolbar = previousValue;
+    updatePreviewToolbarButton();
+    pdfStatus.textContent = `Preview toolbar update failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+});
+
+previewPaddingInput.addEventListener("change", async () => {
+  const value = previewPaddingInput.valueAsNumber;
+  previewPadding = Number.isFinite(value) ? Math.max(value, 0) : undefined;
+  if (previewPadding !== undefined) previewPaddingInput.value = String(previewPadding);
+  const pdf = previewPdfDocument;
+  if (!pdf) return;
+  previewPaddingInput.disabled = true;
+  try {
+    await renderPdfPreview(pdf, previewAriaLabel);
+    pdfStatus.textContent = `Preview padding ${previewPadding === undefined ? "reset to responsive default" : `set to ${previewPadding}px`}.`;
+  } catch (error) {
+    pdfStatus.textContent = `Preview padding update failed: ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    previewPaddingInput.disabled = false;
   }
 });
 
@@ -1487,11 +1545,7 @@ packageRenderButton.addEventListener("click", () => {
 packagePreviewButton.addEventListener("click", async () => {
   try {
     if (!packagePdf) await renderWithPackageApi();
-    disposeActivePreview();
-    activePreview = requirePreviewController(await packagePdf.preview(pdfPreview, {
-      initialScale: "fit-width",
-      ariaLabel: "DOM package PDF integrated preview",
-    }));
+    await renderPdfPreview(packagePdf, "DOM package PDF integrated preview");
     packageStatus.textContent = `Package PDF rendered as ${packagePdf.pageCount} in-page canvas page(s).`;
   } catch (error) {
     packageStatus.textContent = `Package preview failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -1543,11 +1597,10 @@ function verifyComplexDocument(pdf, expectedPages, options = {}) {
 }
 
 async function verifyEmbeddedPreview(pdf) {
-  disposeActivePreview();
-  activePreview = requirePreviewController(await pdf.preview(pdfPreview, {
-    initialScale: "fit-width",
-    ariaLabel: "Automated integrated PDF preview",
-  }));
+  showPreviewToolbar = true;
+  previewPadding = undefined;
+  previewPaddingInput.value = "";
+  await renderPdfPreview(pdf, "Automated integrated PDF preview");
   const host = pdfPreview.querySelector("[data-html2realpdf-preview]");
   const shadow = host?.shadowRoot;
   if (!shadow) throw new Error("preview did not create an integrated shadow-DOM viewer");
@@ -1555,12 +1608,33 @@ async function verifyEmbeddedPreview(pdf) {
   const canvases = [...shadow.querySelectorAll("canvas")];
   if (canvases.length !== pdf.pageCount) throw new Error(`preview rendered ${canvases.length} canvases for ${pdf.pageCount} pages`);
   if (canvases.some((canvas) => canvas.width === 0 || canvas.height === 0)) throw new Error("preview contains an empty page canvas");
+  const toolbar = shadow.querySelector(".toolbar");
+  if (!(toolbar instanceof HTMLElement) || toolbar.hidden) throw new Error("preview toolbar is not visible by default");
+  const pages = shadow.querySelector(".pages");
+  if (!(pages instanceof HTMLElement) || getComputedStyle(pages).paddingLeft !== "28px") throw new Error("preview did not retain its default padding");
   if (!shadow.querySelector('button[aria-label="Zoom in"]')) throw new Error("preview zoom controls are missing");
   const initialScale = activePreview.currentScale;
   await activePreview.setScale(Math.min(initialScale + 0.25, 3));
   if (activePreview.currentScale <= initialScale) throw new Error("preview zoom API did not increase the scale");
   await activePreview.fitToWidth();
-  return canvases.length;
+
+  showPreviewToolbar = false;
+  previewPadding = 0;
+  previewPaddingInput.value = "0";
+  await renderPdfPreview(pdf, "Automated integrated PDF preview");
+  const hiddenHost = pdfPreview.querySelector("[data-html2realpdf-preview]");
+  const hiddenShadow = hiddenHost?.shadowRoot;
+  const hiddenToolbar = hiddenShadow?.querySelector(".toolbar");
+  if (!(hiddenToolbar instanceof HTMLElement) || !hiddenToolbar.hidden || getComputedStyle(hiddenToolbar).display !== "none") {
+    throw new Error("preview toolbar was not hidden by configuration");
+  }
+  const unpaddedPages = hiddenShadow?.querySelector(".pages");
+  if (!(unpaddedPages instanceof HTMLElement) || getComputedStyle(unpaddedPages).paddingLeft !== "0px") {
+    throw new Error("preview padding was not applied by configuration");
+  }
+  const hiddenCanvases = hiddenShadow?.querySelectorAll("canvas").length ?? 0;
+  if (hiddenCanvases !== pdf.pageCount) throw new Error("toolbar-free preview did not render every page");
+  return hiddenCanvases;
 }
 
 function runPipeline(instance, html, pipeline) {

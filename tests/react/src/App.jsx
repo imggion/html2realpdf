@@ -222,6 +222,8 @@ export function App() {
   const [documentMode, setDocumentMode] = useState("live");
   const [loadingStressReport, setLoadingStressReport] = useState(false);
   const [stressReportFixture, setStressReportFixture] = useState(null);
+  const [showPreviewToolbar, setShowPreviewToolbar] = useState(true);
+  const [previewPadding, setPreviewPadding] = useState("");
 
   useEffect(() => () => {
     previewControllerRef.current?.dispose();
@@ -412,6 +414,17 @@ export function App() {
     setBenchmarkStatus(`Downloaded ${result.artifact.filename} from the measured bytes.`);
   }
 
+  async function previewPdf(showToolbar, padding = previewPadding === "" ? undefined : Number(previewPadding)) {
+    if (!pdfRef.current || !previewRef.current) throw new Error("Render the React ref before previewing it");
+    previewControllerRef.current?.dispose();
+    previewControllerRef.current = await pdfRef.current.preview(previewRef.current, {
+      initialScale: "fit-width",
+      ariaLabel: "React ref PDF preview",
+      showToolbar,
+      padding,
+    });
+  }
+
   async function renderReport({ preview = false } = {}) {
     if (!reportRef.current) throw new Error("The report ref is not mounted");
     const profile = getDocumentProfile();
@@ -436,14 +449,44 @@ export function App() {
       pdfExportRef.current.setAttribute("data-pdf", bytesToBase64(bytes));
       setStatus(`Generated ${bytes.length.toLocaleString()} bytes across ${pdfRef.current.pageCount} page(s) from ref.current.`);
       if (preview) {
-        previewControllerRef.current = await pdfRef.current.preview(previewRef.current, {
-          initialScale: "fit-width",
-          ariaLabel: "React ref PDF preview",
-        });
+        await previewPdf(showPreviewToolbar);
         setStatus(`Previewing ${pdfRef.current.pageCount} PDF page(s) inside the React app.`);
       }
     } catch (error) {
       setStatus(`Render failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRendering(false);
+    }
+  }
+
+  async function togglePreviewToolbar() {
+    if (!pdfRef.current) {
+      setStatus("Render the React ref before changing preview options.");
+      return;
+    }
+    const nextValue = !showPreviewToolbar;
+    setRendering(true);
+    try {
+      await previewPdf(nextValue);
+      setShowPreviewToolbar(nextValue);
+      setStatus(`Preview toolbar ${nextValue ? "shown" : "hidden"}.`);
+    } catch (error) {
+      setStatus(`Preview toolbar update failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRendering(false);
+    }
+  }
+
+  async function applyPreviewPadding() {
+    const padding = previewPadding === "" ? undefined : Math.max(Number(previewPadding), 0);
+    if (padding !== undefined) setPreviewPadding(String(padding));
+    if (!pdfRef.current) return;
+    setRendering(true);
+    try {
+      await previewPdf(showPreviewToolbar, padding);
+      setStatus(`Preview padding ${padding === undefined ? "reset to responsive default" : `set to ${padding}px`}.`);
+    } catch (error) {
+      setStatus(`Preview padding update failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setRendering(false);
     }
@@ -542,6 +585,12 @@ export function App() {
         </div>
         <div>
           <h2>Generated PDF canvas</h2>
+          <div className="preview-options">
+            <button type="button" aria-pressed={showPreviewToolbar} onClick={togglePreviewToolbar} disabled={busy || !pdfRef.current}>
+              {showPreviewToolbar ? "Hide toolbar" : "Show toolbar"}
+            </button>
+            <label>Padding (px)<input type="number" min="0" step="1" placeholder="Auto" value={previewPadding} onChange={(event) => setPreviewPadding(event.target.value)} onBlur={applyPreviewPadding} disabled={busy} /></label>
+          </div>
           <div ref={previewRef} className="preview-stage"><p>Click “Render and preview” to compare the generated pages here.</p></div>
         </div>
       </section>

@@ -22,6 +22,17 @@ test("browser harness passes structural, complex fixture, and PDF.js preview che
   const results = await page.locator("#test-results").innerText();
   expect(results).toContain("24 passed, 0 failed");
   expect(await page.locator("html").getAttribute("data-test-status"), results).toBe("passed");
+  const previewToolbar = page.locator("#pdf-preview [data-html2realpdf-preview] .toolbar");
+  const previewPages = page.locator("#pdf-preview [data-html2realpdf-preview] .pages");
+  await expect(previewToolbar).toBeHidden();
+  await expect.poll(() => previewPages.evaluate((element) => getComputedStyle(element).paddingLeft)).toBe("0px");
+  await page.getByLabel("Padding (px)").fill("12");
+  await page.getByLabel("Padding (px)").press("Tab");
+  await expect.poll(() => previewPages.evaluate((element) => getComputedStyle(element).paddingLeft)).toBe("12px");
+  await page.getByRole("button", { name: "Show toolbar", exact: true }).click();
+  await expect(previewToolbar).toBeVisible();
+  await page.getByRole("button", { name: "Hide toolbar", exact: true }).click();
+  await expect(previewToolbar).toBeHidden();
   expect(failures, failures.join("\n")).toEqual([]);
 });
 
@@ -38,6 +49,17 @@ test("mounted React ref renders controlled state into a real in-page PDF preview
   expect(encoded).toBeTruthy();
   expect(Buffer.from(encoded, "base64").subarray(0, 8).toString()).toBe("%PDF-1.7");
   await expect(page.locator("[data-html2realpdf-preview] canvas")).toHaveCount(1);
+  const previewToolbar = page.locator("[data-html2realpdf-preview] .toolbar");
+  const previewPages = page.locator("[data-html2realpdf-preview] .pages");
+  await expect(previewToolbar).toBeVisible();
+  await expect.poll(() => previewPages.evaluate((element) => getComputedStyle(element).paddingLeft)).toBe("28px");
+  await page.getByLabel("Padding (px)").fill("12");
+  await page.getByLabel("Padding (px)").press("Tab");
+  await expect.poll(() => previewPages.evaluate((element) => getComputedStyle(element).paddingLeft)).toBe("12px");
+  await page.getByRole("button", { name: "Hide toolbar", exact: true }).click();
+  await expect(previewToolbar).toBeHidden();
+  await page.getByRole("button", { name: "Show toolbar", exact: true }).click();
+  await expect(previewToolbar).toBeVisible();
   await expect(page.getByText(customer).first()).toBeVisible();
   expect(failures, failures.join("\n")).toEqual([]);
 });

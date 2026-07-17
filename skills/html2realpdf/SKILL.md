@@ -114,6 +114,8 @@ Pass these options to `PdfDocument.preview`:
 
 | Option | Values and default |
 | --- | --- |
+| `showToolbar` | `true` by default; set to `false` to hide the summary and zoom controls |
+| `padding` | Non-negative CSS pixel value; `28` by default and `16` on narrow screens |
 | `initialScale` | `"fit-width"` (default) or a numeric scale |
 | `minScale` | `0.25` by default, clamped to at least `0.1` |
 | `maxScale` | `3` by default, clamped to at least `minScale` |
