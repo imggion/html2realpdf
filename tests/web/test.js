@@ -166,6 +166,7 @@ const generateReportButton = document.querySelector("#generate-report");
 const generateRoundedReportButton = document.querySelector("#generate-rounded-report");
 const generatePresentationButton = document.querySelector("#generate-presentation");
 const previewPdfButton = document.querySelector("#preview-pdf");
+const previewThemeToggle = document.querySelector("#preview-theme-toggle");
 const downloadPdfButton = document.querySelector("#download-pdf");
 const pdfStatus = document.querySelector("#pdf-status");
 const pdfPreview = document.querySelector("#pdf-preview");
@@ -205,6 +206,30 @@ let packageRendererPromise;
 let packagePdf;
 let benchmarkPdfJsPromise;
 const benchmarkArtifacts = new Map();
+const systemDarkMode = window.matchMedia("(prefers-color-scheme: dark)");
+let previewTheme = "system";
+
+function previewUsesDarkMode() {
+  return previewTheme === "dark" || (previewTheme === "system" && systemDarkMode.matches);
+}
+
+function applyPreviewTheme() {
+  const darkMode = previewUsesDarkMode();
+  document.documentElement.dataset.theme = darkMode ? "dark" : "light";
+  previewThemeToggle.setAttribute("aria-pressed", String(darkMode));
+  activePreview?.setTheme?.(previewTheme);
+  const previewHost = pdfPreview.querySelector("[data-html2realpdf-preview]");
+  if (previewHost instanceof HTMLElement) previewHost.dataset.theme = previewTheme;
+}
+
+previewThemeToggle.addEventListener("click", () => {
+  previewTheme = previewUsesDarkMode() ? "light" : "dark";
+  applyPreviewTheme();
+});
+systemDarkMode.addEventListener("change", () => {
+  if (previewTheme === "system") applyPreviewTheme();
+});
+applyPreviewTheme();
 
 function showOutput(label, text) {
   output.textContent = `--- ${label} ---\n${text}`;
@@ -513,6 +538,7 @@ async function renderPdfPreview(pdf, ariaLabel) {
     ariaLabel,
     showToolbar: showPreviewToolbar,
     padding: previewPadding,
+    theme: previewTheme,
   }));
   previewPdfDocument = pdf;
   previewAriaLabel = ariaLabel;

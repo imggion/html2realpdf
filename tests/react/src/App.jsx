@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { forwardRef, memo, useEffect, useRef, useState } from "react";
 import { createRenderer } from "@imggion/html2realpdf";
 import {
   analyzePdf,
@@ -202,9 +202,15 @@ const StressReportDocument = forwardRef(function StressReportDocument({ markup }
   return <article ref={ref} className="stress-report-root" dangerouslySetInnerHTML={{ __html: markup }} />;
 });
 
+const PreviewStage = memo(forwardRef(function PreviewStage(_, ref) {
+  return <div id="react-pdf-preview" ref={ref} className="preview-stage" aria-label="Generated PDF preview" />;
+}));
+
 export function App() {
   const reportRef = useRef(null);
   const previewRef = useRef(null);
+  const previewThemeToggleRef = useRef(null);
+  const previewThemeRef = useRef("light");
   const rendererRef = useRef(null);
   const pdfRef = useRef(null);
   const previewControllerRef = useRef(null);
@@ -224,6 +230,7 @@ export function App() {
   const [stressReportFixture, setStressReportFixture] = useState(null);
   const [showPreviewToolbar, setShowPreviewToolbar] = useState(true);
   const [previewPadding, setPreviewPadding] = useState("");
+  const previewUsesDarkMode = previewThemeRef.current === "dark";
 
   useEffect(() => () => {
     previewControllerRef.current?.dispose();
@@ -231,7 +238,17 @@ export function App() {
     rendererRef.current?.dispose();
     for (const artifact of benchmarkArtifactsRef.current.values()) artifact.dispose();
     benchmarkArtifactsRef.current.clear();
+    delete document.documentElement.dataset.theme;
   }, []);
+
+  function togglePreviewTheme() {
+    const currentTheme = previewThemeRef.current;
+    const nextTheme = currentTheme === "dark" ? "light" : "dark";
+    previewThemeRef.current = nextTheme;
+    document.documentElement.dataset.theme = nextTheme;
+    previewThemeToggleRef.current?.setAttribute("aria-pressed", String(nextTheme === "dark"));
+    previewControllerRef.current?.setTheme(nextTheme);
+  }
 
   function clearBenchmarkArtifacts() {
     for (const artifact of benchmarkArtifactsRef.current.values()) artifact.dispose();
@@ -417,11 +434,13 @@ export function App() {
   async function previewPdf(showToolbar, padding = previewPadding === "" ? undefined : Number(previewPadding)) {
     if (!pdfRef.current || !previewRef.current) throw new Error("Render the React ref before previewing it");
     previewControllerRef.current?.dispose();
+    previewControllerRef.current = null;
     previewControllerRef.current = await pdfRef.current.preview(previewRef.current, {
       initialScale: "fit-width",
       ariaLabel: "React ref PDF preview",
       showToolbar,
       padding,
+      theme: previewThemeRef.current,
     });
   }
 
@@ -590,8 +609,24 @@ export function App() {
               {showPreviewToolbar ? "Hide toolbar" : "Show toolbar"}
             </button>
             <label>Padding (px)<input type="number" min="0" step="1" placeholder="Auto" value={previewPadding} onChange={(event) => setPreviewPadding(event.target.value)} onBlur={applyPreviewPadding} disabled={busy} /></label>
+            <button
+              className="theme-toggle"
+              type="button"
+              aria-label="Toggle dark mode"
+              aria-pressed={previewUsesDarkMode}
+              ref={previewThemeToggleRef}
+              onClick={togglePreviewTheme}
+              disabled={busy || !pdfRef.current}
+            >
+              <svg className="theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M20.5 15.1A8.4 8.4 0 0 1 8.9 3.5 8.5 8.5 0 1 0 20.5 15.1Z" />
+              </svg>
+              <svg className="theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0-5h1v3h-2V2h1Zm0 17h1v3h-2v-3h1ZM2 11h3v2H2v-2Zm17 0h3v2h-3v-2ZM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4-2.1-2.1Zm12.1 12.1 1.4-1.4 2.1 2.1-1.4 1.4-2.1-2.1Zm0-11.4 2.1-2.1 1.4 1.4-2.1 2.1-1.4-1.4ZM4.2 18.4l2.1-2.1 1.4 1.4-2.1 2.1-1.4-1.4Z" />
+              </svg>
+            </button>
           </div>
-          <div ref={previewRef} className="preview-stage"><p>Click “Render and preview” to compare the generated pages here.</p></div>
+          <PreviewStage ref={previewRef} />
         </div>
       </section>
       <textarea ref={pdfExportRef} id="react-pdf-export" hidden aria-hidden="true" readOnly />
