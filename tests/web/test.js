@@ -1199,9 +1199,13 @@ async function verifyPdfLinkProtocolSafety() {
   const template = document.createElement("template");
   template.innerHTML = snapshot.html;
   for (const name of ["relative", "https", "mailto"]) {
-    if (!template.content.querySelector(`[data-link="${name}"]`)?.hasAttribute("href")) {
+    const anchor = template.content.querySelector(`[data-link="${name}"]`);
+    if (!anchor?.hasAttribute("href")) {
       throw new Error(`${name} PDF link was removed`);
     }
+  }
+  if (template.content.querySelector('[data-link="relative"]')?.getAttribute("href") !== "https://app.example.test/reports/weekly") {
+    throw new Error("relative PDF link was not resolved to an absolute URL");
   }
   for (const name of ["javascript", "data", "file", "invalid"]) {
     if (template.content.querySelector(`[data-link="${name}"]`)?.hasAttribute("href")) {

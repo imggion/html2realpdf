@@ -83,11 +83,13 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
         }
 
         if (fragment.link_url) |url| {
-            const annotation_rect: ?geometry.Rect = if (fragment.clip_rect) |clip| fragment.rect.intersection(clip) else fragment.rect;
-            if (annotation_rect) |rect| try commands.append(allocator, .{
-                .page_index = paged.page_index,
-                .command = .{ .link = .{ .rect = rect, .url = url } },
-            });
+            if (isSafeAbsolutePdfLink(url)) {
+                const annotation_rect: ?geometry.Rect = if (fragment.clip_rect) |clip| fragment.rect.intersection(clip) else fragment.rect;
+                if (annotation_rect) |rect| try commands.append(allocator, .{
+                    .page_index = paged.page_index,
+                    .command = .{ .link = .{ .rect = rect, .url = url } },
+                });
+            }
         }
         for (commands.items[command_start..]) |*command| {
             command.clip_rect = fragment.clip_rect;
@@ -109,6 +111,45 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
 
 fn edgeIsZero(edge: @import("box.zig").EdgeSizes) bool {
     return edge.top == 0 and edge.right == 0 and edge.bottom == 0 and edge.left == 0;
+}
+
+/// Rejects relative, unresolved, and viewer-active URLs before they become commands.
+fn isSafeAbsolutePdfLink(url: []const u8) bool {
+    const parsed = std.Uri.parse(url) catch return false;
+    const hierarchical = std.ascii.eqlIgnoreCase(parsed.scheme, "http") or
+        std.ascii.eqlIgnoreCase(parsed.scheme, "https") or
+        std.ascii.eqlIgnoreCase(parsed.scheme, "ftp");
+    if (hierarchical) return parsed.host != null;
+
+    const non_hierarchical = std.ascii.eqlIgnoreCase(parsed.scheme, "mailto") or
+        std.ascii.eqlIgnoreCase(parsed.scheme, "tel");
+    return non_hierarchical and !parsed.path.isEmpty();
+}
+
+test "accept only safe absolute PDF links" {
+    const accepted = [_][]const u8{
+        "https://example.com/report",
+        "HTTP://example.com/report",
+        "ftp://files.example.com/report.pdf",
+        "mailto:owner@example.com",
+        "tel:+390612345678",
+    };
+    for (accepted) |url| try std.testing.expect(isSafeAbsolutePdfLink(url));
+
+    const rejected = [_][]const u8{
+        "/reports/weekly",
+        "reports/weekly",
+        "//example.com/report",
+        "https:relative",
+        "https:///missing-host",
+        "mailto:",
+        "tel:",
+        "javascript:alert(1)",
+        "data:text/html,unsafe",
+        "file:///etc/passwd",
+        "not a url",
+    };
+    for (rejected) |url| try std.testing.expect(!isSafeAbsolutePdfLink(url));
 }
 
 test "build text and border commands" {

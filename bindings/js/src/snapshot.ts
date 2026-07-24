@@ -3092,15 +3092,18 @@ function sanitizePdfLinks(root: ParentNode, enableLinks: boolean | undefined, ba
     : [...root.querySelectorAll("a[href]")];
   for (const anchor of anchors) {
     const href = anchor.getAttribute("href");
-    if (enableLinks === false || href === null || !isSafePdfLink(href, baseUrl)) anchor.removeAttribute("href");
+    const safeUrl = enableLinks === false || href === null ? null : safePdfLink(href, baseUrl);
+    if (safeUrl === null) anchor.removeAttribute("href");
+    else anchor.setAttribute("href", safeUrl);
   }
 }
 
-function isSafePdfLink(href: string, baseUrl: string | URL): boolean {
+function safePdfLink(href: string, baseUrl: string | URL): string | null {
   try {
-    return PDF_LINK_PROTOCOLS.has(new URL(href, baseUrl).protocol);
+    const resolved = new URL(href, baseUrl);
+    return PDF_LINK_PROTOCOLS.has(resolved.protocol) ? resolved.href : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

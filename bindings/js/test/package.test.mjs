@@ -96,6 +96,33 @@ test("packaged WASM renders a real PDF with a result handle", async () => {
   }
 });
 
+test("packaged WASM rejects unsafe and unresolved PDF links", async () => {
+  const wasm = await readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url));
+  const { instance } = await WebAssembly.instantiate(wasm, {});
+  const exports = instance.exports;
+  const input = new TextEncoder().encode(`
+    <a href="https://safe.example/report">safe</a>
+    <a href="/relative/report">relative</a>
+    <a href="javascript:alert(1)">script</a>
+    <a href="file:///etc/passwd">file</a>
+  `);
+  const inputPointer = exports.alloc(input.length);
+  new Uint8Array(exports.memory.buffer, inputPointer, input.length).set(input);
+  const result = exports.render_html_to_pdf(inputPointer, input.length);
+
+  try {
+    assert.equal(exports.pdf_result_status(result), 0);
+    const pointer = exports.pdf_result_data_ptr(result);
+    const length = exports.pdf_result_data_len(result);
+    const serialized = new TextDecoder().decode(new Uint8Array(exports.memory.buffer, pointer, length));
+    assert.match(serialized, /https:\/\/safe\.example\/report/);
+    assert.doesNotMatch(serialized, /\/relative\/report|javascript:alert|file:\/\/\/etc\/passwd/);
+  } finally {
+    exports.pdf_result_free(result);
+    exports.free(inputPointer, input.length);
+  }
+});
+
 test("packaged WASM exposes structured render errors", async () => {
   const wasm = await readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url));
   const { instance } = await WebAssembly.instantiate(wasm, {});

@@ -353,6 +353,30 @@ test "render anchor elements as PDF link annotations" {
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "https://example.com/docs") != null);
 }
 
+test "reject unsafe and unresolved PDF link annotations in the core renderer" {
+    const allocator = std.testing.allocator;
+    var result = try renderHtml(
+        allocator,
+        \\ <p>
+        \\   <a href="https://safe.example/report">safe</a>
+        \\   <a href="mailto:owner@example.com">mail</a>
+        \\   <a href="/relative/report">relative</a>
+        \\   <a href="javascript:alert(1)">script</a>
+        \\   <a href="file:///etc/passwd">file</a>
+        \\ </p>
+    ,
+        .{},
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "https://safe.example/report") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "mailto:owner@example.com") != null);
+    const rejected = [_][]const u8{ "/relative/report", "javascript:alert", "file:///etc/passwd" };
+    for (rejected) |value| {
+        try std.testing.expect(std.mem.indexOf(u8, result.bytes, value) == null);
+    }
+}
+
 test "write ASCII and Unicode document metadata" {
     const allocator = std.testing.allocator;
     var result = try renderHtml(allocator, "<p>metadata</p>", .{
