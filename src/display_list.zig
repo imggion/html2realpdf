@@ -83,11 +83,13 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
         }
 
         if (fragment.link_url) |url| {
-            const annotation_rect: ?geometry.Rect = if (fragment.clip_rect) |clip| fragment.rect.intersection(clip) else fragment.rect;
-            if (annotation_rect) |rect| try commands.append(allocator, .{
-                .page_index = paged.page_index,
-                .command = .{ .link = .{ .rect = rect, .url = url } },
-            });
+            if (isSafeAbsolutePdfLink(url)) {
+                const annotation_rect: ?geometry.Rect = if (fragment.clip_rect) |clip| fragment.rect.intersection(clip) else fragment.rect;
+                if (annotation_rect) |rect| try commands.append(allocator, .{
+                    .page_index = paged.page_index,
+                    .command = .{ .link = .{ .rect = rect, .url = url } },
+                });
+            }
         }
         for (commands.items[command_start..]) |*command| {
             command.clip_rect = fragment.clip_rect;
@@ -109,6 +111,95 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
 
 fn edgeIsZero(edge: @import("box.zig").EdgeSizes) bool {
     return edge.top == 0 and edge.right == 0 and edge.bottom == 0 and edge.left == 0;
+}
+
+/// Rejects relative, unresolved, and viewer-active URLs before they become commands.
+fn isSafeAbsolutePdfLink(url: []const u8) bool {
+    if (!hasValidUriBytes(url)) return false;
+    const parsed = std.Uri.parse(url) catch return false;
+    const hierarchical = std.ascii.eqlIgnoreCase(parsed.scheme, "http") or
+        std.ascii.eqlIgnoreCase(parsed.scheme, "https") or
+        std.ascii.eqlIgnoreCase(parsed.scheme, "ftp");
+    if (hierarchical) return hasValidHierarchicalHost(parsed);
+
+    if (std.ascii.eqlIgnoreCase(parsed.scheme, "mailto")) {
+        return !parsed.path.isEmpty() or parsed.query != null;
+    }
+    return std.ascii.eqlIgnoreCase(parsed.scheme, "tel") and !parsed.path.isEmpty();
+}
+
+fn hasValidUriBytes(url: []const u8) bool {
+    var index: usize = 0;
+    while (index < url.len) : (index += 1) {
+        const byte = url[index];
+        if (std.ascii.isAlphanumeric(byte) or std.mem.indexOfScalar(u8, "-._~:/?#[]@!$&'()*+,;=", byte) != null) continue;
+        if (byte != '%' or index + 2 >= url.len or !std.ascii.isHex(url[index + 1]) or !std.ascii.isHex(url[index + 2])) return false;
+        index += 2;
+    }
+    return true;
+}
+
+fn hasValidHierarchicalHost(parsed: std.Uri) bool {
+    const component = parsed.host orelse return false;
+    const host = switch (component) {
+        .raw, .percent_encoded => |value| value,
+    };
+    if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') {
+        _ = std.Io.net.IpAddress.parseIp6(host[1 .. host.len - 1], 0) catch return false;
+        return true;
+    }
+    if (isNumericHost(host)) {
+        _ = std.Io.net.IpAddress.parseIp4(host, 0) catch return false;
+        return true;
+    }
+    std.Io.net.HostName.validate(host) catch return false;
+    return true;
+}
+
+fn isNumericHost(host: []const u8) bool {
+    for (host) |byte| switch (byte) {
+        '0'...'9' => {},
+        '.' => {},
+        else => return false,
+    };
+    return true;
+}
+
+test "accept only safe absolute PDF links" {
+    const accepted = [_][]const u8{
+        "https://example.com/report",
+        "HTTP://example.com/report",
+        "ftp://files.example.com/report.pdf",
+        "https://[2001:db8::1]/report",
+        "mailto:owner@example.com",
+        "mailto:?subject=Report",
+        "tel:+390612345678",
+    };
+    for (accepted) |url| try std.testing.expect(isSafeAbsolutePdfLink(url));
+
+    const rejected = [_][]const u8{
+        "/reports/weekly",
+        "reports/weekly",
+        "//example.com/report",
+        "https:relative",
+        "https:///missing-host",
+        "http://[]",
+        "http://example.com%2fevil.test",
+        "http://999.999.999.999",
+        "http://4294967296",
+        "http://999.999.999",
+        "http://256.1",
+        "https://example.com/has a space",
+        "https://example.com/%not-hex",
+        "https://example.com/路径",
+        "mailto:",
+        "tel:",
+        "javascript:alert(1)",
+        "data:text/html,unsafe",
+        "file:///etc/passwd",
+        "not a url",
+    };
+    for (rejected) |url| try std.testing.expect(!isSafeAbsolutePdfLink(url));
 }
 
 test "build text and border commands" {

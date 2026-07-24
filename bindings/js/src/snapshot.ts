@@ -344,6 +344,8 @@ const SUPPORTED_DISPLAY = new Set([
 ]);
 
 const ACTIVE_ELEMENTS = "script,iframe,object,embed";
+const PDF_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:", "ftp:"]);
+const PDF_LINK_HOST_PROTOCOLS = new Set(["http:", "https:", "ftp:"]);
 const AUTHORED_PAGE_MIRROR = "--html2realpdf-authored-page";
 const AUTHORED_FLOW_DIMENSION_MIRRORS = {
   width: "--html2realpdf-authored-width",
@@ -1404,7 +1406,7 @@ async function snapshotElement(
     for (const active of clone.matches(ACTIVE_ELEMENTS) ? [clone] : clone.querySelectorAll(ACTIVE_ELEMENTS)) {
       active.remove();
     }
-    if (options.enableLinks === false) for (const anchor of clone.querySelectorAll("a[href]")) anchor.removeAttribute("href");
+    sanitizePdfLinks(clone, options.enableLinks, options.baseUrl ?? element.ownerDocument.baseURI);
 
     const materializedInlineSvgs = await materializeInlineSvgs(clone, options, diagnostics);
     await materializeBackgroundImages(clone, options, diagnostics);
@@ -1444,7 +1446,7 @@ async function snapshotHtmlString(source: string, options: SnapshotOptions): Pro
   for (const active of template.content.querySelectorAll(ACTIVE_ELEMENTS)) active.remove();
   for (const refresh of template.content.querySelectorAll('meta[http-equiv="refresh" i]')) refresh.remove();
   for (const element of template.content.querySelectorAll("*")) removeEventHandlers(element);
-  if (options.enableLinks === false) for (const anchor of template.content.querySelectorAll("a[href]")) anchor.removeAttribute("href");
+  sanitizePdfLinks(template.content, options.enableLinks, options.baseUrl ?? document.baseURI);
   await materializeExternalStylesheets(template.content, options, diagnostics);
 
   const viewport = options.viewport ?? { width: 1280, height: 720 };
@@ -3081,6 +3083,40 @@ function removeEventHandlers(element: Element): void {
   for (const attribute of [...element.attributes]) {
     if (attribute.name.toLowerCase().startsWith("on")) element.removeAttribute(attribute.name);
   }
+}
+
+/** Keeps only URI schemes that PDF viewers can open without active or local content. */
+function sanitizePdfLinks(root: ParentNode, enableLinks: boolean | undefined, baseUrl: string | URL): void {
+  const rootElement = typeof (root as Element).matches === "function" ? root as Element : null;
+  const anchors = rootElement?.matches("a[href]")
+    ? [rootElement, ...root.querySelectorAll("a[href]")]
+    : [...root.querySelectorAll("a[href]")];
+  for (const anchor of anchors) {
+    const href = anchor.getAttribute("href");
+    const safeUrl = enableLinks === false || href === null ? null : safePdfLink(href, baseUrl);
+    if (safeUrl === null) anchor.removeAttribute("href");
+    else anchor.setAttribute("href", safeUrl);
+  }
+}
+
+function safePdfLink(href: string, baseUrl: string | URL): string | null {
+  try {
+    const resolved = new URL(href, baseUrl);
+    if (!PDF_LINK_PROTOCOLS.has(resolved.protocol)) return null;
+    if (PDF_LINK_HOST_PROTOCOLS.has(resolved.protocol) && !isValidPdfLinkHost(resolved.hostname)) return null;
+    return resolved.href;
+  } catch {
+    return null;
+  }
+}
+
+function isValidPdfLinkHost(hostname: string): boolean {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) return true;
+  const host = hostname.endsWith(".") ? hostname.slice(0, -1) : hostname;
+  if (host.length === 0 || host.length > 255) return false;
+  return host.split(".").every((label) =>
+    label.length >= 1 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
+  );
 }
 
 function isSvgElement(element: Element): boolean {
