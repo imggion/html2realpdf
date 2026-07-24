@@ -1186,6 +1186,9 @@ async function verifyPdfLinkProtocolSafety() {
     <a data-link="relative" href="/reports/weekly">Relative report</a>
     <a data-link="https" href="https://safe.example/report">HTTPS report</a>
     <a data-link="mailto" href="mailto:owner@example.com">Email owner</a>
+    <a data-link="mailto-query" href="mailto:?subject=Report">Email report</a>
+    <a data-link="idn" href="https://例え.テスト/路径">International report</a>
+    <a data-link="underscore" href="https://foo_bar.example/report">Invalid host</a>
     <a data-link="javascript" href="javascript:alert('unsafe')">Script link</a>
     <a data-link="data" href="data:text/html,unsafe">Data link</a>
     <a data-link="file" href="file:///etc/passwd">File link</a>
@@ -1198,7 +1201,7 @@ async function verifyPdfLinkProtocolSafety() {
   });
   const template = document.createElement("template");
   template.innerHTML = snapshot.html;
-  for (const name of ["relative", "https", "mailto"]) {
+  for (const name of ["relative", "https", "mailto", "mailto-query", "idn"]) {
     const anchor = template.content.querySelector(`[data-link="${name}"]`);
     if (!anchor?.hasAttribute("href")) {
       throw new Error(`${name} PDF link was removed`);
@@ -1207,7 +1210,10 @@ async function verifyPdfLinkProtocolSafety() {
   if (template.content.querySelector('[data-link="relative"]')?.getAttribute("href") !== "https://app.example.test/reports/weekly") {
     throw new Error("relative PDF link was not resolved to an absolute URL");
   }
-  for (const name of ["javascript", "data", "file", "invalid"]) {
+  if (template.content.querySelector('[data-link="idn"]')?.getAttribute("href") !== "https://xn--r8jz45g.xn--zckzah/%E8%B7%AF%E5%BE%84") {
+    throw new Error("international PDF link was not canonicalized");
+  }
+  for (const name of ["javascript", "data", "file", "invalid", "underscore"]) {
     if (template.content.querySelector(`[data-link="${name}"]`)?.hasAttribute("href")) {
       throw new Error(`${name} PDF link survived protocol filtering`);
     }

@@ -345,6 +345,7 @@ const SUPPORTED_DISPLAY = new Set([
 
 const ACTIVE_ELEMENTS = "script,iframe,object,embed";
 const PDF_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:", "ftp:"]);
+const PDF_LINK_HOST_PROTOCOLS = new Set(["http:", "https:", "ftp:"]);
 const AUTHORED_PAGE_MIRROR = "--html2realpdf-authored-page";
 const AUTHORED_FLOW_DIMENSION_MIRRORS = {
   width: "--html2realpdf-authored-width",
@@ -3101,10 +3102,21 @@ function sanitizePdfLinks(root: ParentNode, enableLinks: boolean | undefined, ba
 function safePdfLink(href: string, baseUrl: string | URL): string | null {
   try {
     const resolved = new URL(href, baseUrl);
-    return PDF_LINK_PROTOCOLS.has(resolved.protocol) ? resolved.href : null;
+    if (!PDF_LINK_PROTOCOLS.has(resolved.protocol)) return null;
+    if (PDF_LINK_HOST_PROTOCOLS.has(resolved.protocol) && !isValidPdfLinkHost(resolved.hostname)) return null;
+    return resolved.href;
   } catch {
     return null;
   }
+}
+
+function isValidPdfLinkHost(hostname: string): boolean {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) return true;
+  const host = hostname.endsWith(".") ? hostname.slice(0, -1) : hostname;
+  if (host.length === 0 || host.length > 255) return false;
+  return host.split(".").every((label) =>
+    label.length >= 1 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
+  );
 }
 
 function isSvgElement(element: Element): boolean {

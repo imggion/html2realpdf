@@ -360,7 +360,9 @@ test "reject unsafe and unresolved PDF link annotations in the core renderer" {
         \\ <p>
         \\   <a href="https://safe.example/report">safe</a>
         \\   <a href="mailto:owner@example.com">mail</a>
+        \\   <a href="mailto:?subject=Report">mail query</a>
         \\   <a href="/relative/report">relative</a>
+        \\   <a href="http://[]">malformed host</a>
         \\   <a href="javascript:alert(1)">script</a>
         \\   <a href="file:///etc/passwd">file</a>
         \\ </p>
@@ -371,7 +373,8 @@ test "reject unsafe and unresolved PDF link annotations in the core renderer" {
 
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "https://safe.example/report") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "mailto:owner@example.com") != null);
-    const rejected = [_][]const u8{ "/relative/report", "javascript:alert", "file:///etc/passwd" };
+    try std.testing.expect(std.mem.indexOf(u8, result.bytes, "mailto:?subject=Report") != null);
+    const rejected = [_][]const u8{ "/relative/report", "http://[]", "javascript:alert", "file:///etc/passwd" };
     for (rejected) |value| {
         try std.testing.expect(std.mem.indexOf(u8, result.bytes, value) == null);
     }

@@ -102,7 +102,9 @@ test("packaged WASM rejects unsafe and unresolved PDF links", async () => {
   const exports = instance.exports;
   const input = new TextEncoder().encode(`
     <a href="https://safe.example/report">safe</a>
+    <a href="mailto:?subject=Report">mail query</a>
     <a href="/relative/report">relative</a>
+    <a href="http://[]">malformed host</a>
     <a href="javascript:alert(1)">script</a>
     <a href="file:///etc/passwd">file</a>
   `);
@@ -116,7 +118,8 @@ test("packaged WASM rejects unsafe and unresolved PDF links", async () => {
     const length = exports.pdf_result_data_len(result);
     const serialized = new TextDecoder().decode(new Uint8Array(exports.memory.buffer, pointer, length));
     assert.match(serialized, /https:\/\/safe\.example\/report/);
-    assert.doesNotMatch(serialized, /\/relative\/report|javascript:alert|file:\/\/\/etc\/passwd/);
+    assert.match(serialized, /mailto:\?subject=Report/);
+    assert.doesNotMatch(serialized, /\/relative\/report|http:\/\/\[\]|javascript:alert|file:\/\/\/etc\/passwd/);
   } finally {
     exports.pdf_result_free(result);
     exports.free(inputPointer, input.length);
