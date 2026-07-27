@@ -20,7 +20,7 @@ test("browser harness passes structural, complex fixture, and PDF.js preview che
   ).toMatch(/passed|failed/);
 
   const results = await page.locator("#test-results").innerText();
-  expect(results).toContain("24 passed, 0 failed");
+  expect(results).toContain("25 passed, 0 failed");
   expect(await page.locator("html").getAttribute("data-test-status"), results).toBe("passed");
   const previewHost = page.locator("#pdf-preview [data-html2realpdf-preview]");
   const previewToolbar = page.locator("#pdf-preview [data-html2realpdf-preview] .toolbar");
