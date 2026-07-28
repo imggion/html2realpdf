@@ -362,12 +362,19 @@ const AlphaUsage = struct {
                 .linear_gradient => |gradient| if (gradientHasVariableAlpha(gradient.stops)) try self.collectGradient(allocator, gradient.stops, page_command.opacity, 128),
                 .radial_gradient => |gradient| if (gradientHasVariableAlpha(gradient.stops)) try self.collectGradient(allocator, gradient.stops, page_command.opacity, 96),
                 .conic_gradient => |gradient| if (gradientHasVariableAlpha(gradient.stops)) try self.collectGradient(allocator, gradient.stops, page_command.opacity, 180),
+                .stroke_rounded_border => |command| {
+                    if (borderSideEnabled(command.border.top, command.paint.top_style)) try self.add(allocator, command.paint.top_color.alpha * page_command.opacity);
+                    if (borderSideEnabled(command.border.right, command.paint.right_style)) try self.add(allocator, command.paint.right_color.alpha * page_command.opacity);
+                    if (borderSideEnabled(command.border.bottom, command.paint.bottom_style)) try self.add(allocator, command.paint.bottom_color.alpha * page_command.opacity);
+                    if (borderSideEnabled(command.border.left, command.paint.left_style)) try self.add(allocator, command.paint.left_color.alpha * page_command.opacity);
+                },
                 else => {},
             }
             const alpha: ?f32 = switch (page_command.command) {
                 .fill_rect => |command| command.color.alpha * page_command.opacity,
                 .fill_rounded_rect => |command| command.color.alpha * page_command.opacity,
                 .stroke_rounded_rect => |command| command.color.alpha * page_command.opacity,
+                .stroke_rounded_border => null,
                 .stroke_line => |command| command.color.alpha * page_command.opacity,
                 .text => |command| command.color.alpha * page_command.opacity,
                 .image => page_command.opacity,
@@ -687,7 +694,7 @@ fn pageContent(
             continue;
         }
         const has_transform = !page_command.transform.isIdentity();
-        if (page_command.clip_rect) |clip| try writeClipRect(writer, page_spec, clip, page_command.clip_radii, page_command.clip_transform);
+        const clip_count = try writeCommandClips(writer, page_spec, page_command);
         if (has_transform) try writeTransformState(writer, page_spec, page_command.transform);
 
         switch (page_command.command) {
@@ -729,6 +736,7 @@ fn pageContent(
                 try writeRoundedRectPathRadii(writer, x, y, width, height, resolvedCommandRadii(stroke.radii, stroke.radius, scale));
                 try writer.writeAll("S\n");
             },
+            .stroke_rounded_border => |stroke| try writeRoundedBorder(writer, page_spec, stroke, page_command.opacity, alpha_usage),
             .stroke_line => |line| {
                 const x1 = margins.left + line.from.x * scale;
                 const y1 = page_height - margins.top - line.from.y * scale;
@@ -771,7 +779,7 @@ fn pageContent(
                     );
                     if (run.artifact) try writer.writeAll("EMC\n");
                     if (has_transform) try writer.writeAll("Q\n");
-                    if (page_command.clip_rect != null) try writer.writeAll("Q\n");
+                    try closeGraphicsStates(writer, clip_count);
                     continue;
                 }
                 try writer.print("BT /F{d} {d:.3} Tf {d:.3} Tc 1 0 0 1 {d:.3} {d:.3} Tm ", .{
@@ -798,6 +806,7 @@ fn pageContent(
                         !clipRectsEqual(next_command.clip_rect, page_command.clip_rect) or
                         !clipRadiiEqual(next_command.clip_radii, page_command.clip_radii) or
                         !next_command.clip_transform.approxEqual(page_command.clip_transform, 0.0001) or
+                        !clipPathsEqual(next_command.clip_paths, page_command.clip_paths) or
                         !next_command.transform.approxEqual(page_command.transform, 0.0001) or
                         !opacityPathsEqual(next_command.opacity_groups, page_command.opacity_groups) or
                         @abs(next_command.opacity - page_command.opacity) > 0.0001 or
@@ -882,7 +891,7 @@ fn pageContent(
             .box_shadow => |shadow| try writeBoxShadow(writer, page_spec, shadow, page_command.opacity, alpha_usage),
         }
         if (has_transform) try writer.writeAll("Q\n");
-        if (page_command.clip_rect != null) try writer.writeAll("Q\n");
+        try closeGraphicsStates(writer, clip_count);
     }
     try writer.writeAll("Q");
 
@@ -1150,6 +1159,212 @@ fn fittedImageRect(command: display_list.Image) geometry.Rect {
     };
 }
 
+fn writeCommandClips(
+    writer: *std.Io.Writer,
+    page_spec: pagination.PageSpec,
+    command: display_list.PageCommand,
+) !usize {
+    if (command.clip_paths.len > 0) {
+        for (command.clip_paths.slice()) |clip| {
+            try writeClipRect(writer, page_spec, clip.rect, clip.radii, clip.transform);
+        }
+        return command.clip_paths.len;
+    }
+    if (command.clip_rect) |clip| {
+        try writeClipRect(writer, page_spec, clip, command.clip_radii, command.clip_transform);
+        return 1;
+    }
+    return 0;
+}
+
+fn closeGraphicsStates(writer: *std.Io.Writer, count: usize) !void {
+    for (0..count) |_| try writer.writeAll("Q\n");
+}
+
+fn borderSideEnabled(width: f32, style: box.BorderStyle) bool {
+    return width > 0 and style != .none;
+}
+
+fn writeRoundedBorder(
+    writer: *std.Io.Writer,
+    page_spec: pagination.PageSpec,
+    stroke: display_list.StrokeRoundedBorder,
+    opacity: f32,
+    alpha_usage: *const AlphaUsage,
+) !void {
+    const rect = stroke.rect;
+    const right = rect.x + rect.width;
+    const bottom = rect.y + rect.height;
+    const radii = stroke.radii.normalized(rect.width, rect.height);
+    const top_enabled = borderSideEnabled(stroke.border.top, stroke.paint.top_style);
+    const right_enabled = borderSideEnabled(stroke.border.right, stroke.paint.right_style);
+    const bottom_enabled = borderSideEnabled(stroke.border.bottom, stroke.paint.bottom_style);
+    const left_enabled = borderSideEnabled(stroke.border.left, stroke.paint.left_style);
+
+    if (top_enabled) {
+        try writeBorderStrokeState(writer, stroke.border.top, stroke.paint.top_color, stroke.paint.top_style, opacity, alpha_usage);
+        if (radii.top_left.x > 0 and radii.top_left.y > 0) {
+            try writeTransformedPoint(writer, page_spec, .identity, .{ .x = rect.x, .y = rect.y + radii.top_left.y }, "m");
+            try writeCssCornerCurve(writer, page_spec, .{
+                .x = rect.x,
+                .y = rect.y + radii.top_left.y,
+            }, .{
+                .x = rect.x + radii.top_left.x,
+                .y = rect.y,
+            }, .top_left, radii.top_left);
+        } else {
+            try writeTransformedPoint(writer, page_spec, .identity, .{ .x = rect.x, .y = rect.y }, "m");
+        }
+        try writeTransformedPoint(writer, page_spec, .identity, .{ .x = right - radii.top_right.x, .y = rect.y }, "l");
+        if (radii.top_right.x > 0 and radii.top_right.y > 0) {
+            try writeCssCornerCurve(writer, page_spec, .{
+                .x = right - radii.top_right.x,
+                .y = rect.y,
+            }, .{
+                .x = right,
+                .y = rect.y + radii.top_right.y,
+            }, .top_right, radii.top_right);
+        }
+        try writer.writeAll("S\n");
+    }
+
+    if (right_enabled) {
+        try writeBorderStrokeState(writer, stroke.border.right, stroke.paint.right_color, stroke.paint.right_style, opacity, alpha_usage);
+        if (!top_enabled and radii.top_right.x > 0 and radii.top_right.y > 0) {
+            try writeTransformedPoint(writer, page_spec, .identity, .{ .x = right - radii.top_right.x, .y = rect.y }, "m");
+            try writeCssCornerCurve(writer, page_spec, .{
+                .x = right - radii.top_right.x,
+                .y = rect.y,
+            }, .{
+                .x = right,
+                .y = rect.y + radii.top_right.y,
+            }, .top_right, radii.top_right);
+        } else {
+            try writeTransformedPoint(writer, page_spec, .identity, .{ .x = right, .y = rect.y + radii.top_right.y }, "m");
+        }
+        try writeTransformedPoint(writer, page_spec, .identity, .{ .x = right, .y = bottom - radii.bottom_right.y }, "l");
+        if (!bottom_enabled and radii.bottom_right.x > 0 and radii.bottom_right.y > 0) {
+            try writeCssCornerCurve(writer, page_spec, .{
+                .x = right,
+                .y = bottom - radii.bottom_right.y,
+            }, .{
+                .x = right - radii.bottom_right.x,
+                .y = bottom,
+            }, .bottom_right, radii.bottom_right);
+        }
+        try writer.writeAll("S\n");
+    }
+
+    if (bottom_enabled) {
+        try writeBorderStrokeState(writer, stroke.border.bottom, stroke.paint.bottom_color, stroke.paint.bottom_style, opacity, alpha_usage);
+        if (radii.bottom_right.x > 0 and radii.bottom_right.y > 0) {
+            try writeTransformedPoint(writer, page_spec, .identity, .{ .x = right, .y = bottom - radii.bottom_right.y }, "m");
+            try writeCssCornerCurve(writer, page_spec, .{
+                .x = right,
+                .y = bottom - radii.bottom_right.y,
+            }, .{
+                .x = right - radii.bottom_right.x,
+                .y = bottom,
+            }, .bottom_right, radii.bottom_right);
+        } else {
+            try writeTransformedPoint(writer, page_spec, .identity, .{ .x = right, .y = bottom }, "m");
+        }
+        try writeTransformedPoint(writer, page_spec, .identity, .{ .x = rect.x + radii.bottom_left.x, .y = bottom }, "l");
+        if (radii.bottom_left.x > 0 and radii.bottom_left.y > 0) {
+            try writeCssCornerCurve(writer, page_spec, .{
+                .x = rect.x + radii.bottom_left.x,
+                .y = bottom,
+            }, .{
+                .x = rect.x,
+                .y = bottom - radii.bottom_left.y,
+            }, .bottom_left, radii.bottom_left);
+        }
+        try writer.writeAll("S\n");
+    }
+
+    if (left_enabled) {
+        try writeBorderStrokeState(writer, stroke.border.left, stroke.paint.left_color, stroke.paint.left_style, opacity, alpha_usage);
+        if (!bottom_enabled and radii.bottom_left.x > 0 and radii.bottom_left.y > 0) {
+            try writeTransformedPoint(writer, page_spec, .identity, .{ .x = rect.x + radii.bottom_left.x, .y = bottom }, "m");
+            try writeCssCornerCurve(writer, page_spec, .{
+                .x = rect.x + radii.bottom_left.x,
+                .y = bottom,
+            }, .{
+                .x = rect.x,
+                .y = bottom - radii.bottom_left.y,
+            }, .bottom_left, radii.bottom_left);
+        } else {
+            try writeTransformedPoint(writer, page_spec, .identity, .{ .x = rect.x, .y = bottom - radii.bottom_left.y }, "m");
+        }
+        try writeTransformedPoint(writer, page_spec, .identity, .{ .x = rect.x, .y = rect.y + radii.top_left.y }, "l");
+        if (!top_enabled and radii.top_left.x > 0 and radii.top_left.y > 0) {
+            try writeCssCornerCurve(writer, page_spec, .{
+                .x = rect.x,
+                .y = rect.y + radii.top_left.y,
+            }, .{
+                .x = rect.x + radii.top_left.x,
+                .y = rect.y,
+            }, .top_left, radii.top_left);
+        }
+        try writer.writeAll("S\n");
+    }
+}
+
+const CssCorner = enum {
+    top_left,
+    top_right,
+    bottom_right,
+    bottom_left,
+};
+
+fn writeCssCornerCurve(
+    writer: *std.Io.Writer,
+    page_spec: pagination.PageSpec,
+    start: geometry.Point,
+    end: geometry.Point,
+    corner: CssCorner,
+    radius: box.ResolvedCornerRadius,
+) !void {
+    const control: f32 = 0.55228475;
+    const controls: [2]geometry.Point = switch (corner) {
+        .top_left => .{
+            .{ .x = start.x, .y = start.y - radius.y * control },
+            .{ .x = end.x - radius.x * control, .y = end.y },
+        },
+        .top_right => .{
+            .{ .x = start.x + radius.x * control, .y = start.y },
+            .{ .x = end.x, .y = end.y - radius.y * control },
+        },
+        .bottom_right => .{
+            .{ .x = start.x, .y = start.y + radius.y * control },
+            .{ .x = end.x + radius.x * control, .y = end.y },
+        },
+        .bottom_left => .{
+            .{ .x = start.x - radius.x * control, .y = start.y },
+            .{ .x = end.x, .y = end.y + radius.y * control },
+        },
+    };
+    try writeTransformedCurve(writer, page_spec, .identity, controls[0], controls[1], end);
+}
+
+fn writeBorderStrokeState(
+    writer: *std.Io.Writer,
+    width: f32,
+    color: geometry.Color,
+    style: box.BorderStyle,
+    opacity: f32,
+    alpha_usage: *const AlphaUsage,
+) !void {
+    try writeAlphaState(writer, alpha_usage, color.alpha * opacity);
+    try writeStrokeColor(writer, color);
+    switch (style) {
+        .none, .solid => try writer.writeAll("[] 0 d 0 J\n"),
+        .dashed => try writer.writeAll("[3 2] 0 d 0 J\n"),
+        .dotted => try writer.writeAll("[0.1 2] 0 d 1 J\n"),
+    }
+    try writer.print("{d:.3} w\n", .{@max(width * geometry.css_px_to_pdf_points, 0.1)});
+}
+
 fn writeClipRect(
     writer: *std.Io.Writer,
     page_spec: pagination.PageSpec,
@@ -1269,6 +1484,19 @@ fn clipRadiiEqual(left: ?@import("box.zig").ResolvedBorderRadii, right: ?@import
         .{ left.?.bottom_left, right.?.bottom_left },
     }) |pair| {
         if (@abs(pair[0].x - pair[1].x) > tolerance or @abs(pair[0].y - pair[1].y) > tolerance) return false;
+    }
+    return true;
+}
+
+fn clipPathsEqual(left: @import("layout/types.zig").ClipPathStack, right: @import("layout/types.zig").ClipPathStack) bool {
+    if (left.len != right.len) return false;
+    for (left.slice(), right.slice()) |a, b| {
+        if (!clipRectsEqual(a.rect, b.rect) or
+            !clipRadiiEqual(a.radii, b.radii) or
+            !a.transform.approxEqual(b.transform, 0.0001))
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -2784,6 +3012,71 @@ test "serialize elliptical rounded paths and rounded clipping as PDF curves" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, content, "W n\n"));
     try std.testing.expect(std.mem.indexOf(u8, content, " re W n\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "f\nQ\nQ") != null);
+}
+
+test "serialize nested rounded clips and asymmetric rounded borders" {
+    const allocator = std.testing.allocator;
+    var clip_paths = @import("layout/types.zig").ClipPathStack{};
+    clip_paths.append(.{
+        .owner_box = 0,
+        .rect = .{ .x = 5, .y = 5, .width = 100, .height = 60 },
+        .radii = .{
+            .top_left = .{ .x = 20, .y = 10 },
+            .top_right = .{ .x = 20, .y = 10 },
+            .bottom_right = .{ .x = 20, .y = 10 },
+            .bottom_left = .{ .x = 20, .y = 10 },
+        },
+    });
+    clip_paths.append(.{
+        .owner_box = 1,
+        .rect = .{ .x = 10, .y = 10, .width = 80, .height = 40 },
+        .radii = .{
+            .top_left = .{ .x = 12, .y = 6 },
+            .top_right = .{ .x = 12, .y = 6 },
+            .bottom_right = .{ .x = 12, .y = 6 },
+            .bottom_left = .{ .x = 12, .y = 6 },
+        },
+    });
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{
+        .page_index = 0,
+        .clip_paths = clip_paths,
+        .command = .{ .stroke_rounded_border = .{
+            .rect = .{ .x = 10, .y = 10, .width = 80, .height = 40 },
+            .border = .{ .top = 3, .right = 1, .left = 2 },
+            .paint = .{
+                .top_color = .{ .red = 1, .green = 0, .blue = 0 },
+                .right_color = .{ .red = 0, .green = 1, .blue = 0 },
+                .bottom_style = .none,
+                .left_color = .{ .red = 0, .green = 0, .blue = 1 },
+            },
+            .radii = .{
+                .top_left = .{ .x = 12, .y = 6 },
+                .top_right = .{ .x = 10, .y = 5 },
+                .bottom_right = .{ .x = 8, .y = 4 },
+                .bottom_left = .{ .x = 6, .y = 3 },
+            },
+        } },
+    });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var font_usage = try FontUsage.init(allocator, null);
+    defer font_usage.deinit(allocator);
+    try font_usage.collect(&list);
+    var alpha_usage = try AlphaUsage.init(allocator);
+    defer alpha_usage.deinit(allocator);
+    try alpha_usage.collect(allocator, &list);
+    const content = try pageContent(allocator, &list, 0, &font_usage, &alpha_usage, &.{}, null);
+    defer allocator.free(content);
+
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, content, "W n\n"));
+    try std.testing.expectEqual(@as(usize, 10), std.mem.count(u8, content, " c\n"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, content, " c h\n"));
+    try std.testing.expect(std.mem.count(u8, content, "Q\n") >= 2);
 }
 
 test "serialize CSS transforms as PDF matrices and transform link bounds" {

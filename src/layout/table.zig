@@ -35,14 +35,6 @@ const NewSpan = struct {
     cell: CellLayout,
 };
 
-const LayoutCheckpoint = struct {
-    fragments_len: usize,
-    pending_positioned_len: usize,
-    page_name_transitions_len: usize,
-    blank_page_indices_len: usize,
-    next_line_id: usize,
-};
-
 const RowLayout = struct {
     fragment_start: usize,
     height: f32,
@@ -78,9 +70,9 @@ pub fn layout(
     // page-end area. The measurement pass is rollback-only: fragments,
     // deferred positioned descendants, and line identifiers are restored
     // before the definitive fragmented layout.
-    const checkpoint = takeLayoutCheckpoint(state);
+    const checkpoint = state.takeLayoutCheckpoint();
     const measured = try layoutPass(state, table_id, start_x, start_y, width, 0, false);
-    restoreLayoutCheckpoint(state, checkpoint);
+    state.restoreLayoutCheckpoint(checkpoint);
 
     const footer_reservation = if (state.fragmentainer()) |context|
         if (measured.footer_height > 0 and measured.footer_height < context.extentAt(start_y))
@@ -90,24 +82,6 @@ pub fn layout(
     else
         0;
     return (try layoutPass(state, table_id, start_x, start_y, width, footer_reservation, true)).height;
-}
-
-fn takeLayoutCheckpoint(state: anytype) LayoutCheckpoint {
-    return .{
-        .fragments_len = state.fragments.items.len,
-        .pending_positioned_len = state.pending_positioned.items.len,
-        .page_name_transitions_len = state.page_name_transitions.items.len,
-        .blank_page_indices_len = state.blank_page_indices.items.len,
-        .next_line_id = state.next_line_id,
-    };
-}
-
-fn restoreLayoutCheckpoint(state: anytype, checkpoint: LayoutCheckpoint) void {
-    state.fragments.items.len = checkpoint.fragments_len;
-    state.pending_positioned.items.len = checkpoint.pending_positioned_len;
-    state.page_name_transitions.items.len = checkpoint.page_name_transitions_len;
-    state.blank_page_indices.items.len = checkpoint.blank_page_indices_len;
-    state.next_line_id = checkpoint.next_line_id;
 }
 
 /// Lays out one row at its actual fragmentainer position. Callers may discard
@@ -327,7 +301,7 @@ fn layoutPass(
                 state.recordPageName(target_page_start, fragmentation.startPageName(state.tree, row_id));
             }
         }
-        const row_checkpoint = takeLayoutCheckpoint(state);
+        const row_checkpoint = state.takeLayoutCheckpoint();
         var row_layout = try layoutTableRow(
             state,
             table_id,
@@ -358,7 +332,7 @@ fn layoutPass(
                     header_height + row_height <= page_height and
                     last_repeated_page != target_page;
                 const shift = page_height - page_y + (if (should_repeat_header) header_height else 0);
-                for (state.fragments.items[row_layout.fragment_start..]) |*fragment| fragment.rect.y += shift;
+                floats.shiftFragments(state.fragments.items[row_layout.fragment_start..], 0, shift);
                 row_y += shift;
                 if (should_repeat_header) {
                     try cloneTableSection(
@@ -390,7 +364,7 @@ fn layoutPass(
                     const shift = group_shift + (if (should_repeat_header) header_height else 0);
 
                     row_layout.deinit(state.allocator);
-                    restoreLayoutCheckpoint(state, row_checkpoint);
+                    state.restoreLayoutCheckpoint(row_checkpoint);
                     for (state.fragments.items[sibling_group_fragment_start.?..]) |*fragment| shiftFragmentY(fragment, shift);
                     row_y += shift;
                     sibling_group_y += shift;
@@ -436,7 +410,7 @@ fn layoutPass(
                 const shift = automatic_shift + (if (should_repeat_header) header_height else 0);
 
                 row_layout.deinit(state.allocator);
-                restoreLayoutCheckpoint(state, row_checkpoint);
+                state.restoreLayoutCheckpoint(row_checkpoint);
                 row_y += shift;
                 if (should_repeat_header) {
                     try cloneTableSection(
@@ -658,6 +632,7 @@ fn firstTextBaseline(state: anytype, start: usize, end: usize) ?f32 {
 fn shiftFragmentY(fragment: *Fragment, shift: f32) void {
     fragment.rect.y += shift;
     if (fragment.clip_rect) |*clip| clip.y += shift;
+    fragment.clip_paths.shift(0, shift);
     if (fragment.image_content_rect) |*content| content.y += shift;
 }
 

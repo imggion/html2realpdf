@@ -31,6 +31,18 @@ pub fn append(
         });
         return;
     }
+    if (radii.hasRadius() and hasPaintedBorder(border, paint)) {
+        try commands.append(allocator, .{
+            .page_index = page_index,
+            .command = .{ .stroke_rounded_border = .{
+                .rect = rect,
+                .border = border,
+                .paint = paint,
+                .radii = radii,
+            } },
+        });
+        return;
+    }
     if (border.top > 0 and paint.top_style != .none) try appendLine(allocator, commands, page_index, .{ .x = rect.x, .y = rect.y }, .{ .x = rect.x + rect.width, .y = rect.y }, border.top, paint.top_color, paint.top_style);
     if (border.right > 0 and paint.right_style != .none) try appendLine(allocator, commands, page_index, .{ .x = rect.x + rect.width, .y = rect.y }, .{ .x = rect.x + rect.width, .y = rect.y + rect.height }, border.right, paint.right_color, paint.right_style);
     if (border.bottom > 0 and paint.bottom_style != .none) try appendLine(allocator, commands, page_index, .{ .x = rect.x, .y = rect.y + rect.height }, .{ .x = rect.x + rect.width, .y = rect.y + rect.height }, border.bottom, paint.bottom_color, paint.bottom_style);
@@ -71,6 +83,13 @@ pub fn appendLine(
             .style = style,
         } },
     });
+}
+
+fn hasPaintedBorder(border: box.EdgeSizes, paint: layout.BorderPaint) bool {
+    return (border.top > 0 and paint.top_style != .none) or
+        (border.right > 0 and paint.right_style != .none) or
+        (border.bottom > 0 and paint.bottom_style != .none) or
+        (border.left > 0 and paint.left_style != .none);
 }
 
 fn uniformBorder(border: box.EdgeSizes, paint: layout.BorderPaint) bool {

@@ -41,6 +41,39 @@ pub fn layoutWithOptions(
     options: Options,
 ) std.mem.Allocator.Error!geometry.Rect {
     const source = state.tree.boxes.items[box_id];
+    const retry_avoid = state.web_sizing and
+        source.style.page_break_inside == .avoid and
+        !fragmentation.subtreeHasForcedBreak(state.tree, box_id);
+    if (!retry_avoid) return layoutOnce(state, box_id, initial_containing, cursor_y, options);
+
+    const original_cursor = cursor_y.*;
+    const checkpoint = state.takeLayoutCheckpoint();
+    const first = try layoutOnce(state, box_id, initial_containing, cursor_y, options);
+    const first_context = state.fragmentainer() orelse return first;
+    if (first_context.offset(first.y) == 0 or !first_context.spansFragmentainers(first.y, first.height)) return first;
+
+    const retry_start = first_context.pageStartForIndex(first_context.pageIndex(first.y) + 1);
+    state.restoreLayoutCheckpoint(checkpoint);
+    cursor_y.* = original_cursor + retry_start - first.y;
+    const retried = try layoutOnce(state, box_id, initial_containing, cursor_y, options);
+    const retry_context = state.fragmentainer() orelse return retried;
+    if (retry_context.fitsWithinFragmentainer(retried.y, retried.height)) return retried;
+
+    // A genuinely oversized subtree must retain its natural break
+    // opportunities at the original position.
+    state.restoreLayoutCheckpoint(checkpoint);
+    cursor_y.* = original_cursor;
+    return layoutOnce(state, box_id, initial_containing, cursor_y, options);
+}
+
+fn layoutOnce(
+    state: anytype,
+    box_id: box.BoxId,
+    initial_containing: geometry.Rect,
+    cursor_y: *f32,
+    options: Options,
+) std.mem.Allocator.Error!geometry.Rect {
+    const source = state.tree.boxes.items[box_id];
     const style = source.style;
     const margin = source.margin;
     const border = source.border;
@@ -481,12 +514,6 @@ pub fn layoutWithOptions(
                 for (state.fragments.items[fragment_start..]) |*fragment| fragment.rect.y += shift;
                 outer_y += shift;
             }
-        }
-    } else if (style.page_break_inside == .avoid and !fragmentation.subtreeHasForcedBreak(state.tree, box_id)) {
-        const shift = state.atomicFragmentainerShift(outer_y, outer_height);
-        if (shift > 0) {
-            floats.shiftFragments(state.fragments.items[fragment_start..], 0, shift);
-            outer_y += shift;
         }
     }
 

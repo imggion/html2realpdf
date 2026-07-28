@@ -33,6 +33,39 @@ pub const BorderPaint = struct {
     left_color: geometry.Color = geometry.Color.black,
 };
 
+pub const ClipPath = struct {
+    owner_box: box.BoxId = 0,
+    rect: geometry.Rect = .{},
+    radii: ?box.ResolvedBorderRadii = null,
+    transform: geometry.AffineTransform = .identity,
+};
+
+pub const ClipPathStack = struct {
+    items: [8]ClipPath = @splat(.{}),
+    len: u8 = 0,
+
+    pub fn slice(self: *const @This()) []const ClipPath {
+        return self.items[0..self.len];
+    }
+
+    pub fn mutableSlice(self: *@This()) []ClipPath {
+        return self.items[0..self.len];
+    }
+
+    pub fn append(self: *@This(), path: ClipPath) void {
+        if (self.len >= self.items.len) return;
+        self.items[self.len] = path;
+        self.len += 1;
+    }
+
+    pub fn shift(self: *@This(), dx: f32, dy: f32) void {
+        for (self.mutableSlice()) |*path| {
+            path.rect.x += dx;
+            path.rect.y += dy;
+        }
+    }
+};
+
 pub const Fragment = struct {
     kind: FragmentKind,
     source_box: box.BoxId,
@@ -40,6 +73,7 @@ pub const Fragment = struct {
     clip_rect: ?geometry.Rect = null,
     clip_radii: ?box.ResolvedBorderRadii = null,
     clip_transform: geometry.AffineTransform = .identity,
+    clip_paths: ClipPathStack = .{},
     line_id: ?usize = null,
     inline_container_line_id: ?usize = null,
     inline_atomic_container: ?box.BoxId = null,
@@ -98,6 +132,25 @@ pub const Fragment = struct {
     table_id: ?box.BoxId = null,
     is_table_header: bool = false,
     is_table_footer: bool = false,
+
+    pub fn appendClipPath(
+        self: *@This(),
+        owner_box: box.BoxId,
+        rect: geometry.Rect,
+        radii: ?box.ResolvedBorderRadii,
+    ) void {
+        const had_paths = self.clip_paths.len > 0;
+        self.clip_paths.append(.{
+            .owner_box = owner_box,
+            .rect = rect,
+            .radii = radii,
+        });
+        self.clip_rect = if (self.clip_rect) |existing|
+            existing.intersection(rect) orelse geometry.Rect{ .x = rect.x, .y = rect.y }
+        else
+            rect;
+        self.clip_radii = if (had_paths) null else radii;
+    }
 };
 
 pub const LayoutDocument = struct {

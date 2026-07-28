@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const geometry = @import("../geometry.zig");
+const layout_types = @import("../layout/types.zig");
 const pagination = @import("../pagination.zig");
 const box = @import("../box.zig");
 const font = @import("../font.zig");
@@ -42,6 +43,13 @@ pub const StrokeRoundedRect = struct {
     width: f32,
     color: geometry.Color,
     style: box.BorderStyle = .solid,
+};
+
+pub const StrokeRoundedBorder = struct {
+    rect: geometry.Rect,
+    border: box.EdgeSizes,
+    paint: layout_types.BorderPaint,
+    radii: box.ResolvedBorderRadii,
 };
 
 pub const StrokeLine = struct {
@@ -122,6 +130,7 @@ pub const Command = union(enum) {
     fill_rect: FillRect,
     fill_rounded_rect: FillRoundedRect,
     stroke_rounded_rect: StrokeRoundedRect,
+    stroke_rounded_border: StrokeRoundedBorder,
     stroke_line: StrokeLine,
     text: TextRun,
     link: LinkAnnotation,
@@ -138,6 +147,7 @@ pub const PageCommand = struct {
     clip_rect: ?geometry.Rect = null,
     clip_radii: ?box.ResolvedBorderRadii = null,
     clip_transform: geometry.AffineTransform = .identity,
+    clip_paths: layout_types.ClipPathStack = .{},
     opacity: f32 = 1,
     opacity_groups: box.OpacityGroupPath = .{},
     transform: geometry.AffineTransform = .identity,

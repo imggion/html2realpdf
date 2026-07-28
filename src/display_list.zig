@@ -15,6 +15,7 @@ pub const TextRun = paint.types.TextRun;
 pub const FillRect = paint.types.FillRect;
 pub const FillRoundedRect = paint.types.FillRoundedRect;
 pub const StrokeRoundedRect = paint.types.StrokeRoundedRect;
+pub const StrokeRoundedBorder = paint.types.StrokeRoundedBorder;
 pub const StrokeLine = paint.types.StrokeLine;
 pub const LinkAnnotation = paint.types.LinkAnnotation;
 pub const Image = paint.types.Image;
@@ -95,6 +96,7 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
             command.clip_rect = fragment.clip_rect;
             command.clip_radii = fragment.clip_radii;
             command.clip_transform = fragment.clip_transform;
+            command.clip_paths = fragment.clip_paths;
             command.opacity = if (fragment.opacity_groups.len > 0) 1 else fragment.opacity;
             command.opacity_groups = fragment.opacity_groups;
             command.transform = fragment.transform;
@@ -300,6 +302,45 @@ test "build per-corner elliptical paint and rounded clip commands" {
     try std.testing.expectApproxEqAbs(@as(f32, 30), page_command.command.fill_rounded_rect.radii.top_right.x, 0.001);
     try std.testing.expect(page_command.clip_radii != null);
     try std.testing.expectEqual(box.ResolvedCornerRadius{ .x = 15, .y = 8 }, page_command.clip_radii.?.top_left);
+}
+
+test "build asymmetric partial rounded border commands" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(pagination.PagedFragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    try fragments.append(allocator, .{
+        .page_index = 0,
+        .fragment = .{
+            .kind = .box,
+            .source_box = 0,
+            .rect = .{ .width = 120, .height = 60 },
+            .border = .{ .top = 3, .right = 1, .left = 2 },
+            .border_paint = .{
+                .top_color = .{ .red = 1, .green = 0, .blue = 0 },
+                .right_color = .{ .red = 0, .green = 1, .blue = 0 },
+                .bottom_style = .none,
+                .left_color = .{ .red = 0, .green = 0, .blue = 1 },
+            },
+            .border_radii = .{
+                .top_left = .{ .x = .{ .px = 18 }, .y = .{ .px = 9 } },
+                .top_right = .{ .x = .{ .px = 12 }, .y = .{ .px = 6 } },
+                .bottom_right = .{ .x = .{ .px = 16 }, .y = .{ .px = 8 } },
+                .bottom_left = .{ .x = .{ .px = 10 }, .y = .{ .px = 5 } },
+            },
+        },
+    });
+    const paged = pagination.PagedDocument{
+        .fragments = fragments,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var list = try build(allocator, &paged);
+    defer list.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), list.commands.items.len);
+    try std.testing.expect(list.commands.items[0].command == .stroke_rounded_border);
+    try std.testing.expectEqual(@as(f32, 3), list.commands.items[0].command.stroke_rounded_border.border.top);
+    try std.testing.expectEqual(@import("box.zig").BorderStyle.none, list.commands.items[0].command.stroke_rounded_border.paint.bottom_style);
 }
 
 test "propagate fragment clipping to every paint command" {

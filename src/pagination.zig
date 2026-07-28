@@ -1,6 +1,7 @@
 //! Page geometry and fragmentation for laid-out document fragments.
 
 const std = @import("std");
+const box = @import("box.zig");
 const geometry = @import("geometry.zig");
 const layout = @import("layout.zig");
 const page_geometry = @import("layout/page_geometry.zig");
@@ -115,7 +116,10 @@ pub fn paginateWithRules(
             page_fragment.rect.y = page_y;
             page_fragment.transform = shiftedTransform(fragment.transform, 0, page_y - fragment.rect.y);
             page_fragment.clip_transform = shiftedTransform(fragment.clip_transform, 0, page_y - fragment.rect.y);
-            page_fragment.clip_rect = clipForPage(fragment.clip_rect, page_start, content_height);
+            const page_clip = clipForPage(fragment.clip_rect, fragment.clip_radii, page_start, content_height);
+            page_fragment.clip_rect = page_clip.rect;
+            page_fragment.clip_radii = page_clip.radii;
+            page_fragment.clip_paths = clipPathsForPage(fragment.clip_paths, page_start, content_height, page_y - fragment.rect.y);
             page_fragment.image_content_rect = rectForPage(fragment.image_content_rect, page_start);
             try fragments.append(allocator, .{ .page_index = page_index, .fragment = page_fragment });
             page_count = @max(page_count, page_index + 1);
@@ -321,7 +325,10 @@ fn appendSplitBox(
         resolveFragmentainerInlineExtent(&segment, sequence.spec(page_index));
         segment.transform = shiftedTransform(fragment.transform, 0, -page_start);
         segment.clip_transform = shiftedTransform(fragment.clip_transform, 0, -page_start);
-        segment.clip_rect = clipForPage(fragment.clip_rect, page_start, content_height);
+        const page_clip = clipForPage(fragment.clip_rect, fragment.clip_radii, page_start, content_height);
+        segment.clip_rect = page_clip.rect;
+        segment.clip_radii = page_clip.radii;
+        segment.clip_paths = clipPathsForPage(fragment.clip_paths, page_start, content_height, -page_start);
         segment.image_content_rect = rectForPage(fragment.image_content_rect, page_start);
         const is_last = segment_height >= remaining;
         if (is_split) {
@@ -332,11 +339,8 @@ fn appendSplitBox(
                 .slice => {
                     if (!is_first) segment.border.top = 0;
                     if (!is_last) segment.border.bottom = 0;
-                    // The renderer currently stores one uniform radius rather than
-                    // per-corner radii, so a sliced middle edge cannot retain only
-                    // the two outer rounded corners.
                     segment.border_radius = 0;
-                    segment.border_radii = .{};
+                    segment.border_radii = slicedDecorationRadii(fragment, is_first, is_last);
                 },
                 .clone => {},
             }
@@ -363,16 +367,87 @@ fn shiftedTransform(transform: geometry.AffineTransform, shift_x: f32, shift_y: 
         .multiply(geometry.AffineTransform.translation(-shift_x, -shift_y));
 }
 
-fn clipForPage(absolute_clip: ?geometry.Rect, page_start: f32, content_height: f32) ?geometry.Rect {
-    const source = absolute_clip orelse return null;
+const PageClip = struct {
+    rect: ?geometry.Rect = null,
+    radii: ?box.ResolvedBorderRadii = null,
+};
+
+fn clipForPage(
+    absolute_clip: ?geometry.Rect,
+    absolute_radii: ?box.ResolvedBorderRadii,
+    page_start: f32,
+    content_height: f32,
+) PageClip {
+    const source = absolute_clip orelse return .{};
     var local = source;
     local.y -= page_start;
     const top = @max(local.y, 0);
     const bottom = @min(local.bottom(), content_height);
-    if (bottom <= top or local.width <= 0) return geometry.Rect{ .x = local.x, .y = top };
+    if (bottom <= top or local.width <= 0) return .{ .rect = .{ .x = local.x, .y = top } };
+    var radii = absolute_radii;
+    if (radii) |*resolved| {
+        if (source.y < page_start - epsilon) {
+            resolved.top_left = .{};
+            resolved.top_right = .{};
+        }
+        if (source.bottom() > page_start + content_height + epsilon) {
+            resolved.bottom_left = .{};
+            resolved.bottom_right = .{};
+        }
+    }
     local.y = top;
     local.height = bottom - top;
-    return local;
+    if (radii) |resolved| {
+        const normalized = resolved.normalized(local.width, local.height);
+        radii = if (normalized.hasRadius()) normalized else null;
+    }
+    return .{ .rect = local, .radii = radii };
+}
+
+fn clipPathsForPage(
+    absolute_paths: layout.ClipPathStack,
+    page_start: f32,
+    content_height: f32,
+    transform_shift: f32,
+) layout.ClipPathStack {
+    var result = absolute_paths;
+    var write_index: usize = 0;
+    for (absolute_paths.slice()) |path| {
+        const page_clip = clipForPage(path.rect, path.radii, page_start, content_height);
+        const rect = page_clip.rect orelse continue;
+        result.items[write_index] = path;
+        result.items[write_index].rect = rect;
+        result.items[write_index].radii = page_clip.radii;
+        result.items[write_index].transform = shiftedTransform(path.transform, 0, transform_shift);
+        write_index += 1;
+    }
+    result.len = @intCast(write_index);
+    return result;
+}
+
+fn slicedDecorationRadii(fragment: layout.Fragment, is_first: bool, is_last: bool) box.BorderRadii {
+    var radii = fragment.border_radii;
+    if (!radii.resolve(fragment.rect.width, fragment.rect.height).hasRadius() and fragment.border_radius > 0) {
+        const corner = box.CornerRadius{
+            .x = .{ .px = fragment.border_radius },
+            .y = .{ .px = fragment.border_radius },
+        };
+        radii = .{
+            .top_left = corner,
+            .top_right = corner,
+            .bottom_right = corner,
+            .bottom_left = corner,
+        };
+    }
+    if (!is_first) {
+        radii.top_left = .{};
+        radii.top_right = .{};
+    }
+    if (!is_last) {
+        radii.bottom_left = .{};
+        radii.bottom_right = .{};
+    }
+    return radii;
 }
 
 fn rectForPage(absolute_rect: ?geometry.Rect, page_start: f32) ?geometry.Rect {
@@ -552,6 +627,97 @@ test "clone decoration repeats borders and radius on every fragment" {
         try std.testing.expectEqual(@as(f32, 2), item.fragment.border.bottom);
         try std.testing.expectEqual(@as(f32, 8), item.fragment.border_radius);
     }
+}
+
+test "slice and clone preserve elliptical corners across three fragments" {
+    const allocator = std.testing.allocator;
+    const top_left = box.CornerRadius{ .x = .{ .px = 18 }, .y = .{ .px = 9 } };
+    const top_right = box.CornerRadius{ .x = .{ .px = 12 }, .y = .{ .px = 6 } };
+    const bottom_right = box.CornerRadius{ .x = .{ .px = 16 }, .y = .{ .px = 8 } };
+    const bottom_left = box.CornerRadius{ .x = .{ .px = 10 }, .y = .{ .px = 5 } };
+
+    inline for (.{ box.BoxDecorationBreak.slice, box.BoxDecorationBreak.clone }) |mode| {
+        var fragments = try std.ArrayList(layout.Fragment).initCapacity(allocator, 1);
+        defer fragments.deinit(allocator);
+        try fragments.append(allocator, .{
+            .kind = .box,
+            .source_box = 0,
+            .rect = .{ .width = 100, .height = 250 },
+            .border = .{ .top = 3, .right = 1, .bottom = 5, .left = 2 },
+            .border_paint = .{
+                .top_color = .{ .red = 1, .green = 0, .blue = 0 },
+                .right_color = .{ .red = 0, .green = 1, .blue = 0 },
+                .bottom_color = .{ .red = 0, .green = 0, .blue = 1 },
+                .left_color = .{ .red = 1, .green = 0, .blue = 1 },
+            },
+            .border_radii = .{
+                .top_left = top_left,
+                .top_right = top_right,
+                .bottom_right = bottom_right,
+                .bottom_left = bottom_left,
+            },
+            .box_decoration_break = mode,
+        });
+        const continuous = layout.LayoutDocument{
+            .fragments = fragments,
+            .content_width = 100,
+            .content_height = 250,
+        };
+        var paged = try paginate(allocator, &continuous, .{ .width_points = 75, .height_points = 75 });
+        defer paged.deinit(allocator);
+
+        try std.testing.expectEqual(@as(usize, 3), paged.fragments.items.len);
+        for (paged.fragments.items, 0..) |item, index| {
+            const resolved = item.fragment.border_radii.resolve(item.fragment.rect.width, item.fragment.rect.height);
+            if (mode == .clone or index == 0) {
+                try std.testing.expect(resolved.top_left.x > 0 and resolved.top_right.y > 0);
+            } else {
+                try std.testing.expectEqual(@as(f32, 0), resolved.top_left.x);
+                try std.testing.expectEqual(@as(f32, 0), resolved.top_right.y);
+            }
+            if (mode == .clone or index == 2) {
+                try std.testing.expect(resolved.bottom_left.x > 0 and resolved.bottom_right.y > 0);
+            } else {
+                try std.testing.expectEqual(@as(f32, 0), resolved.bottom_left.x);
+                try std.testing.expectEqual(@as(f32, 0), resolved.bottom_right.y);
+            }
+        }
+    }
+}
+
+test "page clipping keeps only radii on uncut overflow edges" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(layout.Fragment).initCapacity(allocator, 1);
+    defer fragments.deinit(allocator);
+    var fragment = layout.Fragment{
+        .kind = .box,
+        .source_box = 0,
+        .rect = .{ .width = 100, .height = 250 },
+        .background = .{ .red = 0.2, .green = 0.4, .blue = 0.8 },
+    };
+    const radii = box.ResolvedBorderRadii{
+        .top_left = .{ .x = 18, .y = 9 },
+        .top_right = .{ .x = 12, .y = 6 },
+        .bottom_right = .{ .x = 16, .y = 8 },
+        .bottom_left = .{ .x = 10, .y = 5 },
+    };
+    fragment.appendClipPath(0, .{ .width = 100, .height = 250 }, radii);
+    try fragments.append(allocator, fragment);
+    const continuous = layout.LayoutDocument{
+        .fragments = fragments,
+        .content_width = 100,
+        .content_height = 250,
+    };
+    var paged = try paginate(allocator, &continuous, .{ .width_points = 75, .height_points = 75 });
+    defer paged.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), paged.fragments.items.len);
+    const first = paged.fragments.items[0].fragment.clip_paths.items[0].radii.?;
+    const middle = paged.fragments.items[1].fragment.clip_paths.items[0].radii;
+    const last = paged.fragments.items[2].fragment.clip_paths.items[0].radii.?;
+    try std.testing.expect(first.top_left.x > 0 and first.bottom_left.x == 0);
+    try std.testing.expect(middle == null);
+    try std.testing.expect(last.top_left.x == 0 and last.bottom_left.x > 0);
 }
 
 test "document profile preserves repeated fragment borders" {

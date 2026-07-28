@@ -101,6 +101,7 @@ pub fn shiftFragment(fragment: *types.Fragment, dx: f32, dy: f32) void {
         clip.x += dx;
         clip.y += dy;
     }
+    fragment.clip_paths.shift(dx, dy);
     if (fragment.image_content_rect) |*content| {
         content.x += dx;
         content.y += dy;
