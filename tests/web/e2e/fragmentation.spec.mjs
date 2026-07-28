@@ -127,6 +127,119 @@ test("table header and footer groups repeat in the real PDF", async ({ page }) =
   expect(result.pages[1]).toContain("THREE");
 });
 
+test("transparent zebra rows preserve right-aligned inline-flex dots before and after fragmentation", async ({ page }) => {
+  await page.goto("/tests/web/index.html");
+  const result = await page.evaluate(async ({ cssPxToPdfPt }) => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json", { cache: "no-store" })
+      .then((response) => response.json());
+    const pkg = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const pdfjs = await import(`/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.min.mjs`);
+    pdfjs.GlobalWorkerOptions.workerSrc = `/bindings/js/.browser-build/${manifest.buildId}/vendor/pdf.worker.min.mjs`;
+    const renderer = await pkg.createRenderer({ execution: "main" });
+
+    const fixture = document.createElement("section");
+    fixture.className = "zebra-table-regression";
+    fixture.innerHTML = `
+      <style>
+        .zebra-table-regression, .zebra-table-regression * { box-sizing: border-box; }
+        .zebra-table-regression { width: 200px; margin: 0; font-family: Noto Sans; font-size: 10px; line-height: 10px; }
+        .zebra-clip { overflow: hidden; border-radius: 6px; }
+        .zebra-table { width: 200px; border-collapse: collapse; }
+        .zebra-table th, .zebra-table td { padding: 0; }
+        .zebra-table thead tr { height: 20px; background: #1e40af; color: #ffffff; }
+        .zebra-table tbody tr { height: 24px; }
+        .zebra-table tbody tr:nth-child(even) { background: #e2e8f0; }
+        .zebra-table td:last-child { text-align: right; }
+        .zebra-dot { display: inline-flex; width: 8px; height: 8px; border-radius: 999px; background: #dc2626; }
+      </style>
+      <div class="zebra-clip">
+        <table class="zebra-table">
+          <colgroup><col style="width:150px"><col style="width:50px"></colgroup>
+          <thead><tr><th>LABEL</th><th>STATUS</th></tr></thead>
+          <tbody>
+            <tr><td>ROW-1</td><td><span class="zebra-dot"></span></td></tr>
+            <tr><td>ROW-2</td><td><span class="zebra-dot"></span></td></tr>
+            <tr><td>ROW-3</td><td><span class="zebra-dot"></span></td></tr>
+            <tr><td>ROW-4</td><td><span class="zebra-dot"></span></td></tr>
+          </tbody>
+        </table>
+      </div>`;
+    document.body.append(fixture);
+
+    const inspect = async (pageHeight) => {
+      const pdf = await renderer.render(fixture, {
+        cssProfile: "web",
+        mediaType: "print",
+        page: { format: [200, pageHeight], unit: "px", margin: 0 },
+        viewport: { width: 200, height: pageHeight },
+        unsupportedCss: "error",
+      });
+      const diagnostics = pdf.diagnostics;
+      const documentHandle = await pdfjs.getDocument({ data: pdf.toUint8Array() }).promise;
+      const pages = [];
+      for (let pageNumber = 1; pageNumber <= documentHandle.numPages; pageNumber += 1) {
+        const current = await documentHandle.getPage(pageNumber);
+        const textContent = await current.getTextContent();
+        const operators = await current.getOperatorList();
+        const text = textContent.items.flatMap((item) => "str" in item && item.str.trim() ? [item.str.trim()] : []);
+        const dots = [];
+        let fillColor = null;
+        let clipCount = 0;
+        let containsRasterImage = false;
+        for (let index = 0; index < operators.fnArray.length; index += 1) {
+          const operator = operators.fnArray[index];
+          const args = operators.argsArray[index];
+          if (operator === pdfjs.OPS.setFillRGBColor) fillColor = args[0];
+          if (operator === pdfjs.OPS.clip || operator === pdfjs.OPS.eoClip) clipCount += 1;
+          if (operator === pdfjs.OPS.paintImageXObject || operator === pdfjs.OPS.paintInlineImageXObject) containsRasterImage = true;
+          if (operator !== pdfjs.OPS.constructPath || fillColor !== "#dc2626") continue;
+          const [left, bottom, right, top] = Array.from(args[2]);
+          if ((right - left) / cssPxToPdfPt > 9 || (top - bottom) / cssPxToPdfPt > 9) continue;
+          dots.push({
+            x: left / cssPxToPdfPt,
+            y: pageHeight - top / cssPxToPdfPt,
+            width: (right - left) / cssPxToPdfPt,
+            height: (top - bottom) / cssPxToPdfPt,
+          });
+        }
+        pages.push({ text, dots, clipCount, containsRasterImage });
+      }
+      const summary = { diagnostics, pageCount: documentHandle.numPages, pages };
+      await documentHandle.destroy();
+      pdf.dispose();
+      return summary;
+    };
+
+    const single = await inspect(200);
+    fixture.querySelector("tbody tr:nth-child(3)").style.breakBefore = "page";
+    const fragmented = await inspect(68);
+    fixture.remove();
+    renderer.dispose();
+    return { single, fragmented };
+  }, { cssPxToPdfPt: CSS_PX_TO_PDF_PT });
+
+  expect(result.single.diagnostics).toEqual([]);
+  expect(result.single.pageCount).toBe(1);
+  expect(result.single.pages[0].text.filter((value) => value === "LABEL")).toHaveLength(1);
+  expect(result.single.pages[0].dots).toHaveLength(4);
+
+  expect(result.fragmented.diagnostics).toEqual([]);
+  expect(result.fragmented.pageCount).toBe(2);
+  expect(result.fragmented.pages.map((pdfPage) => pdfPage.text.filter((value) => value === "LABEL").length)).toEqual([1, 1]);
+  expect(result.fragmented.pages.map((pdfPage) => pdfPage.dots.length)).toEqual([2, 2]);
+  expect(result.fragmented.pages.every((pdfPage) => pdfPage.clipCount > 0 && !pdfPage.containsRasterImage)).toBe(true);
+
+  const referenceX = result.single.pages[0].dots[0].x;
+  for (const dot of [
+    ...result.single.pages[0].dots,
+    ...result.fragmented.pages.flatMap((pdfPage) => pdfPage.dots),
+  ]) {
+    expect(dot.x).toBeCloseTo(referenceX, 2);
+    expect(dot.width).toBeCloseTo(8, 2);
+    expect(dot.height).toBeCloseTo(8, 2);
+  }
+});
+
 test("Report 360 legend and auto-height table rows fragment without duplicate content", async ({ page }) => {
   await page.goto("/tests/web/index.html");
   const result = await page.evaluate(async ({ fixtureHtml, pageSize, cssPxToPdfPt }) => {

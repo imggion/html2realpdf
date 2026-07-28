@@ -1,6 +1,6 @@
 ---
 name: html2realpdf
-description: Integrate and troubleshoot @imggion/html2realpdf in browser TypeScript or JavaScript projects. Use when rendering HTML strings, DOM elements, or React-compatible refs to selectable PDFs; configuring pages, resources, fonts, SVG or canvas output; previewing, downloading, or exporting PDFs; inspecting diagnostics; or migrating supported html2pdf.js chains.
+description: Integrate and troubleshoot @imggion/html2realpdf in browser TypeScript or JavaScript projects. Use when rendering HTML strings, DOM elements, or React-compatible refs to selectable PDFs; designing production HTML and CSS templates; configuring deterministic A4 layouts, pagination, cards, tables, legends, resources, fonts, SVG, or canvas output; diagnosing clipped content, blank pages, or alignment issues; previewing, downloading, or exporting PDFs; inspecting diagnostics; or migrating supported html2pdf.js chains.
 ---
 
 # Use html2realpdf
@@ -44,6 +44,237 @@ try {
 
 Treat four-value margins as `[top, left, bottom, right]`, matching the
 html2pdf.js compatibility API rather than CSS shorthand order.
+
+## Author production report templates
+
+Define one page geometry contract. Prefer `page.margin` for application-owned
+reports, then size the rendered root against the resulting content box. Do not
+also add equivalent `@page` margins and root padding.
+
+```ts
+import { renderPdf, type RenderOptions } from "@imggion/html2realpdf";
+const reportOptions: RenderOptions = {
+  page: { format: "a4", unit: "mm", margin: [12, 13, 12, 13] },
+  cssProfile: "web",
+  mediaType: "print",
+  layoutContext: "page",
+  viewport: { width: 1200, height: 1600 },
+  pageBreak: { avoid: [".pdf-atomic"], legacy: false },
+  fallback: "error",
+};
+const pdf = await renderPdf(document.querySelector("#report")!, reportOptions);
+```
+
+For A4 with 13 mm left and right margins, the content box is 184 mm wide. A
+root width of `100%` is usually sufficient; use the explicit maximum only when
+the template must remain independent of its host page.
+
+```html
+<main id="report" class="pdf-document">
+  <header class="pdf-header">
+    <img class="pdf-logo" src="/brand/logo.svg" alt="Example Company" />
+    <div><p class="pdf-eyebrow">Assessment report</p><h1>Candidate name</h1></div>
+  </header>
+  <section class="pdf-section">
+    <h2 class="pdf-keep-with-next">Profile</h2>
+    <dl class="pdf-metadata-grid">
+      <div><dt>Role</dt><dd>Product Designer</dd></div>
+      <div><dt>Interview date</dt><dd>28 July 2026</dd></div>
+    </dl>
+  </section>
+  <section class="pdf-section">
+    <h2 class="pdf-keep-with-next">Summary</h2>
+    <article class="pdf-card pdf-atomic">
+      <h3>Key finding</h3>
+      <p>Keep short, related content together inside a bounded card.</p>
+    </article>
+  </section>
+</main>
+```
+
+```css
+@media print {
+  .pdf-document, .pdf-document * { box-sizing: border-box; }
+  .pdf-document {
+    width: 100%;
+    max-width: 184mm;
+    margin: 0 auto;
+    color: #172033;
+    background: #fff;
+    font-family: Inter, Arial, sans-serif;
+    font-size: 10pt;
+    line-height: 1.45;
+  }
+  .pdf-header {
+    display: flex;
+    align-items: center;
+    gap: 8mm;
+    padding-bottom: 6mm;
+    border-bottom: 0.3mm solid #d8dee9;
+  }
+  .pdf-logo { display: block; width: 30mm; height: auto; }
+  .pdf-section { margin-top: 8mm; }
+  .pdf-section > :first-child { margin-top: 0; }
+  .pdf-section > :last-child { margin-bottom: 0; }
+  .pdf-metadata-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4mm 8mm;
+    margin: 0;
+  }
+  .pdf-metadata-grid > div { min-width: 0; }
+  .pdf-metadata-grid dt { color: #667085; font-size: 8.5pt; }
+  .pdf-metadata-grid dd { margin: 1mm 0 0; overflow-wrap: anywhere; }
+}
+```
+
+Use a mounted `Element` rather than an HTML string when the template depends
+on computed styles, pseudo-elements, responsive rules, live form values, or
+canvas state.
+
+### Compose pagination deliberately
+
+Use a small set of named pagination primitives instead of applying avoidance
+to every container.
+
+```css
+.pdf-flow { break-inside: auto; page-break-inside: auto; }
+.pdf-atomic { break-inside: avoid; page-break-inside: avoid; }
+.pdf-keep-with-next { break-after: avoid; page-break-after: avoid; }
+.pdf-break-before { break-before: page; page-break-before: always; }
+```
+
+- Apply `.pdf-atomic` only to content known to fit on one page. Let long prose,
+  lists, and tables fragment normally.
+- Keep a heading with the following block, but do not combine adjacent
+  `break-after` and `break-before` rules for the same boundary.
+- Prefer authored CSS plus narrow `pageBreak.avoid` selectors. Do not use
+  `avoidAll: true` or broad selectors such as every `div` in production.
+- Use one explicit page-break strategy. Do not insert empty spacer elements or
+  mutate the DOM after measuring page positions.
+
+### Keep cards intact
+
+Use semantic, bounded cards and give every painted surface an explicit
+background.
+
+```css
+.pdf-card {
+  padding: 5mm;
+  border: 0.3mm solid #d8dee9;
+  border-radius: 3mm;
+  background-color: #fff;
+}
+.pdf-card > :first-child { margin-top: 0; }
+.pdf-card > :last-child { margin-bottom: 0; }
+```
+
+If a card can grow beyond one page, remove `.pdf-atomic`, allow the content to
+flow, and avoid clipping overflow on its wrapper.
+
+### Render tables predictably
+
+Use semantic tables, declare column tracks explicitly, and keep cell widths
+consistent across every row.
+
+```html
+<div class="pdf-table-frame">
+  <table class="pdf-table">
+    <colgroup><col class="pdf-col-label" /><col /><col class="pdf-col-indicator" /></colgroup>
+    <thead><tr><th>Competency</th><th>Evidence</th><th>Level</th></tr></thead>
+    <tbody>
+      <tr>
+        <th scope="row">Collaboration</th>
+        <td>Concise evidence that may wrap onto multiple lines.</td>
+        <td class="pdf-indicator-cell">
+          <span class="pdf-level"><span class="pdf-dot pdf-dot-good"></span>High</span>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+```
+
+```css
+.pdf-table-frame { border: 0.3mm solid #d8dee9; border-radius: 3mm; }
+.pdf-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.pdf-col-label { width: 26%; }
+.pdf-col-indicator { width: 24mm; }
+.pdf-table th, .pdf-table td {
+  padding: 3mm;
+  border-bottom: 0.3mm solid #e8ecf2;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.pdf-table thead, .pdf-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.pdf-table tbody tr:nth-child(odd) { background-color: #fff; }
+.pdf-table tbody tr:nth-child(even) { background-color: #f7f9fc; }
+.pdf-indicator-cell { text-align: right; white-space: nowrap; }
+```
+
+Let the table and `tbody` fragment while keeping individual rows intact. Add
+`.pdf-atomic` to the frame only when the application can prove the complete
+table fits on one page, using measured or bounded row heights. For long tables,
+do not set `overflow: hidden` on the frame; clipping conflicts with
+fragmentation. Explicitly paint both odd and even row states so pagination does
+not depend on a transparent inherited surface.
+
+### Align legends, badges, and indicators
+
+Use flex alignment and fixed geometry. Avoid baseline nudges, negative margins,
+and transforms such as `translateY`.
+
+```css
+.pdf-level, .pdf-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 1.5mm;
+  min-height: 5mm;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+.pdf-dot {
+  display: inline-block;
+  flex: 0 0 3mm;
+  width: 3mm;
+  height: 3mm;
+  border-radius: 50%;
+}
+.pdf-dot-good { background-color: #16865c; }
+```
+
+### Avoid fragile PDF CSS
+
+- Do not simulate a page with fixed heights such as `min-height: 940px`.
+- Do not use `margin-top: auto`, empty blocks, or absolute positioning as a
+  pagination mechanism.
+- Do not duplicate margins across `page.margin`, `@page`, and root padding.
+- Do not put `overflow: hidden` on content that may fragment across pages.
+- Do not use `line-height: 0`, transforms, or negative offsets to align icons.
+- Scope report styles below `.pdf-document`; avoid host-wide `body` rules when
+  rendering a mounted fragment.
+- Do not inject a complete `<html>` document into a generic `div`. Mount the
+  report subtree or pass a self-contained HTML string intentionally.
+
+### Validate production output
+
+- Build with the production bundler and verify Worker and WASM asset loading.
+- Inspect diagnostics and fail on unsupported layout when fidelity matters.
+- Confirm text selection, links, and embedded fonts in the generated PDF.
+- Test empty, short, and long data, including a table that spans pages and a
+  paragraph or list crossing a page boundary.
+- Inspect first, continuation, and final pages for repeated headers, clipped
+  borders, blank pages, and row or legend alignment.
+- Render with the same viewport, media type, fonts, and chart export strategy
+  used in production.
 
 ## Configuration reference
 

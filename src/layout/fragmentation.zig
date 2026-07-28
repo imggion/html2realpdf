@@ -427,6 +427,7 @@ test "atomic placement uses the destination page usable extent" {
 
 test "forced page sides honor page parity and progression" {
     const ltr = Context.init(100, .left_to_right).?;
+    try std.testing.expectEqual(@as(f32, 100), ltr.forcedBreakStart(100, TestBreak.page));
     try std.testing.expectEqual(@as(f32, 100), ltr.forcedBreakStart(25, TestBreak.left));
     try std.testing.expectEqual(@as(f32, 200), ltr.forcedBreakStart(25, TestBreak.right));
     try std.testing.expectEqual(@as(f32, 200), ltr.forcedBreakStart(25, TestBreak.recto));

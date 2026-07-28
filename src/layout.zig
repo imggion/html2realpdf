@@ -1230,6 +1230,39 @@ test "forced page break advances following content to the next page" {
     try std.testing.expect(second_y.? >= 100);
 }
 
+test "Web forced break at a page boundary discards the preceding margin without skipping a page" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:100px;margin-bottom:30px'></div>" ++
+        "<div style='height:10px;margin-top:10px;break-before:page;background:#0000ff'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var target: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.blue == 1 and color.red == 0) target = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 110), target.?.y, 0.01);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, result.blank_pages.items);
+}
+
 test "Web facing-page breaks arbitrate adjacent before and after values" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -2081,6 +2114,131 @@ test "table captions and column definitions participate in Web layout" {
     try std.testing.expectApproxEqAbs(@as(f32, 120), cells[1].width, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 120), cells[2].width, 0.01);
     try std.testing.expect(top_y.? < row_y.? and row_y.? < bottom_y.?);
+}
+
+test "Web zebra table preserves transparent cell tracks and right aligned inline flex across pages" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:200px;table-layout:fixed;border-collapse:collapse'>" ++
+        "<colgroup><col style='width:150px'><col style='width:50px'></colgroup>" ++
+        "<thead><tr style='height:20px;background:#0000ff'><th>Label</th><th>Status</th></tr></thead>" ++
+        "<tbody>" ++
+        "<tr style='height:24px'><td>ONE</td><td style='text-align:right'><span style='display:inline-flex;width:8px;height:8px;background:#ff0000'></span></td></tr>" ++
+        "<tr style='height:24px;background:#eeeeee'><td>TWO</td><td style='text-align:right'><span style='display:inline-flex;width:8px;height:8px;background:#ff0000'></span></td></tr>" ++
+        "<tr style='height:24px;break-before:page'><td>THREE</td><td style='text-align:right'><span style='display:inline-flex;width:8px;height:8px;background:#ff0000'></span></td></tr>" ++
+        "<tr style='height:24px;background:#eeeeee'><td>FOUR</td><td style='text-align:right'><span style='display:inline-flex;width:8px;height:8px;background:#ff0000'></span></td></tr>" ++
+        "</tbody></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var single_page = try layout(allocator, &tree, &document, .{
+        .content_width = 200,
+        .web_sizing = true,
+        .atomic_inline_baselines = true,
+    });
+    defer single_page.deinit(allocator);
+
+    var single_transparent_cells: usize = 0;
+    var single_dots: usize = 0;
+    for (single_page.fragments.items) |fragment| {
+        const source_box = tree.boxes.items[fragment.source_box];
+        if (source_box.kind == .tableCell and fragment.rect.x >= 149) {
+            const row_id = source_box.parent orelse continue;
+            if (tree.boxes.items[row_id].style.background == null) {
+                single_transparent_cells += 1;
+                try std.testing.expectApproxEqAbs(@as(f32, 50), fragment.rect.width, 0.01);
+            }
+        }
+        const color = fragment.background orelse continue;
+        if (color.red != 1 or color.green != 0 or color.blue != 0 or fragment.rect.width != 8) continue;
+        single_dots += 1;
+        try std.testing.expectApproxEqAbs(@as(f32, 192), fragment.rect.x, 0.01);
+    }
+    try std.testing.expectEqual(@as(usize, 2), single_transparent_cells);
+    try std.testing.expectEqual(@as(usize, 4), single_dots);
+
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 200,
+        .page_height = 68,
+        .web_sizing = true,
+        .atomic_inline_baselines = true,
+    });
+    defer result.deinit(allocator);
+
+    var transparent_cells: usize = 0;
+    var dots: usize = 0;
+    var dot_pages: [2]usize = .{ 0, 0 };
+    var header_count: usize = 0;
+    for (result.fragments.items) |fragment| {
+        const source_box = tree.boxes.items[fragment.source_box];
+        if (source_box.kind == .tableCell and fragment.rect.x >= 149) {
+            const row_id = source_box.parent orelse continue;
+            if (tree.boxes.items[row_id].style.background == null) {
+                transparent_cells += 1;
+                try std.testing.expectApproxEqAbs(@as(f32, 50), fragment.rect.width, 0.01);
+            }
+        }
+        if (fragment.text) |text| {
+            if (std.mem.eql(u8, text, "Label")) header_count += 1;
+        }
+        const color = fragment.background orelse continue;
+        if (color.red != 1 or color.green != 0 or color.blue != 0 or fragment.rect.width != 8) continue;
+        dots += 1;
+        try std.testing.expectApproxEqAbs(@as(f32, 192), fragment.rect.x, 0.01);
+        const page_index: usize = @intFromFloat(@floor(fragment.rect.y / 68));
+        if (page_index < dot_pages.len) dot_pages[page_index] += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), transparent_cells);
+    try std.testing.expectEqual(@as(usize, 4), dots);
+    try std.testing.expectEqual([2]usize{ 2, 2 }, dot_pages);
+    try std.testing.expectEqual(@as(usize, 2), header_count);
+}
+
+test "Web table forced break resolves before vertical border spacing at a page boundary" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:100px;border-spacing:0 10px'><tbody>" ++
+        "<tr style='height:90px'><td>ONE</td></tr>" ++
+        "<tr style='height:10px;break-before:page;background:#0000ff'><td>TWO</td></tr>" ++
+        "</tbody></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var second_row: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.blue == 1 and color.red == 0 and tree.boxes.items[fragment.source_box].kind == .tableRow) {
+            second_row = fragment.rect;
+        }
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 110), second_row.?.y, 0.01);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, result.blank_pages.items);
 }
 
 test "Web table auto layout uses intrinsic cell contributions" {

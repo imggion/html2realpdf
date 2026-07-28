@@ -278,27 +278,30 @@ fn layoutPass(
             boundary_break = fragmentation.resolvePageNameBoundary(state.tree, previous_id, row_id, boundary_break);
         }
         if (state.web_sizing and boundary_break.isForced()) {
+            var boundary_y = row_y - vertical_spacing;
+            state.applyForcedBreak(&boundary_y, boundary_break);
+            row_y = boundary_y + vertical_spacing;
+            state.recordPageName(boundary_y, fragmentation.startPageName(state.tree, row_id));
+        }
+        if (state.web_sizing and !is_header_row and header_template_start != null) {
             if (state.fragmentainer()) |context| {
-                const target_page_start = context.forcedBreakStart(row_y, boundary_break);
-                if (target_page_start > row_y) {
-                    const target_page = context.pageIndex(target_page_start);
-                    const should_repeat_header = !is_header_row and
-                        header_template_start != null and
-                        header_height < state.pageExtentForName(target_page, fragmentation.startPageName(state.tree, row_id)) and
-                        last_repeated_page != target_page;
-                    row_y = target_page_start + (if (should_repeat_header) header_height else 0);
-                    if (should_repeat_header) {
-                        try cloneTableSection(
-                            state,
-                            header_template_start.?,
-                            header_template_end,
-                            header_start_y,
-                            target_page_start,
-                        );
-                        last_repeated_page = target_page;
-                    }
+                const target_page = context.pageIndex(row_y);
+                const first_table_page = context.pageIndex(start_y);
+                const should_repeat_header = target_page > first_table_page and
+                    last_repeated_page != target_page and
+                    header_height < state.pageExtentForName(target_page, fragmentation.startPageName(state.tree, row_id));
+                if (should_repeat_header) {
+                    const target_page_start = context.pageStartForIndex(target_page);
+                    try cloneTableSection(
+                        state,
+                        header_template_start.?,
+                        header_template_end,
+                        header_start_y,
+                        target_page_start,
+                    );
+                    row_y = target_page_start + header_height;
+                    last_repeated_page = target_page;
                 }
-                state.recordPageName(target_page_start, fragmentation.startPageName(state.tree, row_id));
             }
         }
         const row_checkpoint = state.takeLayoutCheckpoint();
@@ -457,6 +460,9 @@ fn layoutPass(
             }
             header_template_end = state.fragments.items.len;
             header_height = row_y + row_height + vertical_spacing - header_start_y;
+            if (state.web_sizing) {
+                if (state.fragmentainer()) |context| last_repeated_page = context.pageIndex(row_y);
+            }
         }
         if (is_footer_row) {
             if (footer_template_start == null) {

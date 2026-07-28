@@ -361,12 +361,16 @@ fn layoutOnce(
                             boundary_break = fragmentation.resolvePageNameBoundary(state.tree, previous_id, child_id, boundary_break);
                         }
                         const child_margin = state.marginInfo(child_id);
+                        if (boundary_break.isForced()) {
+                            state.applyForcedBreak(&child_cursor_y, boundary_break);
+                            state.recordPageName(child_cursor_y, fragmentation.startPageName(state.tree, child_id));
+                            // A forced boundary truncates the preceding
+                            // sibling's margin. The following child's start
+                            // margin is applied on the destination page.
+                            pending_margin = .{};
+                        }
                         if (child_margin.through and child_box.style.clear_direction == .none) {
                             pending_margin.combine(child_margin.start);
-                            if (boundary_break.isForced()) {
-                                state.applyForcedBreak(&child_cursor_y, boundary_break);
-                                state.recordPageName(child_cursor_y, fragmentation.startPageName(state.tree, child_id));
-                            }
                             var empty_cursor = child_cursor_y;
                             _ = try state.layoutBlockWithOptions(
                                 child_id,
@@ -397,10 +401,6 @@ fn layoutOnce(
                         pending_margin = .{};
                         const required_width = try minimumOuterWidth(state, child_id);
                         child_cursor_y = float_context.placementY(child_cursor_y, @min(required_width, content_width), child_box.style.clear_direction);
-                        if (boundary_break.isForced()) {
-                            state.applyForcedBreak(&child_cursor_y, boundary_break);
-                            state.recordPageName(child_cursor_y, fragmentation.startPageName(state.tree, child_id));
-                        }
                         const band = float_context.bandAt(child_cursor_y);
                         const child_fragment_start = state.fragments.items.len;
                         const child_rect = try state.layoutBlockWithOptions(
