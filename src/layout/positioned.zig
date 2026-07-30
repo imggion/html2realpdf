@@ -9,6 +9,7 @@ const std = @import("std");
 const box = @import("../box.zig");
 const geometry = @import("../geometry.zig");
 const floats = @import("floats.zig");
+const types = @import("types.zig");
 
 pub const supported = true;
 
@@ -95,33 +96,46 @@ fn layoutOne(state: anytype, pending: Pending, containing: geometry.Rect) !void 
         pending.static_position.y + margin_top;
     floats.shiftFragments(state.fragments.items[fragment_start..], target_x - rect.x, target_y - rect.y);
 
-    const inherited_clip = if (style.position == .fixed) null else ancestorClip(state, pending.box_id);
+    const inherited_clips = if (style.position == .fixed) types.ClipPathStack{} else ancestorClips(state, pending.box_id);
     for (state.fragments.items[fragment_start..]) |*fragment| {
         fragment.fixed = style.position == .fixed;
         fragment.positioned_group = pending.box_id;
         fragment.z_index = style.z_index;
-        if (inherited_clip) |clip| {
-            fragment.clip_rect = if (fragment.clip_rect) |existing|
-                existing.intersection(clip) orelse geometry.Rect{ .x = clip.x, .y = clip.y }
-            else
-                clip;
-        }
+        for (inherited_clips.slice()) |clip| fragment.appendClipPath(clip.owner_box, clip.rect, clip.radii);
     }
 }
 
-fn ancestorClip(state: anytype, box_id: box.BoxId) ?geometry.Rect {
-    var result: ?geometry.Rect = null;
+fn ancestorClips(state: anytype, box_id: box.BoxId) types.ClipPathStack {
+    var result = types.ClipPathStack{};
     var ancestor = state.tree.boxes.items[box_id].parent;
     while (ancestor) |ancestor_id| {
         const source = state.tree.boxes.items[ancestor_id];
-        if (source.style.overflow.clips()) {
-            if (fragmentContainingBlock(state, ancestor_id)) |clip| {
-                result = if (result) |existing| existing.intersection(clip) orelse geometry.Rect{ .x = clip.x, .y = clip.y } else clip;
-            }
-        }
+        if (source.style.overflow.clips()) if (overflowClipPath(state, ancestor_id)) |clip| result.append(clip);
         ancestor = source.parent;
     }
     return result;
+}
+
+fn overflowClipPath(state: anytype, box_id: box.BoxId) ?types.ClipPath {
+    const source = state.tree.boxes.items[box_id];
+    for (state.fragments.items) |fragment| {
+        if (fragment.source_box != box_id or fragment.kind != .box) continue;
+        const rect = geometry.Rect{
+            .x = fragment.rect.x + source.border.left,
+            .y = fragment.rect.y + source.border.top,
+            .width = @max(fragment.rect.width - source.border.left - source.border.right, 0),
+            .height = @max(fragment.rect.height - source.border.top - source.border.bottom, 0),
+        };
+        var radii = source.style.border_radii.resolve(fragment.rect.width, fragment.rect.height);
+        if (!radii.hasRadius() and source.style.border_radius > 0) radii = box.ResolvedBorderRadii.uniform(source.style.border_radius);
+        radii = radii.inset(source.border).normalized(rect.width, rect.height);
+        return .{
+            .owner_box = box_id,
+            .rect = rect,
+            .radii = if (radii.hasRadius()) radii else null,
+        };
+    }
+    return null;
 }
 
 pub fn assignPaintMetadata(state: anytype) !void {
@@ -145,8 +159,13 @@ pub fn assignPaintMetadata(state: anytype) !void {
         fragment.opacity = opacity[fragment.source_box];
         fragment.opacity_groups = opacity_groups[fragment.source_box];
         fragment.transform = transforms[fragment.source_box];
-        if (fragment.clip_rect != null) {
-            if (nearestClippingAncestor(state, fragment.source_box)) |ancestor_id| fragment.clip_transform = transforms[ancestor_id];
+        if (fragment.clip_paths.len > 0) {
+            for (fragment.clip_paths.mutableSlice()) |*clip| clip.transform = transforms[clip.owner_box];
+            fragment.clip_transform = fragment.clip_paths.items[0].transform;
+        } else if (fragment.clip_rect != null) {
+            if (nearestClippingAncestor(state, fragment.source_box)) |ancestor_id| {
+                fragment.clip_transform = transforms[ancestor_id];
+            }
         }
     }
 }

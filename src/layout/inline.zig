@@ -1052,12 +1052,14 @@ fn shiftFragment(fragment: *types.Fragment, shift: f32) void {
     fragment.rect.y += shift;
     if (fragment.image_content_rect) |*image_rect| image_rect.y += shift;
     if (fragment.clip_rect) |*clip_rect| clip_rect.y += shift;
+    fragment.clip_paths.shift(0, shift);
 }
 
 fn shiftFragmentX(fragment: *types.Fragment, shift: f32) void {
     fragment.rect.x += shift;
     if (fragment.image_content_rect) |*image_rect| image_rect.x += shift;
     if (fragment.clip_rect) |*clip_rect| clip_rect.x += shift;
+    fragment.clip_paths.shift(shift, 0);
 }
 
 fn shouldBreakAtOpportunity(word_break: box.WordBreak, text: []const u8, boundary: usize, opportunity: line_break.Opportunity) bool {

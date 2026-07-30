@@ -771,6 +771,25 @@ pub const ResolvedBorderRadii = struct {
             .bottom_left = .{ .x = @max(self.bottom_left.x - edges.left, 0), .y = @max(self.bottom_left.y - edges.bottom, 0) },
         };
     }
+
+    pub fn normalized(self: @This(), width: f32, height: f32) @This() {
+        var result = self;
+        const horizontal_scale = @min(@min(scaleForPair(width, result.top_left.x, result.top_right.x), scaleForPair(width, result.bottom_left.x, result.bottom_right.x)), 1);
+        const vertical_scale = @min(@min(scaleForPair(height, result.top_left.y, result.bottom_left.y), scaleForPair(height, result.top_right.y, result.bottom_right.y)), 1);
+        const scale = @min(horizontal_scale, vertical_scale);
+        if (scale < 1) {
+            inline for (.{ &result.top_left, &result.top_right, &result.bottom_right, &result.bottom_left }) |corner| {
+                corner.x *= scale;
+                corner.y *= scale;
+            }
+        }
+        return result;
+    }
+
+    fn scaleForPair(available: f32, first: f32, second: f32) f32 {
+        const total = first + second;
+        return if (total > 0) @max(available, 0) / total else 1;
+    }
 };
 
 pub const BorderRadii = struct {
@@ -786,16 +805,7 @@ pub const BorderRadii = struct {
             .bottom_right = resolveCorner(self.bottom_right, width, height),
             .bottom_left = resolveCorner(self.bottom_left, width, height),
         };
-        const horizontal_scale = @min(@min(scaleForPair(width, result.top_left.x, result.top_right.x), scaleForPair(width, result.bottom_left.x, result.bottom_right.x)), 1);
-        const vertical_scale = @min(@min(scaleForPair(height, result.top_left.y, result.bottom_left.y), scaleForPair(height, result.top_right.y, result.bottom_right.y)), 1);
-        const scale = @min(horizontal_scale, vertical_scale);
-        if (scale < 1) {
-            inline for (.{ &result.top_left, &result.top_right, &result.bottom_right, &result.bottom_left }) |corner| {
-                corner.x *= scale;
-                corner.y *= scale;
-            }
-        }
-        return result;
+        return result.normalized(width, height);
     }
 
     fn resolveCorner(corner: CornerRadius, width: f32, height: f32) ResolvedCornerRadius {
@@ -803,11 +813,6 @@ pub const BorderRadii = struct {
             .x = @max(corner.x.resolve(width) orelse 0, 0),
             .y = @max(corner.y.resolve(height) orelse 0, 0),
         };
-    }
-
-    fn scaleForPair(available: f32, first: f32, second: f32) f32 {
-        const total = first + second;
-        return if (total > 0) available / total else 1;
     }
 };
 

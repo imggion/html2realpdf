@@ -176,6 +176,16 @@ pub const Context = struct {
         return page_offset > 0 and block_size > self.extentAt(position) - page_offset + epsilon;
     }
 
+    pub fn spansFragmentainers(self: Context, position: f32, block_size: f32) bool {
+        return block_size > self.remaining(position) + epsilon;
+    }
+
+    pub fn fitsWithinFragmentainer(self: Context, position: f32, block_size: f32) bool {
+        if (block_size <= epsilon) return true;
+        return block_size <= self.remaining(position) + epsilon and
+            !self.spansFragmentainers(position, block_size);
+    }
+
     /// Returns the boundary at or after `position`. An existing natural page
     /// boundary already satisfies a generic forced page break.
     pub fn boundaryAtOrAfter(self: Context, position: f32) f32 {
@@ -212,12 +222,11 @@ pub const Context = struct {
     /// items stay in place so layout keeps making progress and pagination may
     /// fragment or slice them later.
     pub fn atomicShift(self: Context, position: f32, block_size: f32) f32 {
-        const extent = self.extentAt(position);
-        if (block_size > extent + epsilon or !self.crossesBoundary(position, block_size)) return 0;
-        // Keep this as the direct remaining-extent expression. Besides avoiding
-        // cancellation, it preserves the document profile's historical f32
-        // coordinates byte-for-byte.
-        return extent - self.offset(position);
+        const page_offset = self.offset(position);
+        if (page_offset == 0 or !self.spansFragmentainers(position, block_size)) return 0;
+        const target_page = self.pageIndex(position) + 1;
+        if (block_size > self.extentForPage(target_page) + epsilon) return 0;
+        return self.pageStartForIndex(target_page) - position;
     }
 
     /// Keeps an atomic item above page-end furniture such as a repeated table
@@ -228,10 +237,14 @@ pub const Context = struct {
         const extent = self.extentAt(position);
         const inset = std.math.clamp(end_inset, 0, extent);
         const usable_extent = extent - inset;
-        if (block_size > usable_extent + epsilon or block_size <= 0) return 0;
+        if (block_size <= 0) return 0;
         const page_offset = self.offset(position);
         if (page_offset + block_size <= usable_extent + epsilon) return 0;
-        return extent - page_offset;
+        const target_page = self.pageIndex(position) + 1;
+        const target_extent = self.extentForPage(target_page);
+        const target_usable_extent = target_extent - std.math.clamp(end_inset, 0, target_extent);
+        if (block_size > target_usable_extent + epsilon) return 0;
+        return self.pageStartForIndex(target_page) - position;
     }
 };
 
@@ -266,12 +279,17 @@ pub fn propagatedAfter(tree: anytype, box_id: usize) @TypeOf(tree.boxes.items[0]
 /// A descendant forced break overrides `break-inside: avoid` on an ancestor.
 pub fn subtreeHasForcedBreak(tree: anytype, box_id: usize) bool {
     var child = tree.boxes.items[box_id].first_child;
+    var previous_in_flow: ?usize = null;
     while (child) |child_id| {
         const source = tree.boxes.items[child_id];
         child = source.next_sibling;
         if (source.style.position == .absolute or source.style.position == .fixed) continue;
+        if (previous_in_flow) |previous_id| {
+            if (pageNameChangesAtBoundary(tree, previous_id, child_id)) return true;
+        }
         if (source.style.page_break_before.isForced() or source.style.page_break_after.isForced()) return true;
         if (subtreeHasForcedBreak(tree, child_id)) return true;
+        previous_in_flow = child_id;
     }
     return false;
 }
@@ -393,8 +411,23 @@ test "fragmentainer sequence uses named and pseudo page extents" {
     try std.testing.expectEqual(@as(f32, 10), context.atomicShift(240, 20));
 }
 
+test "atomic placement uses the destination page usable extent" {
+    const rules = [_]page_geometry.PageRule{
+        .{ .selector = .{ .left = true }, .width_points = 75, .height_points = 112.5 },
+    };
+    const context = Context.initPaged(.{
+        .base = .{ .width_points = 75, .height_points = 75 },
+        .rules = &rules,
+    }, .left_to_right).?;
+
+    try std.testing.expectEqual(@as(f32, 60), context.atomicShift(40, 120));
+    try std.testing.expectEqual(@as(f32, 60), context.atomicShiftBeforeEndInset(40, 120, 10));
+    try std.testing.expectEqual(@as(f32, 0), context.atomicShift(190, 120));
+}
+
 test "forced page sides honor page parity and progression" {
     const ltr = Context.init(100, .left_to_right).?;
+    try std.testing.expectEqual(@as(f32, 100), ltr.forcedBreakStart(100, TestBreak.page));
     try std.testing.expectEqual(@as(f32, 100), ltr.forcedBreakStart(25, TestBreak.left));
     try std.testing.expectEqual(@as(f32, 200), ltr.forcedBreakStart(25, TestBreak.right));
     try std.testing.expectEqual(@as(f32, 200), ltr.forcedBreakStart(25, TestBreak.recto));

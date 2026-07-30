@@ -24,6 +24,8 @@ pub const fragmentation = @import("layout/fragmentation.zig");
 pub const FragmentId = types.FragmentId;
 pub const FragmentKind = types.FragmentKind;
 pub const BorderPaint = types.BorderPaint;
+pub const ClipPath = types.ClipPath;
+pub const ClipPathStack = types.ClipPathStack;
 pub const Fragment = types.Fragment;
 pub const LayoutDocument = types.LayoutDocument;
 pub const Options = types.Options;
@@ -124,6 +126,14 @@ const State = struct {
     page_rules: []const page_geometry.PageRule,
     next_line_id: usize = 0,
 
+    pub const LayoutCheckpoint = struct {
+        fragments_len: usize,
+        pending_positioned_len: usize,
+        page_name_transitions_len: usize,
+        blank_page_indices_len: usize,
+        next_line_id: usize,
+    };
+
     const BlockLayoutOptions = struct {
         fill_available_width: bool = false,
     };
@@ -191,15 +201,9 @@ const State = struct {
             };
             var clip_radii = style.border_radii.resolve(rect.width, rect.height);
             if (!clip_radii.hasRadius() and style.border_radius > 0) clip_radii = box.ResolvedBorderRadii.uniform(style.border_radius);
-            clip_radii = clip_radii.inset(source.border);
+            clip_radii = clip_radii.inset(source.border).normalized(clip.width, clip.height);
             for (self.fragments.items[fragment_start + 1 ..]) |*fragment| {
-                if (fragment.clip_rect) |existing| {
-                    fragment.clip_rect = existing.intersection(clip) orelse geometry.Rect{ .x = clip.x, .y = clip.y };
-                    fragment.clip_radii = null;
-                } else {
-                    fragment.clip_rect = clip;
-                    fragment.clip_radii = if (clip_radii.hasRadius()) clip_radii else null;
-                }
+                fragment.appendClipPath(box_id, clip, if (clip_radii.hasRadius()) clip_radii else null);
             }
         }
         if (self.web_sizing and (style.position == .relative or style.position == .sticky)) {
@@ -210,6 +214,26 @@ const State = struct {
 
     pub fn deferPositioned(self: *State, box_id: box.BoxId, static_position: geometry.Point) !void {
         try self.pending_positioned.append(self.allocator, .{ .box_id = box_id, .static_position = static_position });
+    }
+
+    /// Captures every append-only layout side effect that must move together
+    /// when a formatting context is measured transactionally.
+    pub fn takeLayoutCheckpoint(self: *const State) LayoutCheckpoint {
+        return .{
+            .fragments_len = self.fragments.items.len,
+            .pending_positioned_len = self.pending_positioned.items.len,
+            .page_name_transitions_len = self.page_name_transitions.items.len,
+            .blank_page_indices_len = self.blank_page_indices.items.len,
+            .next_line_id = self.next_line_id,
+        };
+    }
+
+    pub fn restoreLayoutCheckpoint(self: *State, checkpoint: LayoutCheckpoint) void {
+        self.fragments.items.len = checkpoint.fragments_len;
+        self.pending_positioned.items.len = checkpoint.pending_positioned_len;
+        self.page_name_transitions.items.len = checkpoint.page_name_transitions_len;
+        self.blank_page_indices.items.len = checkpoint.blank_page_indices_len;
+        self.next_line_id = checkpoint.next_line_id;
     }
 
     pub fn shiftRelativeFragments(self: *State, box_id: box.BoxId, fragment_start: usize, containing_width: f32, containing_height: f32) void {
@@ -1206,6 +1230,39 @@ test "forced page break advances following content to the next page" {
     try std.testing.expect(second_y.? >= 100);
 }
 
+test "Web forced break at a page boundary discards the preceding margin without skipping a page" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:100px;margin-bottom:30px'></div>" ++
+        "<div style='height:10px;margin-top:10px;break-before:page;background:#0000ff'></div>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var target: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.blue == 1 and color.red == 0) target = fragment.rect;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 110), target.?.y, 0.01);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, result.blank_pages.items);
+}
+
 test "Web facing-page breaks arbitrate adjacent before and after values" {
     const html = @import("html.zig");
     const css = @import("css.zig");
@@ -1376,6 +1433,161 @@ test "Web named page height controls later fragmentainer placement" {
     try std.testing.expectEqualStrings("Report", result.page_names.items[0]);
     try std.testing.expectEqualStrings("Summary", result.page_names.items[1]);
     try std.testing.expectEqualStrings("Summary", result.page_names.items[2]);
+}
+
+test "Web break-inside avoid retries auto-height multiline cards with padding and margins" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:50px'></div>" ++
+        "<section style='break-inside:avoid;margin-top:5px;padding:5px;background:#ff0000;font-size:10px;line-height:15px'>" ++
+        "MMMMMM MMMMMM MMMMMM MMMMMM</section>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var card: ?geometry.Rect = null;
+    var minimum_text_y: f32 = std.math.inf(f32);
+    var line_ids = std.ArrayList(usize).empty;
+    defer line_ids.deinit(allocator);
+    for (result.fragments.items) |fragment| {
+        if (fragment.background) |color| {
+            if (color.red == 1 and color.green == 0) card = fragment.rect;
+        }
+        if (fragment.text == null or fragment.line_id == null) continue;
+        if (std.mem.indexOfScalar(usize, line_ids.items, fragment.line_id.?) == null) {
+            try line_ids.append(allocator, fragment.line_id.?);
+        }
+        minimum_text_y = @min(minimum_text_y, fragment.rect.y);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), card.?.y, 0.01);
+    try std.testing.expect(minimum_text_y >= card.?.y);
+    try std.testing.expect(line_ids.items.len >= 2);
+}
+
+test "Web break-inside avoid retries flex columns and rolls back positioned descendants" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:75px'></div>" ++
+        "<section style='position:relative;display:flex;flex-direction:column;break-inside:avoid;padding:5px;background:#ff0000'>" ++
+        "<div style='height:15px'>ONE</div><div style='height:15px'>TWO</div>" ++
+        "<div style='position:absolute;right:0;top:0;width:4px;height:4px;background:#0000ff'></div></section>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var card: ?geometry.Rect = null;
+    var positioned_count: usize = 0;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red == 1 and color.blue == 0) card = fragment.rect;
+        if (color.blue == 1 and color.red == 0) {
+            positioned_count += 1;
+            try std.testing.expect(fragment.rect.y >= 100);
+        }
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 100), card.?.y, 0.01);
+    try std.testing.expectEqual(@as(usize, 1), positioned_count);
+}
+
+test "Web break-inside avoid relayouts against a taller destination PageSpec" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:40px'></div>" ++
+        "<section style='height:120px;break-inside:avoid;background:#ff0000'></section>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    const rules = [_]page_geometry.PageRule{
+        .{ .selector = .{ .left = true }, .width_points = 75, .height_points = 112.5 },
+    };
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+        .page_spec = .{ .width_points = 75, .height_points = 75 },
+        .page_rules = &rules,
+    });
+    defer result.deinit(allocator);
+
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red != 1 or color.blue != 0) continue;
+        try std.testing.expectApproxEqAbs(@as(f32, 100), fragment.rect.y, 0.01);
+        return;
+    }
+    return error.TestExpectedEqual;
+}
+
+test "Web oversized break-inside avoid cards keep their original break opportunities" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='height:40px'></div>" ++
+        "<section style='height:120px;break-inside:avoid;background:#ff0000'></section>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red != 1 or color.blue != 0) continue;
+        try std.testing.expectApproxEqAbs(@as(f32, 40), fragment.rect.y, 0.01);
+        return;
+    }
+    return error.TestExpectedEqual;
 }
 
 test "Web named page width controls auto block sizing" {
@@ -1902,6 +2114,131 @@ test "table captions and column definitions participate in Web layout" {
     try std.testing.expectApproxEqAbs(@as(f32, 120), cells[1].width, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 120), cells[2].width, 0.01);
     try std.testing.expect(top_y.? < row_y.? and row_y.? < bottom_y.?);
+}
+
+test "Web zebra table preserves transparent cell tracks and right aligned inline flex across pages" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:200px;table-layout:fixed;border-collapse:collapse'>" ++
+        "<colgroup><col style='width:150px'><col style='width:50px'></colgroup>" ++
+        "<thead><tr style='height:20px;background:#0000ff'><th>Label</th><th>Status</th></tr></thead>" ++
+        "<tbody>" ++
+        "<tr style='height:24px'><td>ONE</td><td style='text-align:right'><span style='display:inline-flex;width:8px;height:8px;background:#ff0000'></span></td></tr>" ++
+        "<tr style='height:24px;background:#eeeeee'><td>TWO</td><td style='text-align:right'><span style='display:inline-flex;width:8px;height:8px;background:#ff0000'></span></td></tr>" ++
+        "<tr style='height:24px;break-before:page'><td>THREE</td><td style='text-align:right'><span style='display:inline-flex;width:8px;height:8px;background:#ff0000'></span></td></tr>" ++
+        "<tr style='height:24px;background:#eeeeee'><td>FOUR</td><td style='text-align:right'><span style='display:inline-flex;width:8px;height:8px;background:#ff0000'></span></td></tr>" ++
+        "</tbody></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var single_page = try layout(allocator, &tree, &document, .{
+        .content_width = 200,
+        .web_sizing = true,
+        .atomic_inline_baselines = true,
+    });
+    defer single_page.deinit(allocator);
+
+    var single_transparent_cells: usize = 0;
+    var single_dots: usize = 0;
+    for (single_page.fragments.items) |fragment| {
+        const source_box = tree.boxes.items[fragment.source_box];
+        if (source_box.kind == .tableCell and fragment.rect.x >= 149) {
+            const row_id = source_box.parent orelse continue;
+            if (tree.boxes.items[row_id].style.background == null) {
+                single_transparent_cells += 1;
+                try std.testing.expectApproxEqAbs(@as(f32, 50), fragment.rect.width, 0.01);
+            }
+        }
+        const color = fragment.background orelse continue;
+        if (color.red != 1 or color.green != 0 or color.blue != 0 or fragment.rect.width != 8) continue;
+        single_dots += 1;
+        try std.testing.expectApproxEqAbs(@as(f32, 192), fragment.rect.x, 0.01);
+    }
+    try std.testing.expectEqual(@as(usize, 2), single_transparent_cells);
+    try std.testing.expectEqual(@as(usize, 4), single_dots);
+
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 200,
+        .page_height = 68,
+        .web_sizing = true,
+        .atomic_inline_baselines = true,
+    });
+    defer result.deinit(allocator);
+
+    var transparent_cells: usize = 0;
+    var dots: usize = 0;
+    var dot_pages: [2]usize = .{ 0, 0 };
+    var header_count: usize = 0;
+    for (result.fragments.items) |fragment| {
+        const source_box = tree.boxes.items[fragment.source_box];
+        if (source_box.kind == .tableCell and fragment.rect.x >= 149) {
+            const row_id = source_box.parent orelse continue;
+            if (tree.boxes.items[row_id].style.background == null) {
+                transparent_cells += 1;
+                try std.testing.expectApproxEqAbs(@as(f32, 50), fragment.rect.width, 0.01);
+            }
+        }
+        if (fragment.text) |text| {
+            if (std.mem.eql(u8, text, "Label")) header_count += 1;
+        }
+        const color = fragment.background orelse continue;
+        if (color.red != 1 or color.green != 0 or color.blue != 0 or fragment.rect.width != 8) continue;
+        dots += 1;
+        try std.testing.expectApproxEqAbs(@as(f32, 192), fragment.rect.x, 0.01);
+        const page_index: usize = @intFromFloat(@floor(fragment.rect.y / 68));
+        if (page_index < dot_pages.len) dot_pages[page_index] += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), transparent_cells);
+    try std.testing.expectEqual(@as(usize, 4), dots);
+    try std.testing.expectEqual([2]usize{ 2, 2 }, dot_pages);
+    try std.testing.expectEqual(@as(usize, 2), header_count);
+}
+
+test "Web table forced break resolves before vertical border spacing at a page boundary" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<table style='width:100px;border-spacing:0 10px'><tbody>" ++
+        "<tr style='height:90px'><td>ONE</td></tr>" ++
+        "<tr style='height:10px;break-before:page;background:#0000ff'><td>TWO</td></tr>" ++
+        "</tbody></table>";
+
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 100,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    var second_row: ?geometry.Rect = null;
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.blue == 1 and color.red == 0 and tree.boxes.items[fragment.source_box].kind == .tableRow) {
+            second_row = fragment.rect;
+        }
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 110), second_row.?.y, 0.01);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, result.blank_pages.items);
 }
 
 test "Web table auto layout uses intrinsic cell contributions" {
@@ -3027,6 +3364,43 @@ test "Web overflow clips deferred absolute descendants" {
         if (color.red != 1) continue;
         try std.testing.expectApproxEqAbs(@as(f32, 80), fragment.rect.x, 0.01);
         try std.testing.expectApproxEqAbs(@as(f32, 100), fragment.clip_rect.?.width, 0.01);
+        return;
+    }
+    return error.TestExpectedEqual;
+}
+
+test "Web nested rounded overflow clips survive on positioned descendants" {
+    const html = @import("html.zig");
+    const css = @import("css.zig");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const source =
+        "<div style='position:relative;width:100px;height:60px;overflow:hidden;border-radius:20px 12px'>" ++
+        "<div style='position:relative;width:80px;height:40px;overflow:hidden;border-radius:12px 6px'>" ++
+        "<div style='position:absolute;left:70px;top:30px;width:30px;height:20px;background:#ff0000'></div>" ++
+        "</div></div>";
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer tokens.deinit(allocator);
+    var document = try dom.Parser.parse(allocator, source, tokens.items);
+    defer document.deinit(allocator);
+    const styles = try css.styleArrayFromDocument(allocator, &document);
+    var tree = try box.Builder.build(allocator, &document, styles, document.root);
+    defer tree.deinit(allocator);
+    var result = try layout(allocator, &tree, &document, .{
+        .content_width = 100,
+        .page_height = 200,
+        .web_sizing = true,
+    });
+    defer result.deinit(allocator);
+
+    for (result.fragments.items) |fragment| {
+        const color = fragment.background orelse continue;
+        if (color.red != 1 or color.green != 0) continue;
+        try std.testing.expectEqual(@as(u8, 2), fragment.clip_paths.len);
+        for (fragment.clip_paths.slice()) |clip| try std.testing.expect(clip.radii != null);
+        try std.testing.expect(fragment.clip_paths.items[0].radii.?.top_left.x <
+            fragment.clip_paths.items[1].radii.?.top_left.x);
         return;
     }
     return error.TestExpectedEqual;
