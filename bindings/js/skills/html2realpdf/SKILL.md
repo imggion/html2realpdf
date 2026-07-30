@@ -197,11 +197,7 @@ consistent across every row.
 
 ```css
 .pdf-table-frame { border: 0.3mm solid #d8dee9; border-radius: 3mm; }
-.pdf-table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-}
+.pdf-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .pdf-col-label { width: 26%; }
 .pdf-col-indicator { width: 24mm; }
 .pdf-table th, .pdf-table td {
@@ -211,21 +207,28 @@ consistent across every row.
   vertical-align: top;
   overflow-wrap: anywhere;
 }
+.pdf-table thead th { background-color: #172b4d; color: #fff; }
+.pdf-table thead th:first-child { border-top-left-radius: 2.7mm; }
+.pdf-table thead th:last-child { border-top-right-radius: 2.7mm; }
 .pdf-table thead, .pdf-table tr {
   break-inside: avoid;
   page-break-inside: avoid;
 }
-.pdf-table tbody tr:nth-child(odd) { background-color: #fff; }
-.pdf-table tbody tr:nth-child(even) { background-color: #f7f9fc; }
+.pdf-table tbody tr:nth-child(odd) > * { background-color: transparent; }
+.pdf-table tbody tr:nth-child(even) > * { background-color: #f7f9fc; }
 .pdf-indicator-cell { text-align: right; white-space: nowrap; }
 ```
+
+Declare tracks through `<colgroup>`; `table-layout: fixed` is not supported and may be diagnosed.
+Apply header backgrounds and radii to `<th>` cells: a parent radius does not clip descendants
+without `overflow: hidden`, which conflicts with fragmented tables; cell radii repeat with `thead`.
 
 Let the table and `tbody` fragment while keeping individual rows intact. Add
 `.pdf-atomic` to the frame only when the application can prove the complete
 table fits on one page, using measured or bounded row heights. For long tables,
 do not set `overflow: hidden` on the frame; clipping conflicts with
-fragmentation. Explicitly paint both odd and even row states so pagination does
-not depend on a transparent inherited surface.
+fragmentation. Transparent rows must retain painted-row geometry; if a background
+changes cell width or alignment, treat it as a renderer regression, not a workaround.
 
 ### Align legends, badges, and indicators
 
@@ -271,8 +274,8 @@ and transforms such as `translateY`.
 - Confirm text selection, links, and embedded fonts in the generated PDF.
 - Test empty, short, and long data, including a table that spans pages and a
   paragraph or list crossing a page boundary.
-- Inspect first, continuation, and final pages for repeated headers, clipped
-  borders, blank pages, and row or legend alignment.
+- Test `break-before: page` at page start with no extra blank; inspect every table page for one
+  repeated header, stable tracks, matching radii, preserved borders, and indicator alignment.
 - Render with the same viewport, media type, fonts, and chart export strategy
   used in production.
 
