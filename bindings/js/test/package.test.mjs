@@ -57,6 +57,11 @@ test("browser harness runtime uses a content-addressed package build", async () 
   assert.equal(manifest.wasm, `${manifest.buildId}/libhtml2realpdf.wasm`);
   const runtime = await import(new URL(`../.browser-build/${manifest.entry}`, import.meta.url));
   assert.equal(typeof runtime.PdfDocument.prototype.preview, "function");
+  assert.equal(typeof runtime.PdfPreview.prototype.previousPage, "function");
+  assert.equal(typeof runtime.PdfPreview.prototype.nextPage, "function");
+  assert.equal(typeof runtime.PdfPreview.prototype.goToPage, "function");
+  assert.equal(typeof runtime.PdfPreview.prototype.onPage, "undefined");
+  assert.equal(typeof Object.getOwnPropertyDescriptor(runtime.PdfPreview.prototype, "currentPage")?.get, "function");
   assert.equal(typeof runtime.PdfPreview.prototype.dispose, "function");
 });
 

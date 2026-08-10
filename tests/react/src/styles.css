@@ -77,6 +77,11 @@ button.primary { border-color: var(--app-accent); background: var(--app-accent);
 .preview-options { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .preview-options label { display: grid; gap: 4px; color: var(--app-muted); font-size: 12px; }
 .preview-options input { width: 96px; min-height: 44px; border: 1px solid var(--app-line-strong); border-radius: 8px; background: var(--app-control); color: var(--app-ink); padding: 8px 12px; }
+.custom-page-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.custom-page-navigation button:disabled { cursor: not-allowed; }
+.custom-page-navigation output { min-width: 92px; color: var(--app-muted); font-size: 13px; font-variant-numeric: tabular-nums; text-align: center; }
+.custom-page-jump { display: flex; align-items: end; gap: 8px; }
+.custom-page-jump input { width: 84px; }
 .document-stage, .preview-stage { min-height: 420px; overflow: auto; border: 1px solid var(--app-line); border-radius: 14px; background: var(--app-stage); padding: 20px; }
 .preview-stage:empty::before { color: var(--app-muted); content: "Click ‘Render and preview’ to compare the generated pages here."; display: block; text-align: center; }
 

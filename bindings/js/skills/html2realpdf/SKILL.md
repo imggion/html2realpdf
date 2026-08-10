@@ -348,7 +348,7 @@ Pass these options to `PdfDocument.preview`:
 
 | Option | Values and default |
 | --- | --- |
-| `showToolbar` | `true` by default; set to `false` to hide the summary and zoom controls |
+| `showToolbar` | `true` by default; set to `false` to hide page navigation and zoom controls |
 | `padding` | Non-negative CSS pixel value; `28` by default and `16` on narrow screens |
 | `initialScale` | `"fit-width"` (default) or a numeric scale |
 | `minScale` | `0.25` by default, clamped to at least `0.1` |
@@ -357,6 +357,7 @@ Pass these options to `PdfDocument.preview`:
 | `maxPixelRatio` | `2` by default; caps page-canvas device pixel ratio |
 | `ariaLabel` | `"PDF preview"` by default |
 | `onProgress` | Callback after each page canvas completes |
+| `onPageChange` | Callback after initial loading and whenever the 1-based current page changes |
 
 ### html2pdf.js compatibility options
 
@@ -421,7 +422,15 @@ all previews it owns.
 ```ts
 const preview = await pdf.preview(document.querySelector("#preview")!, {
   initialScale: "fit-width",
+  onPageChange(currentPage, totalPages) {
+    document.querySelector("#page-count")!.textContent = `Page ${currentPage} of ${totalPages}`;
+  },
 });
+
+document.querySelector("#previous")!.addEventListener("click", () => preview.previousPage());
+document.querySelector("#next")!.addEventListener("click", () => preview.nextPage());
+preview.goToPage(7); // Clamped to the first or last page when outside the document range.
+console.log(preview.currentPage);
 
 preview.dispose();
 pdf.dispose();

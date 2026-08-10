@@ -12,6 +12,7 @@ const pdfJsUrl = new URL("../../../bindings/js/dist/vendor/pdf.min.mjs", import.
 const pdfJsWorkerUrl = new URL("../../../bindings/js/dist/vendor/pdf.worker.min.mjs", import.meta.url);
 const liveReportPage = { format: "a4", margin: [30, 36, 30, 36], unit: "pt" };
 const stressReportPage = { format: "a4", margin: [28, 28, 28, 28], unit: "pt" };
+const emptyPreviewPage = { current: 0, total: 0 };
 
 let html2PdfJsPromise;
 let pdfJsPromise;
@@ -230,6 +231,8 @@ export function App() {
   const [stressReportFixture, setStressReportFixture] = useState(null);
   const [showPreviewToolbar, setShowPreviewToolbar] = useState(true);
   const [previewPadding, setPreviewPadding] = useState("");
+  const [previewPage, setPreviewPage] = useState(emptyPreviewPage);
+  const [previewPageInput, setPreviewPageInput] = useState("");
   const previewUsesDarkMode = previewThemeRef.current === "dark";
 
   useEffect(() => () => {
@@ -277,6 +280,8 @@ export function App() {
     setDocumentMode(nextMode);
     previewControllerRef.current?.dispose();
     previewControllerRef.current = null;
+    setPreviewPage(emptyPreviewPage);
+    setPreviewPageInput("");
     pdfRef.current?.dispose();
     pdfRef.current = null;
     clearBenchmarkArtifacts();
@@ -435,12 +440,20 @@ export function App() {
     if (!pdfRef.current || !previewRef.current) throw new Error("Render the React ref before previewing it");
     previewControllerRef.current?.dispose();
     previewControllerRef.current = null;
+    setPreviewPage(emptyPreviewPage);
+    setPreviewPageInput("");
     previewControllerRef.current = await pdfRef.current.preview(previewRef.current, {
       initialScale: "fit-width",
       ariaLabel: "React ref PDF preview",
       showToolbar,
       padding,
       theme: previewThemeRef.current,
+      onPageChange(current, total) {
+        setPreviewPage((previous) => previous.current === current && previous.total === total
+          ? previous
+          : { current, total });
+        setPreviewPageInput(String(current));
+      },
     });
   }
 
@@ -452,6 +465,9 @@ export function App() {
     try {
       rendererRef.current ??= await createRenderer({ wasmUrl });
       previewControllerRef.current?.dispose();
+      previewControllerRef.current = null;
+      setPreviewPage(emptyPreviewPage);
+      setPreviewPageInput("");
       pdfRef.current?.dispose();
       pdfRef.current = await rendererRef.current.render(reportRef, {
         page: profile.page,
@@ -519,8 +535,27 @@ export function App() {
     pdfRef.current.download(`${getDocumentProfile().filename}.pdf`);
   }
 
+  function showPreviousPreviewPage() {
+    previewControllerRef.current?.previousPage();
+  }
+
+  function showNextPreviewPage() {
+    previewControllerRef.current?.nextPage();
+  }
+
+  function goToPreviewPage(event) {
+    event.preventDefault();
+    if (previewPageInput.trim() === "") return;
+    const requestedPage = Number(previewPageInput);
+    if (!Number.isFinite(requestedPage)) return;
+    const preview = previewControllerRef.current;
+    preview?.goToPage(requestedPage);
+    if (preview) setPreviewPageInput(String(preview.currentPage));
+  }
+
   const busy = rendering || benchmarking || loadingStressReport;
   const liveControlsDisabled = busy || documentMode === "stress";
+  const previewIsReady = previewPage.total > 0;
 
   return (
     <main className="app-shell">
@@ -605,6 +640,40 @@ export function App() {
         <div>
           <h2>Generated PDF canvas</h2>
           <div className="preview-options">
+            <div className="custom-page-navigation" role="group" aria-label="Custom page navigation">
+              <button
+                type="button"
+                onClick={showPreviousPreviewPage}
+                disabled={busy || !previewIsReady || previewPage.current <= 1}
+              >
+                Previous page
+              </button>
+              <output aria-live="polite" aria-atomic="true">
+                {previewIsReady ? `Page ${previewPage.current} of ${previewPage.total}` : "No preview"}
+              </output>
+              <button
+                type="button"
+                onClick={showNextPreviewPage}
+                disabled={busy || !previewIsReady || previewPage.current >= previewPage.total}
+              >
+                Next page
+              </button>
+              <form className="custom-page-jump" onSubmit={goToPreviewPage}>
+                <label>
+                  Page number
+                  <input
+                    type="number"
+                    name="page"
+                    step="1"
+                    required
+                    value={previewPageInput}
+                    onChange={(event) => setPreviewPageInput(event.target.value)}
+                    disabled={busy || !previewIsReady}
+                  />
+                </label>
+                <button type="submit" disabled={busy || !previewIsReady}>Go to page</button>
+              </form>
+            </div>
             <button type="button" aria-pressed={showPreviewToolbar} onClick={togglePreviewToolbar} disabled={busy || !pdfRef.current}>
               {showPreviewToolbar ? "Hide toolbar" : "Show toolbar"}
             </button>

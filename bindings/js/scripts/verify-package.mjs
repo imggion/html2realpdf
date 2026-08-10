@@ -156,13 +156,26 @@ const typecheckSource = `import html2pdf, {
 const element = document.createElement("main");
 const ref = { current: element };
 const options: RenderOptions = { page: { format: "a4", margin: [10, 12] } };
-const previewOptions: PdfPreviewOptions = { showToolbar: false, padding: 12 };
+const previewOptions: PdfPreviewOptions = {
+  showToolbar: false,
+  padding: 12,
+  onPageChange(currentPage, totalPages) {
+    const page: number = currentPage;
+    const total: number = totalPages;
+    void [page, total];
+  },
+};
 void renderPdf(ref, options);
 
 async function renderBatch() {
   const renderer = await createRenderer();
   const pdf = await renderer.render(element);
   const preview = await pdf.preview(element, previewOptions);
+  const currentPage: number = preview.currentPage;
+  preview.previousPage();
+  preview.nextPage();
+  preview.goToPage(3);
+  void currentPage;
   preview.dispose();
   pdf.dispose();
   renderer.dispose();

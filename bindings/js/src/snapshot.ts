@@ -1949,32 +1949,50 @@ function materializeComputedStyle(
   }
 
   const declarations: string[] = [];
-  const authoredInsets = preserveAuthoredInsets && position !== "static"
-    ? authoredInsetOverrides(original, computed, view)
-    : undefined;
-  const properties = isSvgElement(original)
-    ? [...SUPPORTED_COMPUTED_PROPERTIES, ...SVG_COMPUTED_PROPERTIES]
-    : SUPPORTED_COMPUTED_PROPERTIES;
+  let authoredInsets: ReturnType<typeof authoredInsetOverrides> = undefined;
+  if (preserveAuthoredInsets && position !== "static") {
+    authoredInsets = authoredInsetOverrides(original, computed, view);
+  }
+
+  let properties: readonly string[] = SUPPORTED_COMPUTED_PROPERTIES;
+  if (isSvgElement(original)) {
+    properties = [...SUPPORTED_COMPUTED_PROPERTIES, ...SVG_COMPUTED_PROPERTIES];
+  }
+
   for (const property of properties) {
-    const nativePage = property === "page" ? computed.getPropertyValue("page").trim() : "";
-    const mirroredPage = property === "page" ? computed.getPropertyValue(AUTHORED_PAGE_MIRROR).trim() : "";
-    const authoredFlowDimension = isFlowDimension(property)
-      ? computed.getPropertyValue(AUTHORED_FLOW_DIMENSION_MIRRORS[property]).trim()
-      : "";
-    const authoredAutoMargin = isAutoMargin(property)
-      ? computed.getPropertyValue(AUTHORED_AUTO_MARGIN_MIRRORS[property]).trim()
-      : "";
-    const value = property === "display"
-      ? display
-      : property === "page"
-        ? nativePage && nativePage !== "auto" ? nativePage : mirroredPage || nativePage
-      : options.layoutContext === "page" && authoredAutoMargin === "auto"
-        ? "auto"
-      : authoredFlowDimension.endsWith("%")
-        ? authoredFlowDimension
-      : authoredInsets && property in authoredInsets
-        ? authoredInsets[property as keyof typeof authoredInsets]!
-        : computed.getPropertyValue(property);
+    let value = computed.getPropertyValue(property);
+    let authoredFlowDimension = "";
+
+    if (property === "display") {
+      value = display;
+    } else if (property === "page") {
+      const nativePage = value.trim();
+      const mirroredPage = computed.getPropertyValue(AUTHORED_PAGE_MIRROR).trim();
+      if (nativePage && nativePage !== "auto") {
+        value = nativePage;
+      } else if (mirroredPage) {
+        value = mirroredPage;
+      } else {
+        value = nativePage;
+      }
+    } else {
+      let authoredAutoMargin = "";
+      if (isFlowDimension(property)) {
+        authoredFlowDimension = computed.getPropertyValue(AUTHORED_FLOW_DIMENSION_MIRRORS[property]).trim();
+      }
+      if (isAutoMargin(property)) {
+        authoredAutoMargin = computed.getPropertyValue(AUTHORED_AUTO_MARGIN_MIRRORS[property]).trim();
+      }
+
+      if (options.layoutContext === "page" && authoredAutoMargin === "auto") {
+        value = "auto";
+      } else if (authoredFlowDimension.endsWith("%")) {
+        value = authoredFlowDimension;
+      } else if (authoredInsets && property in authoredInsets) {
+        value = authoredInsets[property as keyof typeof authoredInsets]!;
+      }
+    }
+
     if (isFlowDimension(property)) {
       if (authoredFlowDimension === "auto" || !shouldMaterializeFlowDimension(original, property, isSnapshotRoot, options.layoutContext)) continue;
     }
