@@ -159,10 +159,23 @@ HTML copy.
 const pdf = await renderPdf(invoice);
 const previewTarget = document.querySelector<HTMLElement>("#pdf-preview");
 if (!previewTarget) throw new Error("Preview target not found");
+const previousButton = document.querySelector<HTMLButtonElement>("#previous-page")!;
+const nextButton = document.querySelector<HTMLButtonElement>("#next-page")!;
+const pageCounter = document.querySelector<HTMLOutputElement>("#page-counter")!;
 
 const preview = await pdf.preview(previewTarget, {
   initialScale: "fit-width",
+  onPageChange(currentPage, totalPages) {
+    pageCounter.textContent = `Page ${currentPage} of ${totalPages}`;
+    previousButton.disabled = currentPage === 1;
+    nextButton.disabled = currentPage === totalPages;
+  },
 });
+
+previousButton.addEventListener("click", () => preview.previousPage());
+nextButton.addEventListener("click", () => preview.nextPage());
+preview.goToPage(7); // Clamped to the first or last page when outside the document range.
+console.log(preview.currentPage); // 1-based and synchronized with manual scrolling
 
 // Later, when closing the preview:
 preview.dispose();

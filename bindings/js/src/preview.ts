@@ -9,7 +9,7 @@ export type PdfPreviewTheme = "system" | "light" | "dark";
 
 /** Display and rendering limits for `PdfDocument.preview`. */
 export interface PdfPreviewOptions {
-  /** Whether to show the page summary and zoom toolbar. Defaults to `true`. */
+  /** Whether to show the page navigation and zoom toolbar. Defaults to `true`. */
   showToolbar?: boolean;
   /** Padding around the rendered pages in CSS pixels. Defaults to `28`, or `16` on narrow screens. */
   padding?: number;
@@ -29,6 +29,8 @@ export interface PdfPreviewOptions {
   theme?: PdfPreviewTheme;
   /** Called after each page canvas completes rendering. */
   onProgress?: (completedPages: number, totalPages: number) => void;
+  /** Called once after initial loading and whenever the 1-based current page changes. */
+  onPageChange?: (currentPage: number, totalPages: number) => void;
 }
 
 interface PdfJsViewport {
@@ -92,6 +94,7 @@ const VIEWER_STYLES = `
     box-shadow: 0 0 0 1px rgba(24, 32, 42, 0.12), 0 18px 50px rgba(24, 32, 42, 0.10);
     display: grid;
     grid-template-rows: auto minmax(320px, 1fr);
+    height: min(80vh, 900px);
     isolation: isolate;
     min-height: 520px;
     overflow: hidden;
@@ -102,6 +105,7 @@ const VIEWER_STYLES = `
     background: var(--preview-toolbar);
     box-shadow: 0 1px 0 var(--preview-toolbar-line);
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     justify-content: space-between;
     min-height: 60px;
@@ -112,10 +116,11 @@ const VIEWER_STYLES = `
     color: var(--preview-summary);
     font-size: 13px;
     font-variant-numeric: tabular-nums;
-    min-width: 9rem;
+    min-width: 8rem;
+    text-align: center;
   }
-  .controls { align-items: center; display: flex; gap: 6px; }
-  .zoom {
+  .navigation, .controls { align-items: center; display: flex; gap: 6px; }
+  .control {
     background: var(--preview-zoom);
     border: 0;
     border-radius: 9px;
@@ -126,8 +131,18 @@ const VIEWER_STYLES = `
     min-width: 44px;
     padding: 0 12px;
   }
-  .zoom:focus-visible { outline: 2px solid var(--preview-focus); outline-offset: 2px; }
-  .zoom:disabled { cursor: not-allowed; opacity: 0.42; }
+  .control:focus-visible { outline: 2px solid var(--preview-focus); outline-offset: 2px; }
+  .control:disabled { cursor: not-allowed; opacity: 0.42; }
+  .page-navigation {
+    align-items: center;
+    display: inline-flex;
+    flex: 0 0 44px;
+    height: 44px;
+    justify-content: center;
+    padding: 0;
+    width: 44px;
+  }
+  .page-navigation svg { height: 20px; width: 20px; }
   .scale {
     color: var(--preview-scale);
     font-size: 13px;
@@ -162,7 +177,7 @@ const VIEWER_STYLES = `
     text-align: center;
   }
   @media (hover: hover) and (pointer: fine) {
-    .zoom:not(:disabled):hover { background: var(--preview-zoom-hover); }
+    .control:not(:disabled):hover { background: var(--preview-zoom-hover); }
   }
   @media (prefers-color-scheme: dark) {
     :host {
@@ -204,7 +219,8 @@ const VIEWER_STYLES = `
   @media (max-width: 560px) {
     .viewer { border-radius: 10px; min-height: 440px; }
     .toolbar { align-items: flex-start; flex-direction: column; }
-    .controls { width: 100%; }
+    .navigation, .controls { width: 100%; }
+    .navigation { justify-content: space-between; }
     .controls .zoom:last-child { margin-left: auto; }
     .pages { gap: 16px; padding: 16px; }
   }
@@ -242,6 +258,8 @@ export class PdfPreview {
   private readonly shadow: ShadowRoot;
   private readonly pagesElement: HTMLElement;
   private readonly summaryElement: HTMLElement;
+  private readonly previousPageButton: HTMLButtonElement;
+  private readonly nextPageButton: HTMLButtonElement;
   private readonly scaleElement: HTMLOutputElement;
   private readonly zoomOutButton: HTMLButtonElement;
   private readonly zoomInButton: HTMLButtonElement;
@@ -250,12 +268,27 @@ export class PdfPreview {
   private readonly zoomStep: number;
   private readonly pixelRatio: number;
   private readonly onProgress: ((completedPages: number, totalPages: number) => void) | undefined;
+  private readonly onPageChange: ((currentPage: number, totalPages: number) => void) | undefined;
+  private readonly events = new AbortController();
   private loadingTask: PdfJsLoadingTask | undefined;
   private document: PdfJsDocument | undefined;
   private renderTask: PdfJsRenderTask | undefined;
   private scale = 1;
+  private currentPageValue = 1;
   private renderVersion = 0;
+  private scrollFrame: number | undefined;
+  private scrollDetectionSuspended = true;
+  private rendering = false;
+  private emittedInitialPageChange = false;
   private disposed = false;
+
+  private readonly handleScroll = (): void => {
+    if (this.disposed || this.scrollDetectionSuspended || this.scrollFrame !== undefined) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = undefined;
+      if (!this.disposed && !this.scrollDetectionSuspended) this.detectCurrentPage();
+    });
+  };
 
   private constructor(
     private readonly target: HTMLElement,
@@ -269,6 +302,7 @@ export class PdfPreview {
     this.zoomStep = Math.max(options.zoomStep ?? 0.25, 0.05);
     this.pixelRatio = Math.min(Math.max(window.devicePixelRatio || 1, 1), options.maxPixelRatio ?? 2);
     this.onProgress = options.onProgress;
+    this.onPageChange = options.onPageChange;
 
     this.element = document.createElement("div");
     this.element.dataset.html2realpdfPreview = "";
@@ -291,6 +325,14 @@ export class PdfPreview {
     this.summaryElement.setAttribute("aria-live", "polite");
     this.summaryElement.textContent = "Loading PDF preview...";
 
+    const navigation = document.createElement("div");
+    navigation.className = "navigation";
+    this.previousPageButton = createPageNavigationButton("Previous page", "previous");
+    this.nextPageButton = createPageNavigationButton("Next page", "next");
+    this.previousPageButton.disabled = true;
+    this.nextPageButton.disabled = true;
+    navigation.append(this.previousPageButton, this.summaryElement, this.nextPageButton);
+
     const controls = document.createElement("div");
     controls.className = "controls";
     this.zoomOutButton = createButton("-", "Zoom out");
@@ -300,7 +342,7 @@ export class PdfPreview {
     this.zoomInButton = createButton("+", "Zoom in");
     const fitButton = createButton("Fit", "Fit pages to preview width");
     controls.append(this.zoomOutButton, this.scaleElement, this.zoomInButton, fitButton);
-    toolbar.append(this.summaryElement, controls);
+    toolbar.append(navigation, controls);
 
     this.pagesElement = document.createElement("div");
     this.pagesElement.className = "pages";
@@ -312,16 +354,20 @@ export class PdfPreview {
     viewer.append(toolbar, this.pagesElement);
     this.shadow.append(style, viewer);
     this.target.replaceChildren(this.element);
+    const listenerOptions = { signal: this.events.signal };
+    this.pagesElement.addEventListener("scroll", this.handleScroll, { passive: true, ...listenerOptions });
 
+    this.previousPageButton.addEventListener("click", () => this.previousPage(), listenerOptions);
+    this.nextPageButton.addEventListener("click", () => this.nextPage(), listenerOptions);
     this.zoomOutButton.addEventListener("click", () => {
       void this.setScale(this.scale - this.zoomStep).catch((error: unknown) => this.showError(error));
-    });
+    }, listenerOptions);
     this.zoomInButton.addEventListener("click", () => {
       void this.setScale(this.scale + this.zoomStep).catch((error: unknown) => this.showError(error));
-    });
+    }, listenerOptions);
     fitButton.addEventListener("click", () => {
       void this.fitToWidth().catch((error: unknown) => this.showError(error));
-    });
+    }, listenerOptions);
   }
 
   /** @internal */
@@ -347,6 +393,11 @@ export class PdfPreview {
   /** Current logical PDF.js scale after option clamping. */
   get currentScale(): number {
     return this.scale;
+  }
+
+  /** Current 1-based page, synchronized with navigation and manual preview scrolling. */
+  get currentPage(): number {
+    return this.currentPageValue;
   }
 
   /** Current preview-control theme, including the default `system` mode. */
@@ -384,6 +435,26 @@ export class PdfPreview {
     await this.renderPages();
   }
 
+  /** Navigates to the preceding page without scrolling the host document. */
+  previousPage(): void {
+    this.assertActive();
+    this.navigateToPage(this.currentPageValue - 1);
+  }
+
+  /** Navigates to the following page without scrolling the host document. */
+  nextPage(): void {
+    this.assertActive();
+    this.navigateToPage(this.currentPageValue + 1);
+  }
+
+  /** Navigates to a 1-based page, clamped to the available document range. */
+  goToPage(page: number): void {
+    this.assertActive();
+    const totalPages = this.document?.numPages ?? this.expectedPageCount;
+    const targetPage = Number.isNaN(page) ? 1 : Math.round(clamp(page, 1, totalPages));
+    this.navigateToPage(targetPage);
+  }
+
   /** Cancels active work, destroys PDF.js state, and clears the target. */
   dispose(): void {
     if (this.disposed) return;
@@ -391,6 +462,9 @@ export class PdfPreview {
     this.renderVersion += 1;
     this.renderTask?.cancel();
     this.renderTask = undefined;
+    this.events.abort();
+    if (this.scrollFrame !== undefined) cancelAnimationFrame(this.scrollFrame);
+    this.scrollFrame = undefined;
     this.releaseDocument();
     if (this.element.parentNode === this.target) this.target.replaceChildren();
     this.onDispose?.();
@@ -426,6 +500,8 @@ export class PdfPreview {
     const version = ++this.renderVersion;
     this.renderTask?.cancel();
     this.renderTask = undefined;
+    this.suspendScrollDetection();
+    this.rendering = true;
     this.pagesElement.replaceChildren();
     this.updateControls();
 
@@ -465,7 +541,10 @@ export class PdfPreview {
     }
 
     if (version === this.renderVersion) {
-      this.summaryElement.textContent = `${pdf.numPages} ${pdf.numPages === 1 ? "page" : "pages"}`;
+      this.rendering = false;
+      this.scrollPageIntoView(this.currentPageValue);
+      this.scrollDetectionSuspended = false;
+      this.commitCurrentPage(this.currentPageValue);
       this.updateControls();
     }
   }
@@ -474,6 +553,72 @@ export class PdfPreview {
     this.scaleElement.value = `${Math.round(this.scale * 100)}%`;
     this.zoomOutButton.disabled = this.scale <= this.minScale + 0.001;
     this.zoomInButton.disabled = this.scale >= this.maxScale - 0.001;
+    const totalPages = this.document?.numPages ?? this.expectedPageCount;
+    this.previousPageButton.disabled = this.rendering || this.currentPageValue <= 1;
+    this.nextPageButton.disabled = this.rendering || this.currentPageValue >= totalPages;
+    if (!this.rendering && this.document) {
+      this.summaryElement.textContent = `Page ${this.currentPageValue} of ${totalPages}`;
+    }
+  }
+
+  private navigateToPage(pageNumber: number): void {
+    const totalPages = this.document?.numPages ?? this.expectedPageCount;
+    if (pageNumber < 1 || pageNumber > totalPages || pageNumber === this.currentPageValue) return;
+    this.commitCurrentPage(pageNumber);
+    this.scrollPageIntoView(pageNumber);
+  }
+
+  private commitCurrentPage(pageNumber: number): void {
+    const totalPages = this.document?.numPages ?? this.expectedPageCount;
+    const nextPage = Math.round(clamp(pageNumber, 1, totalPages));
+    const changed = nextPage !== this.currentPageValue;
+    this.currentPageValue = nextPage;
+    this.updateControls();
+    if (!this.emittedInitialPageChange || changed) {
+      this.emittedInitialPageChange = true;
+      this.onPageChange?.(nextPage, totalPages);
+    }
+  }
+
+  private scrollPageIntoView(pageNumber: number): void {
+    const page = this.pagesElement.querySelector<HTMLElement>(`.page[data-page-number="${pageNumber}"]`);
+    if (!page) return;
+    const pagesRect = this.pagesElement.getBoundingClientRect();
+    const pageRect = page.getBoundingClientRect();
+    const paddingTop = Number.parseFloat(getComputedStyle(this.pagesElement).paddingTop) || 0;
+    this.pagesElement.scrollTop += pageRect.top - pagesRect.top - paddingTop;
+  }
+
+  private detectCurrentPage(): void {
+    const pages = this.pagesElement.querySelectorAll<HTMLElement>(".page");
+    if (pages.length === 0) return;
+    const viewport = this.pagesElement.getBoundingClientRect();
+    const viewportCenter = (viewport.top + viewport.bottom) / 2;
+    let bestPage = this.currentPageValue;
+    let bestVisibleHeight = -1;
+    let bestCenterDistance = Number.POSITIVE_INFINITY;
+
+    for (const page of pages) {
+      const rect = page.getBoundingClientRect();
+      const visibleHeight = Math.max(0, Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top));
+      const centerDistance = Math.abs((rect.top + rect.bottom) / 2 - viewportCenter);
+      if (
+        visibleHeight > bestVisibleHeight + 0.5
+        || (Math.abs(visibleHeight - bestVisibleHeight) <= 0.5 && centerDistance < bestCenterDistance)
+      ) {
+        bestPage = Number(page.dataset.pageNumber);
+        bestVisibleHeight = visibleHeight;
+        bestCenterDistance = centerDistance;
+      }
+    }
+
+    this.commitCurrentPage(bestPage);
+  }
+
+  private suspendScrollDetection(): void {
+    this.scrollDetectionSuspended = true;
+    if (this.scrollFrame !== undefined) cancelAnimationFrame(this.scrollFrame);
+    this.scrollFrame = undefined;
   }
 
   private availablePageWidth(): number {
@@ -484,6 +629,8 @@ export class PdfPreview {
 
   private showError(error: unknown): void {
     if (this.disposed) return;
+    this.suspendScrollDetection();
+    this.rendering = false;
     this.pagesElement.replaceChildren();
     const message = document.createElement("p");
     message.className = "error";
@@ -507,10 +654,32 @@ export class PdfPreview {
 
 function createButton(label: string, ariaLabel: string): HTMLButtonElement {
   const button = document.createElement("button");
-  button.className = "zoom";
+  button.className = "control zoom";
   button.type = "button";
   button.textContent = label;
   button.setAttribute("aria-label", ariaLabel);
+  return button;
+}
+
+function createPageNavigationButton(ariaLabel: string, direction: "previous" | "next"): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.className = "control page-navigation";
+  button.type = "button";
+  button.setAttribute("aria-label", ariaLabel);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "2");
+  path.setAttribute("d", direction === "previous" ? "m15 18-6-6 6-6" : "m9 18 6-6-6-6");
+  svg.append(path);
+  button.append(svg);
   return button;
 }
 

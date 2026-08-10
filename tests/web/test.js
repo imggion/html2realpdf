@@ -204,6 +204,7 @@ let packageBuildPromise;
 let packageModulePromise;
 let packageRendererPromise;
 let packagePdf;
+let navigationTestPdf;
 let benchmarkPdfJsPromise;
 const benchmarkArtifacts = new Map();
 const systemDarkMode = window.matchMedia("(prefers-color-scheme: dark)");
@@ -510,6 +511,7 @@ async function getPackageRenderer() {
 function disposeActivePreview() {
   const preview = activePreview;
   activePreview = undefined;
+  window.__html2realpdfPreview = undefined;
   if (typeof preview === "function") {
     preview();
     return;
@@ -518,7 +520,15 @@ function disposeActivePreview() {
 }
 
 function requirePreviewController(preview) {
-  if (!preview || typeof preview.dispose !== "function" || typeof preview.fitToWidth !== "function") {
+  if (
+    !preview
+    || typeof preview.dispose !== "function"
+    || typeof preview.fitToWidth !== "function"
+    || typeof preview.previousPage !== "function"
+    || typeof preview.nextPage !== "function"
+    || typeof preview.goToPage !== "function"
+    || typeof preview.currentPage !== "number"
+  ) {
     if (typeof preview === "function") preview();
     throw new Error("Preview API is stale; run `make wasm` and reload the page to use the current cache-safe browser build");
   }
@@ -533,13 +543,25 @@ function updatePreviewToolbarButton() {
 
 async function renderPdfPreview(pdf, ariaLabel) {
   disposeActivePreview();
+  const pageChanges = [];
+  const progressMessages = [];
+  window.__html2realpdfPreviewPageChanges = pageChanges;
+  window.__html2realpdfPreviewProgressMessages = progressMessages;
   activePreview = requirePreviewController(await pdf.preview(pdfPreview, {
     initialScale: "fit-width",
     ariaLabel,
     showToolbar: showPreviewToolbar,
     padding: previewPadding,
     theme: previewTheme,
+    onProgress() {
+      const summary = pdfPreview.querySelector("[data-html2realpdf-preview]")?.shadowRoot?.querySelector(".summary");
+      if (summary?.textContent) progressMessages.push(summary.textContent);
+    },
+    onPageChange(currentPage, totalPages) {
+      pageChanges.push({ currentPage, totalPages });
+    },
   }));
+  window.__html2realpdfPreview = activePreview;
   previewPdfDocument = pdf;
   previewAriaLabel = ariaLabel;
   updatePreviewToolbarButton();
@@ -1702,31 +1724,121 @@ function verifyComplexDocument(pdf, expectedPages, options = {}) {
 }
 
 async function verifyEmbeddedPreview(pdf) {
+  if (!navigationTestPdf) throw new Error("multi-page preview fixture was not generated");
   showPreviewToolbar = true;
   previewPadding = undefined;
   previewPaddingInput.value = "";
-  await renderPdfPreview(pdf, "Automated integrated PDF preview");
+  await renderPdfPreview(navigationTestPdf, "Automated integrated PDF preview");
   const host = pdfPreview.querySelector("[data-html2realpdf-preview]");
   const shadow = host?.shadowRoot;
   if (!shadow) throw new Error("preview did not create an integrated shadow-DOM viewer");
   if (pdfPreview.querySelector("iframe,object,embed")) throw new Error("preview delegated to the browser PDF plugin");
   const canvases = [...shadow.querySelectorAll("canvas")];
-  if (canvases.length !== pdf.pageCount) throw new Error(`preview rendered ${canvases.length} canvases for ${pdf.pageCount} pages`);
+  if (canvases.length !== navigationTestPdf.pageCount) {
+    throw new Error(`preview rendered ${canvases.length} canvases for ${navigationTestPdf.pageCount} pages`);
+  }
   if (canvases.some((canvas) => canvas.width === 0 || canvas.height === 0)) throw new Error("preview contains an empty page canvas");
   const toolbar = shadow.querySelector(".toolbar");
   if (!(toolbar instanceof HTMLElement) || toolbar.hidden) throw new Error("preview toolbar is not visible by default");
+  const navigation = shadow.querySelector(".navigation");
+  const zoomControls = shadow.querySelector(".controls");
+  if (!(navigation instanceof HTMLElement) || !(zoomControls instanceof HTMLElement) || navigation.parentElement !== toolbar || zoomControls.parentElement !== toolbar) {
+    throw new Error("preview navigation and zoom controls are not distinct toolbar groups");
+  }
+  const summary = shadow.querySelector(".summary");
+  if (summary?.textContent !== `Page 1 of ${navigationTestPdf.pageCount}`) throw new Error("preview did not show the initial page counter");
   const pages = shadow.querySelector(".pages");
   if (!(pages instanceof HTMLElement) || getComputedStyle(pages).paddingLeft !== "28px") throw new Error("preview did not retain its default padding");
   if (!shadow.querySelector('button[aria-label="Zoom in"]')) throw new Error("preview zoom controls are missing");
+  const previousButton = shadow.querySelector('button[aria-label="Previous page"]');
+  const nextButton = shadow.querySelector('button[aria-label="Next page"]');
+  if (!(previousButton instanceof HTMLButtonElement) || !(nextButton instanceof HTMLButtonElement)) {
+    throw new Error("preview page navigation controls are missing or are not native buttons");
+  }
+  if (previousButton.type !== "button" || nextButton.type !== "button") throw new Error("preview navigation buttons can submit a host form");
+  if (!previousButton.disabled || nextButton.disabled) throw new Error("preview initial navigation limits are incorrect");
+  for (const button of [previousButton, nextButton]) {
+    const rect = button.getBoundingClientRect();
+    const icon = button.querySelector("svg");
+    if (rect.width !== 44 || rect.height !== 44) throw new Error("preview navigation targets are not 44 by 44 CSS pixels");
+    if (icon?.getAttribute("aria-hidden") !== "true" || icon.getAttribute("focusable") !== "false") {
+      throw new Error("preview navigation SVGs are not decorative");
+    }
+  }
+  nextButton.focus({ preventScroll: true });
+  if (shadow.activeElement !== nextButton) throw new Error("preview navigation button cannot receive focus");
+  const initialChanges = window.__html2realpdfPreviewPageChanges;
+  if (initialChanges.length !== 1 || initialChanges[0].currentPage !== 1 || initialChanges[0].totalPages !== navigationTestPdf.pageCount) {
+    throw new Error("preview did not emit exactly one initial page change");
+  }
+  if (!window.__html2realpdfPreviewProgressMessages.includes(`Rendering page ${navigationTestPdf.pageCount} of ${navigationTestPdf.pageCount}`)) {
+    throw new Error("preview rendering progress was not retained before the final page counter");
+  }
+
+  const hostScrollTop = window.scrollY;
+  nextButton.click();
+  await waitForPreviewScrollFrame();
+  if (activePreview.currentPage !== 2 || summary.textContent !== `Page 2 of ${navigationTestPdf.pageCount}`) {
+    throw new Error("preview toolbar did not navigate to the next page");
+  }
+  if (window.scrollY !== hostScrollTop) {
+    throw new Error(`preview navigation scrolled the host page from ${hostScrollTop} to ${window.scrollY}`);
+  }
+  if (initialChanges.length !== 2) throw new Error("preview emitted duplicate callbacks for toolbar navigation");
+
+  activePreview.previousPage();
+  await waitForPreviewScrollFrame();
+  if (activePreview.currentPage !== 1 || !previousButton.disabled) throw new Error("preview API did not navigate to the previous-page limit");
+  const firstLimitChanges = initialChanges.length;
+  activePreview.previousPage();
+  if (activePreview.currentPage !== 1 || initialChanges.length !== firstLimitChanges) throw new Error("previousPage was not a no-op at the first page");
+
+  activePreview.nextPage();
+  activePreview.nextPage();
+  await waitForPreviewScrollFrame();
+  if (activePreview.currentPage !== 3 || initialChanges.length !== firstLimitChanges + 2) {
+    throw new Error("consecutive nextPage calls were not deterministic");
+  }
+
+  const directNavigationChanges = initialChanges.length;
+  activePreview.goToPage(-10);
+  if (activePreview.currentPage !== 1) throw new Error("goToPage did not clamp a negative page to the first page");
+  activePreview.goToPage(navigationTestPdf.pageCount + 10);
+  if (activePreview.currentPage !== navigationTestPdf.pageCount) throw new Error("goToPage did not clamp an oversized page to the last page");
+  activePreview.goToPage(2);
+  activePreview.goToPage(2);
+  if (activePreview.currentPage !== 2 || initialChanges.length !== directNavigationChanges + 3) {
+    throw new Error("goToPage navigation or duplicate callback suppression is incorrect");
+  }
+
+  pages.scrollTop = pages.scrollHeight;
+  await waitForPreviewScrollFrame();
+  if (activePreview.currentPage !== navigationTestPdf.pageCount || !nextButton.disabled) {
+    throw new Error("manual preview scrolling did not select the last visible page");
+  }
+  const lastLimitChanges = initialChanges.length;
+  activePreview.nextPage();
+  if (activePreview.currentPage !== navigationTestPdf.pageCount || initialChanges.length !== lastLimitChanges) {
+    throw new Error("nextPage was not a no-op at the final page");
+  }
+
+  const pageBeforeZoom = activePreview.currentPage;
+  const changesBeforeZoom = initialChanges.length;
   const initialScale = activePreview.currentScale;
   await activePreview.setScale(Math.min(initialScale + 0.25, 3));
   if (activePreview.currentScale <= initialScale) throw new Error("preview zoom API did not increase the scale");
+  if (activePreview.currentPage !== pageBeforeZoom || initialChanges.length !== changesBeforeZoom) {
+    throw new Error("preview zoom did not preserve the current page");
+  }
   await activePreview.fitToWidth();
+  if (activePreview.currentPage !== pageBeforeZoom || initialChanges.length !== changesBeforeZoom) {
+    throw new Error("fitToWidth did not preserve the current page");
+  }
 
   showPreviewToolbar = false;
   previewPadding = 0;
   previewPaddingInput.value = "0";
-  await renderPdfPreview(pdf, "Automated integrated PDF preview");
+  await renderPdfPreview(navigationTestPdf, "Automated integrated PDF preview");
   const hiddenHost = pdfPreview.querySelector("[data-html2realpdf-preview]");
   const hiddenShadow = hiddenHost?.shadowRoot;
   const hiddenToolbar = hiddenShadow?.querySelector(".toolbar");
@@ -1738,9 +1850,55 @@ async function verifyEmbeddedPreview(pdf) {
     throw new Error("preview padding was not applied by configuration");
   }
   const hiddenCanvases = hiddenShadow?.querySelectorAll("canvas").length ?? 0;
-  if (hiddenCanvases !== pdf.pageCount) throw new Error("toolbar-free preview did not render every page");
+  if (hiddenCanvases !== navigationTestPdf.pageCount) throw new Error("toolbar-free preview did not render every page");
+  activePreview.nextPage();
+  await waitForPreviewScrollFrame();
+  if (activePreview.currentPage !== 2 || window.__html2realpdfPreviewPageChanges.length !== 2) {
+    throw new Error("toolbar-free preview navigation API is not synchronized");
+  }
+
+  showPreviewToolbar = true;
+  await renderPdfPreview(pdf, "Automated single-page PDF preview");
+  const singleShadow = pdfPreview.querySelector("[data-html2realpdf-preview]")?.shadowRoot;
+  const singleSummary = singleShadow?.querySelector(".summary");
+  const singlePrevious = singleShadow?.querySelector('button[aria-label="Previous page"]');
+  const singleNext = singleShadow?.querySelector('button[aria-label="Next page"]');
+  if (singleSummary?.textContent !== "Page 1 of 1") throw new Error("single-page preview counter is incorrect");
+  if (!(singlePrevious instanceof HTMLButtonElement) || !(singleNext instanceof HTMLButtonElement) || !singlePrevious.disabled || !singleNext.disabled) {
+    throw new Error("single-page preview navigation is not disabled");
+  }
+  activePreview.previousPage();
+  activePreview.nextPage();
+  activePreview.goToPage(-1);
+  activePreview.goToPage(2);
+  if (activePreview.currentPage !== 1 || window.__html2realpdfPreviewPageChanges.length !== 1) {
+    throw new Error("single-page navigation was not a callback-free no-op");
+  }
+  const disposedPreview = activePreview;
+  disposedPreview.dispose();
+  for (const navigate of [() => disposedPreview.previousPage(), () => disposedPreview.nextPage(), () => disposedPreview.goToPage(1)]) {
+    try {
+      navigate();
+      throw new Error("disposed preview navigation did not throw");
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("disposed")) throw error;
+    }
+  }
+
+  showPreviewToolbar = false;
+  await renderPdfPreview(navigationTestPdf, "Automated integrated PDF preview");
   return hiddenCanvases;
 }
+
+function waitForPreviewScrollFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+window.__html2realpdfShowSinglePagePreview = async () => {
+  if (!packagePdf) throw new Error("single-page preview fixture was not generated");
+  showPreviewToolbar = true;
+  await renderPdfPreview(packagePdf, "Automated single-page PDF preview");
+};
 
 function runPipeline(instance, html, pipeline) {
   switch (pipeline) {
@@ -1967,7 +2125,8 @@ async function runWasmTests() {
     const size = verifyComplexDocument(pdf, 4, { minimumBytes: 100_000 });
     const text = decoder.decode(pdf.toUint8Array());
     if (!text.includes("/MediaBox [0 0 841.890 595.276]")) throw new Error("presentation pages are not A4 landscape");
-    pdf.dispose();
+    navigationTestPdf?.dispose();
+    navigationTestPdf = pdf;
     passed++;
     testResults.textContent += `✓ PASS: landscape_presentation_deck (${size} bytes, 4 pages)\n`;
   } catch (err) {
