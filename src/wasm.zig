@@ -10,7 +10,7 @@ const pdf = html2realpdf.pdf;
 const font = html2realpdf.font;
 const geometry = html2realpdf.geometry;
 
-const abi_version_value: u32 = 1;
+const abi_version_value: u32 = 2;
 
 var last_output_len: usize = 0;
 
@@ -61,7 +61,19 @@ const JsonPageRule = struct {
     marginBoxes: []const JsonMarginBox = &.{},
 };
 
+const JsonAttachment = struct {
+    name: []const u8,
+    dataPointer: usize,
+    dataLength: usize,
+    mimeType: []const u8 = "application/octet-stream",
+    relationship: pdf.pdfa.Relationship = .Unspecified,
+    description: ?[]const u8 = null,
+    modifiedAt: ?[]const u8 = null,
+};
+
 const JsonRenderOptions = struct {
+    conformance: ?pdf.Conformance = null,
+    attachments: []const JsonAttachment = &.{},
     pageWidthPoints: f32,
     pageHeightPoints: f32,
     marginTopPoints: f32 = 0,
@@ -352,7 +364,7 @@ fn renderPdfWithJson(
     options_ptr: usize,
     options_len: usize,
 ) usize {
-    if (options_ptr == 0) return createErrorResult(-4, "Render options pointer is null");
+    if (!validMemoryRange(options_ptr, options_len)) return createErrorResult(-4, "Render options memory range is invalid");
     const raw_ptr: [*]const u8 = @ptrFromInt(options_ptr);
     const parsed = std.json.parseFromSlice(
         JsonRenderOptions,
@@ -362,6 +374,13 @@ fn renderPdfWithJson(
     ) catch return createErrorResult(-4, "Render options JSON is invalid");
     defer parsed.deinit();
     const value = parsed.value;
+    const attachments = std.heap.wasm_allocator.alloc(pdf.Attachment, value.attachments.len) catch return createErrorResult(-2, "Attachment allocation failed");
+    defer std.heap.wasm_allocator.free(attachments);
+    for (value.attachments, attachments) |input, *output| {
+        if (input.dataLength > 0 and !validMemoryRange(input.dataPointer, input.dataLength)) return createErrorResult(-4, "Attachment memory range is invalid");
+        const bytes: []const u8 = if (input.dataLength == 0) &.{} else @as([*]const u8, @ptrFromInt(input.dataPointer))[0..input.dataLength];
+        output.* = .{ .name = input.name, .data = bytes, .mime_type = input.mimeType, .relationship = input.relationship, .description = input.description, .modified_at = input.modifiedAt };
+    }
     const metadata: pdf.Metadata = if (value.metadata) |metadata| .{
         .title = metadata.title,
         .author = metadata.author,
@@ -417,6 +436,8 @@ fn renderPdfWithJson(
             .left = @max(value.marginLeftPoints, 0),
         },
         .metadata = metadata,
+        .conformance = value.conformance,
+        .attachments = attachments,
         .font_registry = if (context != null) &registry else null,
         .css_profile = value.cssProfile,
         .margin_boxes = margin_boxes,
@@ -445,12 +466,17 @@ fn createErrorResult(status: i32, message: []const u8) usize {
     return @intFromPtr(result);
 }
 
+fn validMemoryRange(pointer: usize, length: usize) bool {
+    const memory_size = @as(u64, @wasmMemorySize(0)) * 65536;
+    return pointer != 0 and @as(u64, pointer) + @as(u64, length) <= memory_size;
+}
+
 fn renderPdf(ptr: usize, len: usize, options: renderer.Options) usize {
     const result = std.heap.wasm_allocator.create(PdfResult) catch return 0;
     result.* = .{};
 
-    if (ptr == 0) {
-        setResultError(result, -3, "HTML input pointer is null");
+    if (!validMemoryRange(ptr, len)) {
+        setResultError(result, -3, "HTML input memory range is invalid");
         return @intFromPtr(result);
     }
     if (options.custom_page_width_points) |width| {

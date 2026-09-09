@@ -416,7 +416,7 @@ function generatePdf(instance, html) {
     "pdf_result_free",
     "html2realpdf_abi_version",
   ]);
-  if (abiVersion() !== 1) throw new Error(`Unsupported WASM ABI version ${abiVersion()}`);
+  if (abiVersion() !== 2) throw new Error(`Unsupported WASM ABI version ${abiVersion()}`);
 
   const input = encoder.encode(html);
   const inputPtr = alloc(input.length);

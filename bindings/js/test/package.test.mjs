@@ -112,7 +112,7 @@ test("packaged WASM renders a real PDF with a result handle", async () => {
   const wasm = await readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url));
   const { instance } = await WebAssembly.instantiate(wasm, {});
   const exports = instance.exports;
-  assert.equal(exports.html2realpdf_abi_version(), 1);
+  assert.equal(exports.html2realpdf_abi_version(), 2);
   const input = new TextEncoder().encode("<h1>Packaged PDF</h1><p>Selectable text</p>");
   const inputPointer = exports.alloc(input.length);
   new Uint8Array(exports.memory.buffer, inputPointer, input.length).set(input);

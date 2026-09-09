@@ -381,7 +381,7 @@ pub const Metrics = struct {
         if (@as(usize, number_of_h_metrics) * 4 > hmtx.len) return Error.InvalidFont;
 
         const fs_type = try readU16(os2, 8);
-        if ((fs_type & 0x0002) != 0) return Error.RestrictedEmbedding;
+        if ((fs_type & 0x0202) != 0) return Error.RestrictedEmbedding;
 
         return .{
             .data = data,

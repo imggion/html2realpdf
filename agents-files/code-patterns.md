@@ -183,3 +183,16 @@
 - `make test-baseline` preserves page counts and deterministic PDF SHA-256 values.
 - For PDF changes, run `tests/render_pdf_fixture.mjs`, `pdfinfo`, `pdffonts`,
   `pdftotext`, Poppler rendering, and visually inspect the page PNG.
+
+## PDF/A
+
+- Ordinary output remains byte-compatible. PDF/A is explicit and independent
+  of the CSS profile; reject incompatible resources without ordinary fallback.
+- Use the dedicated archival cluster mapper for every CID, including SVG and
+  margin text; keep `glyphUnicode` spacing behavior unchanged. Preserve ActualText.
+- Honor font embedding permissions, omit CIDSet, keep deterministic unique subset
+  prefixes, and keep metadata, ICC, attachments and IDs in the existing writer.
+- Copy attachment subarrays before Worker transfer, use binary WASM allocations
+  and JSON descriptors, validate bounds, and free every allocation on errors.
+- `make test-pdfa` uses pinned veraPDF 1.30.2 with `--flavour 3u`; missing reports,
+  execution errors, wrong versions and unexpected document sets fail the gate.

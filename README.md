@@ -28,6 +28,7 @@
 - [Vue](#vue)
 - [Preview](#preview)
 - [Page layouts](#page-layouts)
+- [PDF/A and attachments](#pdfa-and-attachments)
 - [Benchmark](#benchmark)
 - [Contributing](#contributing)
 - [License](#license)
@@ -206,6 +207,40 @@ const pdf = await renderPdf(postcard, {
 });
 ```
 
+## PDF/A and attachments
+
+Opt into PDF/A-3u independently of the CSS profile:
+
+```ts
+const pdf = await renderPdf(invoice, {
+  conformance: "pdfa-3u",
+  metadata: { title: "Invoice" },
+  attachments: [{
+    name: "invoice.xml",
+    data: new TextEncoder().encode(xml),
+    mimeType: "application/xml",
+    relationship: "Data",
+  }],
+});
+```
+
+The writer embeds sRGB, synchronized XMP metadata and Unicode font mappings.
+Incompatible resources produce an error; there is no fallback to ordinary PDF.
+CMYK JPEGs, missing glyphs and fonts that forbid outline embedding are rejected.
+Transparency and supported SVG remain native PDF graphics. This is PDF/A-3u,
+not a claim of Tagged PDF, PDF/UA, digital signatures or Factur-X compliance.
+
+Attachments also work without `conformance`. Their bytes are preserved, and
+caller buffers stay usable in both Worker and main-thread execution. MIME type
+defaults to `application/octet-stream` and relationship to `Unspecified`.
+Optional `description` and `modifiedAt: Date` are supported; dates are never
+invented. Empty/duplicate names, malformed MIME types and invalid dates fail.
+The html2pdf.js adapter accepts the same options through `.set(...)`.
+
+See [PDF/A implementation and validation](https://github.com/imggion/html2realpdf/blob/main/docs/pdfa.md)
+for limits and the pinned veraPDF gate. Existing calls without these options
+keep their ordinary PDF output.
+
 ## Benchmark
 
 One recorded run of the deterministic 30-page stress report produced:
@@ -224,7 +259,8 @@ One recorded run of the deterministic 30-page stress report produced:
 
 ## Contributing
 
-You need Zig `0.16.0`, Node.js `20.16+`, npm, and Make. On a fresh checkout,
+You need Zig `0.16.0`, Node.js `20.16+`, npm, and Make. The PDF/A gate
+also needs Java 17+, Poppler, curl and unzip. On a fresh checkout,
 install the JavaScript dependencies once:
 
 ```sh
@@ -240,6 +276,7 @@ npm ci --prefix tests/web
 | `make wasm` | Build the default `ReleaseFast` WebAssembly and browser package |
 | `make wasm-small` | Build the optional size-oriented `ReleaseSmall` package asset |
 | `make react` | Start the React integration app |
+| `make test-pdfa` | Validate PDF/A-3u with veraPDF 1.30.2 and benchmark 30 pages |
 | `make test-release` | Run the complete release gate |
 
 To open the small browser test harness:

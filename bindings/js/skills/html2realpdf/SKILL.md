@@ -45,6 +45,34 @@ try {
 Treat four-value margins as `[top, left, bottom, right]`, matching the
 html2pdf.js compatibility API rather than CSS shorthand order.
 
+## Archival output and attachments
+
+Use `conformance: "pdfa-3u"` for PDF/A-3u, independently of `cssProfile`.
+The existing renderer returns `PdfDocument` or throws; it never silently
+falls back to ordinary PDF. Keep `metadata` on `RenderOptions`.
+
+```ts
+const pdf = await renderer.render(element, {
+  conformance: "pdfa-3u",
+  metadata: { title: "Invoice" },
+  attachments: [{ name: "invoice.xml", data: xmlBytes, mimeType: "application/xml", relationship: "Data" }],
+});
+```
+
+`attachments` also works on ordinary PDFs. Names must be nonempty and unique;
+MIME defaults to `application/octet-stream`, relationship to `Unspecified`.
+Allowed relationships are `Source`, `Data`, `Alternative`, `Supplement` and
+`Unspecified`. Optional `description` and `modifiedAt: Date` are supported.
+No modification date is synthesized. Only the selected Uint8Array view is
+copied, and caller buffers remain usable with Worker execution.
+
+PDF/A rejects CMYK JPEGs, missing/invalid Unicode glyph mappings, fonts that
+forbid outline embedding, page dimensions outside 3–14400 points and PDF/A
+string/name/graphics nesting limits. Fonts forbidding subsets embed fully.
+Transparency and supported SVG remain native. This does not provide Tagged
+PDF, PDF/UA, signatures, Factur-X or other attachment-specific conformance.
+The compatibility adapter accepts the same options via `.set(...)`.
+
 ## Author production report templates
 
 Define one page geometry contract. Prefer `page.margin` for application-owned

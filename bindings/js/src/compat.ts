@@ -241,6 +241,9 @@ function compatRenderOptions(options: Html2PdfOptions): RenderOptions {
   if (options.margin !== undefined) page.margin = options.margin;
 
   const renderOptions: RenderOptions = { page };
+  if (options.metadata !== undefined) renderOptions.metadata = options.metadata;
+  if (options.conformance !== undefined) renderOptions.conformance = options.conformance;
+  if (options.attachments !== undefined) renderOptions.attachments = options.attachments;
   if (options.enableLinks !== undefined) renderOptions.enableLinks = options.enableLinks;
   if (options.pagebreak) {
     const modes = typeof options.pagebreak.mode === "string"

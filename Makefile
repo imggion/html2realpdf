@@ -1,4 +1,4 @@
-.PHONY: debug release deploy wasm wasm-small run react baseline test test-verbose test-wpt test-robustness test-harfbuzz test-bidi test-line-break test-format test-js test-react test-package-consumer test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
+.PHONY: debug release deploy wasm wasm-small run react baseline test test-verbose test-wpt test-robustness test-harfbuzz test-bidi test-line-break test-pdfa test-format test-js test-react test-package-consumer test-web test-web-snapshots test-browser test-baseline test-release test-debug test-debug-tokenizer test-debug-dom test-debug-box help
 
 debug:
 	zig build -Doptimize=Debug
@@ -67,6 +67,7 @@ test: test-wpt test-robustness
 	zig test src/paged_media.zig
 	zig test src/display_list.zig
 	zig test src/pdf.zig
+	zig test src/pdfa.zig
 	zig test src/render.zig
 	zig test src/css/properties.zig
 	zig test src/layout/fragmentation.zig
@@ -118,7 +119,14 @@ test-baseline: wasm
 
 test-web: test-web-snapshots test-browser
 
-test-release: test-format test test-js test-react test-package-consumer test-web test-baseline
+test-pdfa: wasm
+	mkdir -p tmp/pdfa
+	zig build test-pdfa-native
+	node --test tests/pdfa/report.test.mjs
+	node tests/pdfa/run.mjs
+	node --expose-gc tests/pdfa/benchmark.mjs
+
+test-release: test-format test test-js test-react test-package-consumer test-pdfa test-web test-baseline
 
 test-debug: test-debug-tokenizer test-debug-dom test-debug-box
 
@@ -175,6 +183,7 @@ help:
 	@echo "  make test-web Run snapshot and browser E2E suites"
 	@echo "  make test-baseline"
 	@echo "                Verify PDFs against committed SHA-256 baselines"
+	@echo "  make test-pdfa   Validate PDF/A-3u with pinned veraPDF and benchmark 30 pages"
 	@echo "  make test-release"
 	@echo "                Run the complete release validation suite"
 	@echo "  make test-debug-tokenizer"

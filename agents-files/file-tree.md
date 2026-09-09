@@ -45,14 +45,17 @@
 │   ├── paint/                   command types, backgrounds, borders, effects, stacking boundary
 │   ├── image.zig                JPEG/PNG and Flate helpers
 │   ├── svg.zig                  validated SVG shape/path vector lowering
-│   ├── pdf.zig                  PDF 1.7 writer
+│   ├── pdf.zig                  PDF 1.7 writer and associated files
+│   ├── pdfa.zig                 PDF/A-3u policy, XMP and pinned ICC profile
+│   ├── pdfa_integration.zig     native linked archival fixture
 │   ├── render.zig               pipeline orchestration
 │   ├── wpt_subset_test.zig      pinned renderer-native WPT adaptations
 │   ├── robustness_test.zig      fuzz, OOM, and large-document gates
-│   ├── wasm.zig                 ABI v1
+│   ├── wasm.zig                 ABI v2
 │   ├── root.zig                 public Zig exports
 │   └── main.zig                 native executable
 └── tests/
+    ├── pdfa/                    veraPDF gate, extraction/visual QA and benchmark
     ├── benchmark/               shared benchmark helpers and 30-page stress report
     ├── baselines/               versioned PDFs, Poppler PNGs, metrics, digest verifier
     ├── render_pdf_fixture.mjs    Poppler/visual QA fixture generator

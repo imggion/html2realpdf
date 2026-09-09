@@ -13,6 +13,10 @@ const pagination = @import("pagination.zig");
 const svg = @import("svg.zig");
 const box = @import("box.zig");
 
+pub const pdfa = @import("pdfa.zig");
+pub const Attachment = pdfa.Attachment;
+pub const Conformance = pdfa.Conformance;
+
 const font_object_span = 5;
 
 pub const Error = error{
@@ -28,6 +32,8 @@ pub const Metadata = struct {
 };
 
 pub const Options = struct {
+    conformance: ?Conformance = null,
+    attachments: []const Attachment = &.{},
     metadata: Metadata = .{},
     font_registry: ?*const font.Registry = null,
     shaping_mode: font.ShapingMode = .identity,
@@ -211,6 +217,7 @@ const FontUsage = struct {
     allocator: std.mem.Allocator,
     registry: ?*const font.Registry,
     fonts: std.ArrayList(UsedFont),
+    archival: bool = false,
 
     fn init(allocator: std.mem.Allocator, registry: ?*const font.Registry) !FontUsage {
         return .{
@@ -234,7 +241,7 @@ const FontUsage = struct {
             if (run.leading_space) _ = try self.add(used_index, metrics.glyphId(' '), " ");
             if (run.shaped) |shaped| {
                 for (shaped.glyphs) |glyph| {
-                    _ = try self.add(used_index, glyph.glyph_id, glyphUnicode(run.text, glyph));
+                    _ = try self.add(used_index, glyph.glyph_id, try self.mappingUnicode(run.text, glyph));
                 }
             } else {
                 var iterator = font.Utf8Iterator{ .bytes = run.text };
@@ -252,7 +259,7 @@ const FontUsage = struct {
             for (resource.runs.items) |run| {
                 const used_index = try self.ensureResolvedFont(run.resolved);
                 for (run.shaped.glyphs) |glyph| {
-                    _ = try self.add(used_index, glyph.glyph_id, glyphUnicode(run.text, glyph));
+                    _ = try self.add(used_index, glyph.glyph_id, try self.mappingUnicode(run.text, glyph));
                 }
             }
         }
@@ -265,6 +272,8 @@ const FontUsage = struct {
 
     fn ensureResolvedFont(self: *FontUsage, resolved: font.ResolvedFont) !usize {
         for (self.fonts.items, 0..) |used, index| if (used.resolved.id == resolved.id) return index;
+        _ = try font.Metrics.parse(resolved.data);
+        if (self.archival and !std.unicode.utf8ValidateSlice(resolved.postscript_name)) return error.PdfaInvalidFontName;
         var glyphs = try std.ArrayList(GlyphMapping).initCapacity(self.allocator, 32);
         errdefer glyphs.deinit(self.allocator);
         try self.fonts.append(self.allocator, .{
@@ -285,8 +294,17 @@ const FontUsage = struct {
         unreachable;
     }
 
+    fn mappingUnicode(self: *const FontUsage, text: []const u8, glyph: font.ShapedGlyph) ![]const u8 {
+        return if (self.archival) try pdfa.glyphUnicode(text, glyph) else glyphUnicode(text, glyph);
+    }
+
     fn add(self: *FontUsage, used_index: usize, glyph_id: u16, unicode: []const u8) !u16 {
         var used = &self.fonts.items[used_index];
+        if (self.archival) {
+            if (glyph_id == 0 or glyph_id >= used.resolved.metrics().glyph_count) return error.MissingGlyph;
+            if (unicode.len == 0) return error.PdfaInvalidUnicode;
+            try pdfa.validateText(unicode, true);
+        }
         for (used.glyphs.items) |mapping| {
             if (mapping.glyph_id == glyph_id and std.mem.eql(u8, mapping.unicode, unicode)) return mapping.cid;
         }
@@ -428,11 +446,18 @@ pub fn write(allocator: std.mem.Allocator, list: *const display_list.DisplayList
 
 pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.DisplayList, options: Options) ![]u8 {
     if (list.page_count == 0) return Error.InvalidPageCount;
+    const archival = options.conformance != null;
+    try pdfa.validateAttachments(options.attachments, archival);
+    if (archival) {
+        try pdfa.validateMetadata(options.metadata);
+        if (list.page_count > pdfa.max_objects / 2) return error.PdfaTooManyObjects;
+    }
 
     var svg_catalog = try SvgCatalog.init(allocator, list, options.font_registry, options.shaping_mode);
     defer svg_catalog.deinit(allocator);
     var font_usage = try FontUsage.init(allocator, options.font_registry);
     defer font_usage.deinit(allocator);
+    font_usage.archival = archival;
     try font_usage.collect(list);
     try font_usage.collectSvg(&svg_catalog);
     var alpha_usage = try AlphaUsage.init(allocator);
@@ -451,7 +476,13 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     const first_gradient_id = first_image_id + image_count * 2;
     const first_opacity_group_id = first_gradient_id + gradient_count;
     const info_id = first_opacity_group_id + opacity_groups.items.len;
-    const object_count = info_id;
+    const metadata_id = info_id + 1;
+    const icc_id = metadata_id + 1;
+    const intent_id = icc_id + 1;
+    const first_attachment_id = info_id + 1 + @as(usize, if (archival) 3 else 0);
+    const names_id = first_attachment_id + options.attachments.len * 2;
+    const object_count = names_id - 1 + @as(usize, if (options.attachments.len > 0) 1 else 0);
+    if (archival and object_count > pdfa.max_objects) return error.PdfaTooManyObjects;
     const offsets = try allocator.alloc(usize, object_count + 1);
     defer allocator.free(offsets);
     @memset(offsets, 0);
@@ -463,7 +494,14 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     try writer.writeAll("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
 
     try beginObject(&output, offsets, 1);
-    try writer.writeAll("<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    try writer.writeAll("<< /Type /Catalog /Pages 2 0 R");
+    if (archival) try writer.print(" /Metadata {d} 0 R /OutputIntents [{d} 0 R]", .{ metadata_id, intent_id });
+    if (options.attachments.len > 0) {
+        try writer.print(" /Names << /EmbeddedFiles {d} 0 R >> /AF [", .{names_id});
+        for (options.attachments, 0..) |_, index| try writer.print(" {d} 0 R", .{first_attachment_id + index * 2 + 1});
+        try writer.writeAll(" ]");
+    }
+    try writer.writeAll(" >>\nendobj\n");
 
     try beginObject(&output, offsets, 2);
     try writer.print("<< /Type /Pages /Count {d} /Kids [", .{list.page_count});
@@ -480,6 +518,8 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
             used.resolved,
             used.glyphs.items,
             font_usage.customMapObjectId(used_index),
+            archival,
+            used_index,
         );
     }
 
@@ -487,6 +527,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
         const page_id = pageObjectId(first_page_id, page_index);
         const content_id = contentObjectId(first_page_id, page_index);
         const page_spec = list.pageSpec(page_index);
+        if (archival) try pdfa.validatePage(page_spec.width_points, page_spec.height_points);
 
         try beginObject(&output, offsets, page_id);
         try writer.print(
@@ -543,6 +584,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
         }
         if (wrote_gradients) try writer.writeAll(" >>");
         try writer.print(" >> /Contents {d} 0 R", .{content_id});
+        if (archival) try writer.writeAll(" /Group << /S /Transparency /CS /DeviceRGB /I true >>");
         var annotation_index: usize = 0;
         var wrote_annots = false;
         for (list.commands.items) |command| {
@@ -574,7 +616,7 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
     for (list.commands.items) |page_command| {
         if (page_command.command != .link) continue;
         try beginObject(&output, offsets, first_annotation_id + annotation_index);
-        try writeLinkAnnotation(writer, list.pageSpec(page_command.page_index), page_command.command.link, page_command.transform);
+        try writeLinkAnnotationWithConformance(writer, list.pageSpec(page_command.page_index), page_command.command.link, page_command.transform, archival);
         try writer.writeAll("\nendobj\n");
         annotation_index += 1;
     }
@@ -626,28 +668,44 @@ pub fn writeWithOptions(allocator: std.mem.Allocator, list: *const display_list.
         const compressed = try image_decoder.compressZlib(allocator, content);
         defer allocator.free(compressed);
         try beginObject(&output, offsets, first_opacity_group_id + group_index);
-        try writer.print(
-            "<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 {d:.3} {d:.3}] /Group << /S /Transparency /I true /K false >> /Length {d} /Filter /FlateDecode >>\nstream\n",
-            .{ page_spec.width_points, page_spec.height_points, compressed.len },
-        );
+        try writer.print("<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 {d:.3} {d:.3}] /Group << /S /Transparency /I true /K false", .{ page_spec.width_points, page_spec.height_points });
+        if (archival) try writer.writeAll(" /CS /DeviceRGB");
+        try writer.writeAll(" >>");
+        if (archival) {
+            // Copy the serialized resource dictionary before any writer growth.
+            const page_start = offsets[pageObjectId(first_page_id, group.page_index)];
+            const page_bytes = output.written()[page_start..];
+            const start = std.mem.indexOf(u8, page_bytes, " /Resources <<").?;
+            const end = std.mem.indexOf(u8, page_bytes, " /Contents ").?;
+            const resources = try allocator.dupe(u8, page_bytes[start..end]);
+            defer allocator.free(resources);
+            try writer.writeAll(resources);
+        }
+        try writer.print(" /Length {d} /Filter /FlateDecode >>\nstream\n", .{compressed.len});
         try writer.writeAll(compressed);
         try writer.writeAll("\nendstream\nendobj\n");
     }
 
     try beginObject(&output, offsets, info_id);
-    try writeDocumentInfo(writer, options.metadata);
+    try writeDocumentInfoWithConformance(writer, options.metadata, archival);
     try writer.writeAll("\nendobj\n");
 
+    if (archival) try writeArchivalObjects(&output, offsets, metadata_id, icc_id, intent_id, options.metadata);
+    if (options.attachments.len > 0) try writeAttachments(&output, offsets, first_attachment_id, names_id, options.attachments);
+    var identifier: [16]u8 = undefined;
+    if (archival) std.crypto.hash.Md5.hash(output.written(), &identifier, .{});
     const xref_offset = output.writer.end;
     try writer.print("xref\n0 {d}\n", .{object_count + 1});
     try writer.writeAll("0000000000 65535 f \n");
     for (1..object_count + 1) |object_id| {
         try writer.print("{d:0>10} 00000 n \n", .{offsets[object_id]});
     }
-    try writer.print(
-        "trailer\n<< /Size {d} /Root 1 0 R /Info {d} 0 R >>\nstartxref\n{d}\n%%EOF\n",
-        .{ object_count + 1, info_id, xref_offset },
-    );
+    try writer.print("trailer\n<< /Size {d} /Root 1 0 R /Info {d} 0 R", .{ object_count + 1, info_id });
+    if (archival) {
+        const hex = std.fmt.bytesToHex(identifier, .upper);
+        try writer.print(" /ID [<{s}> <{s}>]", .{ hex, hex });
+    }
+    try writer.print(" >>\nstartxref\n{d}\n%%EOF\n", .{xref_offset});
 
     return output.toOwnedSlice();
 }
@@ -695,6 +753,7 @@ fn pageContent(
         }
         const has_transform = !page_command.transform.isIdentity();
         const clip_count = try writeCommandClips(writer, page_spec, page_command);
+        if (font_usage.archival and clip_count + @as(usize, page_command.opacity_groups.len) * 3 + 6 > 28) return error.PdfaGraphicsNestingTooDeep;
         if (has_transform) try writeTransformState(writer, page_spec, page_command.transform);
 
         switch (page_command.command) {
@@ -798,6 +857,9 @@ fn pageContent(
                     if (next_command.page_index != page_index or next_command.command != .text) break;
 
                     const next_run = next_command.command.text;
+                    // Completing ToUnicode for continuation glyphs requires
+                    // ActualText. Keep ordinary kerning-only run grouping intact.
+                    if (font_usage.archival and hasClusterContinuation(next_run)) break;
                     if (next_run.line_id != run.line_id or
                         next_run.font_size != run.font_size or
                         next_run.letter_spacing != run.letter_spacing or
@@ -1895,6 +1957,7 @@ fn writeImageObjects(
 
     var jpeg = try image_decoder.decodeJpegDataUrl(allocator, image_command.source);
     defer jpeg.deinit(allocator);
+    if (font_usage.archival and jpeg.components == 4) return error.PdfaCmykImage;
     const color_space = switch (jpeg.components) {
         1 => "/DeviceGray",
         3 => "/DeviceRGB",
@@ -2049,6 +2112,7 @@ fn writeSvgPreparedTextRun(
     const used_index = font_usage.indexForResolvedFont(run.resolved);
     const metrics = run.resolved.metrics();
     const units_to_svg = text_item.style.font_size / @as(f32, @floatFromInt(metrics.units_per_em));
+    if (font_usage.archival) try pdfa.validateText(run.text, true);
     try writer.writeAll("/Span << /ActualText <FEFF");
     try writeUnicodeTextHex(writer, run.text);
     try writer.writeAll("> >> BDC\nBT ");
@@ -2060,8 +2124,7 @@ fn writeSvgPreparedTextRun(
     var cursor_x: f32 = 0;
     var cursor_y: f32 = 0;
     for (run.shaped.glyphs) |glyph| {
-        const unicode = glyphUnicode(run.text, glyph);
-        const cid = font_usage.cidFor(used_index, glyph.glyph_id, unicode);
+        const cid = font_usage.cidFor(used_index, glyph.glyph_id, try font_usage.mappingUnicode(run.text, glyph));
         const glyph_x = origin_x + cursor_x + @as(f32, @floatFromInt(glyph.x_offset)) * units_to_svg;
         const glyph_y = baseline - cursor_y - @as(f32, @floatFromInt(glyph.y_offset)) * units_to_svg;
         try writer.print("1 0 0 -1 {d:.5} {d:.5} Tm <{X:0>4}> Tj\n", .{ glyph_x, glyph_y, cid });
@@ -2279,6 +2342,17 @@ fn writeLinkAnnotation(
     annotation: display_list.LinkAnnotation,
     transform: geometry.AffineTransform,
 ) !void {
+    return writeLinkAnnotationWithConformance(writer, page_spec, annotation, transform, false);
+}
+
+fn writeLinkAnnotationWithConformance(
+    writer: *std.Io.Writer,
+    page_spec: pagination.PageSpec,
+    annotation: display_list.LinkAnnotation,
+    transform: geometry.AffineTransform,
+    archival: bool,
+) !void {
+    if (archival and annotation.url.len > pdfa.max_string_bytes) return error.PdfaStringTooLong;
     const scale = geometry.css_px_to_pdf_points;
     const margins = page_spec.margins_points;
     const rect = transform.bounds(annotation.rect);
@@ -2291,17 +2365,26 @@ fn writeLinkAnnotation(
         .{ x1, y1, x2, y2 },
     );
     try writePdfString(writer, annotation.url);
-    try writer.writeAll(") >> >>");
+    try writer.writeAll(") >>");
+    if (archival) try writer.writeAll(" /F 4");
+    try writer.writeAll(" >>");
 }
 
 fn writeDocumentInfo(writer: *std.Io.Writer, metadata: Metadata) !void {
+    return writeDocumentInfoWithConformance(writer, metadata, false);
+}
+
+fn writeDocumentInfoWithConformance(writer: *std.Io.Writer, metadata: Metadata, archival: bool) !void {
     try writer.writeAll("<< /Producer ");
     try writePdfTextString(writer, "html2realpdf");
-    if (metadata.title) |value| try writeInfoEntry(writer, "Title", value);
-    if (metadata.author) |value| try writeInfoEntry(writer, "Author", value);
-    if (metadata.subject) |value| try writeInfoEntry(writer, "Subject", value);
-    if (metadata.keywords) |value| try writeInfoEntry(writer, "Keywords", value);
-    if (metadata.creator) |value| try writeInfoEntry(writer, "Creator", value);
+    inline for (.{ "title", "author", "subject", "keywords", "creator" }, .{ "Title", "Author", "Subject", "Keywords", "Creator" }) |field, key| {
+        if (@field(metadata, field)) |value| {
+            if (archival) {
+                try writer.print(" /{s} ", .{key});
+                try writeUnicodeString(writer, value);
+            } else try writeInfoEntry(writer, key, value);
+        }
+    }
     try writer.writeAll(" >>");
 }
 
@@ -2336,6 +2419,88 @@ fn beginObject(output: *std.Io.Writer.Allocating, offsets: []usize, object_id: u
     try output.writer.print("{d} 0 obj\n", .{object_id});
 }
 
+fn writeArchivalObjects(output: *std.Io.Writer.Allocating, offsets: []usize, metadata_id: usize, icc_id: usize, intent_id: usize, metadata: Metadata) !void {
+    var xmp = std.Io.Writer.Allocating.init(output.allocator);
+    defer xmp.deinit();
+    try pdfa.writeXmp(&xmp.writer, metadata);
+    const writer = &output.writer;
+    try beginObject(output, offsets, metadata_id);
+    try writer.print("<< /Type /Metadata /Subtype /XML /Length {d} >>\nstream\n", .{xmp.written().len});
+    try writer.writeAll(xmp.written());
+    try writer.writeAll("\nendstream\nendobj\n");
+    try beginObject(output, offsets, icc_id);
+    try writer.print("<< /N 3 /Length {d} >>\nstream\n", .{pdfa.srgb.len});
+    try writer.writeAll(pdfa.srgb);
+    try writer.writeAll("\nendstream\nendobj\n");
+    try beginObject(output, offsets, intent_id);
+    try writer.print("<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB2014) /RegistryName (http://www.color.org) /Info (sRGB IEC61966-2.1) /DestOutputProfile {d} 0 R >>\nendobj\n", .{icc_id});
+}
+
+fn writeUnicodeString(writer: *std.Io.Writer, value: []const u8) !void {
+    try writer.writeAll("<FEFF");
+    try writeUnicodeTextHex(writer, value);
+    try writer.writeByte('>');
+}
+
+fn escapedPdfName(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var output = std.Io.Writer.Allocating.init(allocator);
+    errdefer output.deinit();
+    for (value) |byte| {
+        if (byte < 33 or byte > 126 or std.mem.indexOfScalar(u8, "()<>[]{}/%#", byte) != null) {
+            try output.writer.print("#{X:0>2}", .{byte});
+        } else try output.writer.writeByte(byte);
+    }
+    return output.toOwnedSlice();
+}
+
+fn writeAttachments(output: *std.Io.Writer.Allocating, offsets: []usize, first_id: usize, names_id: usize, attachments: []const Attachment) !void {
+    const writer = &output.writer;
+    const NameEntry = struct { key: []u8, id: usize };
+    const entries = try output.allocator.alloc(NameEntry, attachments.len);
+    defer output.allocator.free(entries);
+    var initialized: usize = 0;
+    defer for (entries[0..initialized]) |entry| output.allocator.free(entry.key);
+    for (attachments, 0..) |attachment, index| {
+        const stream_id = first_id + index * 2;
+        const file_id = stream_id + 1;
+        const mime = try escapedPdfName(output.allocator, attachment.mime_type);
+        defer output.allocator.free(mime);
+        try beginObject(output, offsets, stream_id);
+        try writer.print("<< /Type /EmbeddedFile /Subtype /{s} /Length {d}", .{ mime, attachment.data.len });
+        if (attachment.modified_at) |date| {
+            try writer.print(" /Params << /Size {d} /ModDate ({s}) >>", .{ attachment.data.len, date });
+        }
+        try writer.writeAll(" >>\nstream\n");
+        try writer.writeAll(attachment.data);
+        try writer.writeAll("\nendstream\nendobj\n");
+        try beginObject(output, offsets, file_id);
+        try writer.writeAll("<< /Type /Filespec /F ");
+        try writeUnicodeString(writer, attachment.name);
+        try writer.writeAll(" /UF ");
+        try writeUnicodeString(writer, attachment.name);
+        if (attachment.description) |description| {
+            try writer.writeAll(" /Desc ");
+            try writeUnicodeString(writer, description);
+        }
+        try writer.print(" /AFRelationship /{s} /EF << /F {d} 0 R /UF {d} 0 R >> >>\nendobj\n", .{ @tagName(attachment.relationship), stream_id, stream_id });
+        var key = std.Io.Writer.Allocating.init(output.allocator);
+        errdefer key.deinit();
+        try writeUnicodeString(&key.writer, attachment.name);
+        entries[index] = .{ .key = try key.toOwnedSlice(), .id = file_id };
+        initialized += 1;
+    }
+    // Hex-encoded UTF-16BE has the same sort order as decoded name-tree keys.
+    std.mem.sort(NameEntry, entries, {}, struct {
+        fn less(_: void, a: NameEntry, b: NameEntry) bool {
+            return std.mem.lessThan(u8, a.key[0 .. a.key.len - 1], b.key[0 .. b.key.len - 1]);
+        }
+    }.less);
+    try beginObject(output, offsets, names_id);
+    try writer.writeAll("<< /Names [");
+    for (entries) |entry| try writer.print(" {s} {d} 0 R", .{ entry.key, entry.id });
+    try writer.writeAll(" ] >>\nendobj\n");
+}
+
 fn writeEmbeddedFontObjects(
     output: *std.Io.Writer.Allocating,
     offsets: []usize,
@@ -2343,14 +2508,30 @@ fn writeEmbeddedFontObjects(
     resolved: font.ResolvedFont,
     usage: []const GlyphMapping,
     cid_to_gid_object_id: ?usize,
+    archival: bool,
+    used_index: usize,
 ) !void {
     const metrics = resolved.metrics();
-    const name = try std.fmt.allocPrint(output.allocator, "HREALP+{s}", .{resolved.postscript_name});
+    const allow_subset = (metrics.fs_type & 0x0100) == 0;
+    const raw_name = if (!allow_subset)
+        try output.allocator.dupe(u8, resolved.postscript_name)
+    else if (archival) blk: {
+        var prefix: [6]u8 = undefined;
+        var ordinal = used_index;
+        for (&prefix) |*byte| {
+            byte.* = @as(u8, @intCast(ordinal % 26)) + 'A';
+            ordinal /= 26;
+        }
+        break :blk try std.fmt.allocPrint(output.allocator, "{s}+{s}", .{ prefix, resolved.postscript_name });
+    } else try std.fmt.allocPrint(output.allocator, "HREALP+{s}", .{resolved.postscript_name});
+    defer output.allocator.free(raw_name);
+    if (archival and raw_name.len + 4 > pdfa.max_name_bytes) return error.PdfaNameTooLong;
+    const name = try escapedPdfName(output.allocator, raw_name);
     defer output.allocator.free(name);
     const glyph_ids = try output.allocator.alloc(u16, usage.len);
     defer output.allocator.free(glyph_ids);
     for (usage, 0..) |mapping, index| glyph_ids[index] = mapping.glyph_id;
-    const subset_bytes = try font.subset(output.allocator, metrics.data, glyph_ids);
+    const subset_bytes = if (allow_subset) try font.subset(output.allocator, metrics.data, glyph_ids) else try output.allocator.dupe(u8, metrics.data);
     defer output.allocator.free(subset_bytes);
     const compressed_subset = try image_decoder.compressZlib(output.allocator, subset_bytes);
     defer output.allocator.free(compressed_subset);
@@ -2400,7 +2581,9 @@ fn writeEmbeddedFontObjects(
     }
     try output.writer.writeAll(" ]] >>\nendobj\n");
 
-    try writeToUnicodeObject(output, offsets, object_base + 3, resolved.postscript_name, usage);
+    const cmap_name = try escapedPdfName(output.allocator, if (archival) raw_name else resolved.postscript_name);
+    defer output.allocator.free(cmap_name);
+    try writeToUnicodeObject(output, offsets, object_base + 3, cmap_name, usage);
 
     try beginObject(output, offsets, object_base + 4);
     try output.writer.print(
@@ -2524,6 +2707,12 @@ fn writeTextRunGlyphs(
     used_index: usize,
     run: display_list.TextRun,
 ) !void {
+    if (usage.archival) {
+        try writeArchivalTextRunGlyphs(writer, usage, used_index, run);
+        // Adjacent display runs may share a text object; bound each PDF string.
+        try writer.writeAll(if (run.word_spacing == 0) "> Tj <" else ">] TJ [<");
+        return;
+    }
     if (run.leading_space) {
         try writeGlyphHex(writer, usage, used_index, " ");
         try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
@@ -2532,7 +2721,7 @@ fn writeTextRunGlyphs(
     if (run.shaped) |shaped| {
         for (shaped.glyphs) |glyph| {
             const unicode = glyphUnicode(run.text, glyph);
-            try writer.print("{X:0>4}", .{usage.cidFor(used_index, glyph.glyph_id, unicode)});
+            try writer.print("{X:0>4}", .{usage.cidFor(used_index, glyph.glyph_id, try usage.mappingUnicode(run.text, glyph))});
             if (unicode.len == 1 and unicode[0] == ' ') {
                 try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
             }
@@ -2549,6 +2738,42 @@ fn writeTextRunGlyphs(
         chunk_start = iterator.index;
     }
     try writeGlyphHex(writer, usage, used_index, run.text[chunk_start..]);
+}
+
+fn writeArchivalTextRunGlyphs(writer: *std.Io.Writer, usage: *const FontUsage, used_index: usize, run: display_list.TextRun) !void {
+    var count: usize = 0;
+    if (run.leading_space) {
+        try writeGlyphHex(writer, usage, used_index, " ");
+        try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
+        count = 1;
+    }
+    if (run.shaped) |shaped| {
+        for (shaped.glyphs) |glyph| {
+            try splitGlyphString(writer, &count, run.word_spacing);
+            const cid = usage.cidFor(used_index, glyph.glyph_id, try usage.mappingUnicode(run.text, glyph));
+            try writer.print("{X:0>4}", .{cid});
+            const unicode = glyphUnicode(run.text, glyph);
+            if (unicode.len == 1 and unicode[0] == ' ') try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
+        }
+    } else {
+        const metrics = usage.fonts.items[used_index].resolved.metrics();
+        var iterator = font.Utf8Iterator{ .bytes = run.text };
+        while (true) {
+            const start = iterator.index;
+            const cp = try iterator.next() orelse break;
+            try splitGlyphString(writer, &count, run.word_spacing);
+            try writer.print("{X:0>4}", .{usage.cidFor(used_index, metrics.glyphId(cp), run.text[start..iterator.index])});
+            if (cp == ' ') try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
+        }
+    }
+}
+
+fn splitGlyphString(writer: *std.Io.Writer, count: *usize, word_spacing: f32) !void {
+    if (count.* == pdfa.max_string_bytes / 2) {
+        try writer.writeAll(if (word_spacing == 0) "> Tj <" else ">] TJ [<");
+        count.* = 0;
+    }
+    count.* += 1;
 }
 
 fn writeWordSpacingAdjustment(writer: *std.Io.Writer, word_spacing: f32, font_size: f32) !void {
@@ -2568,6 +2793,12 @@ fn requiresPositionedGlyphs(used: *const UsedFont, run: display_list.TextRun) bo
     return false;
 }
 
+fn hasClusterContinuation(run: display_list.TextRun) bool {
+    const shaped = run.shaped orelse return false;
+    for (shaped.glyphs) |glyph| if (!glyph.maps_cluster) return true;
+    return false;
+}
+
 fn writePositionedTextRun(
     writer: *std.Io.Writer,
     usage: *const FontUsage,
@@ -2583,6 +2814,7 @@ fn writePositionedTextRun(
     const metrics = used.resolved.metrics();
     const units_to_css = run.font_size / @as(f32, @floatFromInt(metrics.units_per_em));
 
+    if (usage.archival and (try pdfa.unicodeLength(run.text)) + 2 + @as(usize, if (run.leading_space) 2 else 0) > pdfa.max_string_bytes) return error.PdfaStringTooLong;
     try writer.writeAll("/Span << /ActualText <FEFF");
     if (run.leading_space) try writeUnicodeTextHex(writer, " ");
     try writeUnicodeTextHex(writer, run.text);
@@ -2599,7 +2831,7 @@ fn writePositionedTextRun(
 
     for (shaped.glyphs) |glyph| {
         const unicode = glyphUnicode(run.text, glyph);
-        const cid = usage.cidFor(used_index, glyph.glyph_id, unicode);
+        const cid = usage.cidFor(used_index, glyph.glyph_id, try usage.mappingUnicode(run.text, glyph));
         const glyph_x = origin_x_points + (cursor_x_css + @as(f32, @floatFromInt(glyph.x_offset)) * units_to_css) * css_to_points;
         const glyph_y = baseline_points + (cursor_y_css + @as(f32, @floatFromInt(glyph.y_offset)) * units_to_css) * css_to_points;
         try writePositionedGlyph(writer, used_index, font_size_points, glyph_x, glyph_y, cid);
@@ -3213,4 +3445,117 @@ test "preserve SVG chart text gradients and clips as native PDF resources" {
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/ToUnicode") != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/ExtGState") != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/Font << /F") != null);
+}
+
+test "PDF/A validates all collected glyphs, mappings and CID exhaustion" {
+    const allocator = std.testing.allocator;
+    var usage = try FontUsage.init(allocator, null);
+    defer usage.deinit(allocator);
+    usage.archival = true;
+    const index = try usage.ensureResolvedFont(font.resolve(null, "Noto Sans", .normal, .normal));
+    try std.testing.expectError(error.MissingGlyph, usage.add(index, 0, "x"));
+    try std.testing.expectError(error.PdfaInvalidUnicode, usage.add(index, 1, ""));
+    try std.testing.expectError(error.InvalidUtf8, usage.add(index, 1, "\xff"));
+    _ = try usage.add(index, 1, "a");
+    usage.fonts.items[index].next_custom_cid = 65536;
+    try std.testing.expectError(error.TooManyGlyphMappings, usage.add(index, 1, "b"));
+}
+
+test "PDF/A splits long Tj and TJ strings without changing text positions" {
+    const allocator = std.testing.allocator;
+    const text = try allocator.alloc(u8, 40000);
+    defer allocator.free(text);
+    @memset(text, 'a');
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .text = .{
+        .position = .{ .x = 10, .y = 10 },
+        .text = text,
+        .font_size = 10,
+        .color = geometry.Color.black,
+    } } });
+    const list = display_list.DisplayList{ .commands = commands, .page_count = 1, .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}) };
+    var usage = try FontUsage.init(allocator, null);
+    defer usage.deinit(allocator);
+    usage.archival = true;
+    try usage.collect(&list);
+    var alpha = try AlphaUsage.init(allocator);
+    defer alpha.deinit(allocator);
+    for ([_]f32{ 0, 2 }) |spacing| {
+        commands.items[0].command.text.word_spacing = spacing;
+        const content = try pageContent(allocator, &list, 0, &usage, &alpha, &.{}, null);
+        defer allocator.free(content);
+        var cursor: usize = 0;
+        var cid_bytes: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, content, cursor, '<')) |start| {
+            const end = std.mem.indexOfScalarPos(u8, content, start, '>').?;
+            const length = end - start - 1;
+            try std.testing.expect(length <= pdfa.max_string_bytes * 2);
+            cid_bytes += length / 2;
+            cursor = end + 1;
+        }
+        try std.testing.expectEqual(@as(usize, 80000), cid_bytes);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, content, " Tm "));
+    }
+}
+
+test "PDF/A enforces page, font-name and graphics nesting limits" {
+    const allocator = std.testing.allocator;
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 1);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .fill_rect = .{
+        .rect = .{ .x = 0, .y = 0, .width = 50, .height = 50 },
+        .color = geometry.Color.black,
+    } } });
+    var list = display_list.DisplayList{ .commands = commands, .page_count = 1, .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}) };
+    list.page_spec.width_points = 14401;
+    try std.testing.expectError(error.PdfaInvalidPageSize, writeWithOptions(allocator, &list, .{ .conformance = .@"pdfa-3u" }));
+    list.page_spec.width_points = 600;
+    for (0..10) |i| commands.items[0].opacity_groups.append(@intCast(i + 1), 0.5);
+    try std.testing.expectError(error.PdfaGraphicsNestingTooDeep, writeWithOptions(allocator, &list, .{ .conformance = .@"pdfa-3u" }));
+    var usage = try FontUsage.init(allocator, null);
+    defer usage.deinit(allocator);
+    usage.archival = true;
+    var invalid = font.resolve(null, "Noto Sans", .normal, .normal);
+    invalid.postscript_name = "\xff";
+    try std.testing.expectError(error.PdfaInvalidFontName, usage.ensureResolvedFont(invalid));
+}
+
+fn archivalAllocationCase(allocator: std.mem.Allocator) !void {
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 0);
+    defer commands.deinit(allocator);
+    const list = display_list.DisplayList{ .commands = commands, .page_count = 1, .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}) };
+    const bytes = writeWithOptions(allocator, &list, .{ .conformance = .@"pdfa-3u", .attachments = &.{ .{ .name = "é.xml", .data = "<x/>", .mime_type = "application/xml" }, .{ .name = "data", .data = "\x00\xff" } } }) catch |err| switch (err) {
+        // Allocating Writer exposes allocator failures as WriteFailed in Zig 0.16.
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+    defer allocator.free(bytes);
+}
+
+test "PDF/A releases intermediate allocations on every failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, archivalAllocationCase, .{});
+}
+
+test "PDF/A preserves ActualText when simple and complex display runs are adjacent" {
+    const allocator = std.testing.allocator;
+    const metrics = font.resolve(null, "Noto Sans", .normal, .normal).metrics();
+    const glyphs = [_]font.ShapedGlyph{
+        .{ .glyph_id = metrics.glyphId('q'), .x_advance = metrics.advanceWidth(metrics.glyphId('q')), .cluster_start = 0, .cluster_end = 3 },
+        .{ .glyph_id = metrics.glyphId(0x301), .x_advance = 0, .x_offset = -30, .cluster_start = 0, .cluster_end = 3, .maps_cluster = false },
+    };
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 2);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .text = .{ .position = .{}, .width = 10, .text = "a", .font_size = 10, .color = geometry.Color.black } } });
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .text = .{ .position = .{ .x = 10 }, .width = 10, .text = "q\u{301}", .shaped = .{ .glyphs = &glyphs }, .font_size = 10, .color = geometry.Color.black } } });
+    const list = display_list.DisplayList{ .commands = commands, .page_count = 1, .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}) };
+    var usage = try FontUsage.init(allocator, null);
+    defer usage.deinit(allocator);
+    usage.archival = true;
+    try usage.collect(&list);
+    var alpha = try AlphaUsage.init(allocator);
+    defer alpha.deinit(allocator);
+    const content = try pageContent(allocator, &list, 0, &usage, &alpha, &.{}, null);
+    defer allocator.free(content);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, content, "/ActualText <FEFF00710301>"));
 }
