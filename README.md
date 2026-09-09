@@ -9,6 +9,12 @@
     <a href="https://github.com/imggion/html2realpdf/releases/tag/v0.2.0">
       <img src="https://img.shields.io/badge/release-0.2.0-2ea44f?style=flat-square" alt="Latest release: 0.2.0">
     </a>
+    <a href="#compliance">
+      <img src="https://img.shields.io/badge/PDF%2FA--3u-2ea44f?style=flat-square" alt="PDF/A-3u">
+    </a>
+    <a href="#compliance">
+      <img src="https://img.shields.io/badge/PDF%2FA--3b-2ea44f?style=flat-square" alt="PDF/A-3b">
+    </a>
     <img src="https://img.shields.io/badge/-zig-f39b34?style=flat-square&amp;logo=zig&amp;logoColor=white" alt="Zig">
     <img src="https://img.shields.io/badge/-WASM-654ff0?style=flat-square&amp;logo=webassembly&amp;logoColor=white" alt="WebAssembly">
     <img src="https://img.shields.io/badge/-TypeScript-3178c6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript">
@@ -29,6 +35,7 @@
 - [Preview](#preview)
 - [Page layouts](#page-layouts)
 - [PDF/A and attachments](#pdfa-and-attachments)
+- [Compliance](#compliance)
 - [Benchmark](#benchmark)
 - [Contributing](#contributing)
 - [License](#license)
@@ -240,6 +247,42 @@ The html2pdf.js adapter accepts the same options through `.set(...)`.
 See [PDF/A implementation and validation](https://github.com/imggion/html2realpdf/blob/main/docs/pdfa.md)
 for limits and the pinned veraPDF gate. Existing calls without these options
 keep their ordinary PDF output.
+
+## Compliance
+
+`html2realpdf` supports **PDF/A-3 (ISO 19005-3)** through the opt-in
+`conformance: "pdfa-3u"` option. Ordinary PDF output is the default.
+
+| Profile | Coverage |
+| --- | --- |
+| **PDF/A-3u** | Archival PDF with Unicode mappings for text. This is the profile declared by the generated file and checked by the automated veraPDF gate. |
+| **PDF/A-3b** | The base archival requirements, also satisfied by a conforming PDF/A-3u file. There is no separate `pdfa-3b` API option. |
+
+[veraPDF's conformance rules](https://github.com/veraPDF/veraPDF-validation-profiles/wiki/PDFA-Parts-2-and-3-rules#rule-664-3)
+confirm that level B requirements are a subset of level U and that level B
+validation accepts files declaring U.
+
+The validation report below shows **test.pdf** passing the **PDF/A-3u**
+profile with **veraPDF 1.30.2**: **14,749 passed checks and zero failed checks**.
+It records the result for that file; validate your own generated documents too.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/imggion/html2realpdf/main/docs/assets/pdfa-3u-validation.png" alt="veraPDF 1.30.2 report for test.pdf: PDF/A-3u validation passed, with 14,749 passed checks and zero failed checks." width="600">
+</p>
+
+Try it yourself: render a document with `conformance: "pdfa-3u"`, download it,
+and open it in [veraPDF](https://verapdf.org/), or check both profiles with its
+[CLI](https://docs.verapdf.org/cli/validation/):
+
+```sh
+verapdf --flavour 3u --format text invoice.pdf
+verapdf --flavour 3b --format text invoice.pdf
+```
+
+Both checks should report **PASS**. To reproduce the repository's PDF/A-3u
+validation suite, run `make test-pdfa` after the
+[contributor setup](#contributing). It covers native and WASM fixtures,
+text extraction, embedded files, visual checks and a 30-page benchmark.
 
 ## Benchmark
 
