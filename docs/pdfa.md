@@ -51,6 +51,19 @@ the JSON options or the persistent font context.
 
 ## Validation
 
+For an interactive React check, run `make react` and open the Vite URL. Under
+**PDF export**, choose **Ordinary PDF** or **PDF/A-3u**, optionally select a
+local file and its relationship, then use **Render ref** or **Render and
+preview**, followed by **Download**. The selected file is read locally and
+embedded with its original name, MIME type (or `application/octet-stream`),
+and modification date. Changing export options clears the previous PDF and
+benchmark results; removing the attachment also clears the file input.
+
+The React benchmark applies these options to html2realpdf; its html2pdf.js
+comparison remains an ordinary PDF without attachments. File reading finishes
+before timing starts. The preview does not certify PDF/A conformance; the
+browser tests validate React downloads with veraPDF and recover exact file bytes.
+
 Run `make test-pdfa` (also part of `make test-release`). It requires Java 17+,
 Poppler, curl and unzip. The first run downloads veraPDF Greenfield **1.30.2**
 from its official versioned URL and verifies SHA-256

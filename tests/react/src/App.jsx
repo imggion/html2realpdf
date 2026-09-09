@@ -216,6 +216,7 @@ export function App() {
   const pdfRef = useRef(null);
   const previewControllerRef = useRef(null);
   const pdfExportRef = useRef(null);
+  const attachmentInputRef = useRef(null);
   const benchmarkArtifactsRef = useRef(new Map());
   const [customer, setCustomer] = useState("Acme Europe S.p.A.");
   const [period, setPeriod] = useState("Q2 2026");
@@ -227,6 +228,9 @@ export function App() {
   const [benchmarkStatus, setBenchmarkStatus] = useState("Benchmark the mounted report when you are ready.");
   const [benchmarkResults, setBenchmarkResults] = useState([]);
   const [documentMode, setDocumentMode] = useState("live");
+  const [conformance, setConformance] = useState("none");
+  const [attachment, setAttachment] = useState(null);
+  const [attachmentRelationship, setAttachmentRelationship] = useState("Unspecified");
   const [loadingStressReport, setLoadingStressReport] = useState(false);
   const [stressReportFixture, setStressReportFixture] = useState(null);
   const [showPreviewToolbar, setShowPreviewToolbar] = useState(true);
@@ -258,6 +262,45 @@ export function App() {
     benchmarkArtifactsRef.current.clear();
   }
 
+  function clearPdf() {
+    previewControllerRef.current?.dispose();
+    previewControllerRef.current = null;
+    setPreviewPage(emptyPreviewPage);
+    setPreviewPageInput("");
+    pdfRef.current?.dispose();
+    pdfRef.current = null;
+    pdfExportRef.current?.removeAttribute("data-pdf");
+  }
+
+  function changeExportOptions() {
+    clearPdf();
+    clearBenchmarkArtifacts();
+    setBenchmarkResults([]);
+    delete document.documentElement.dataset.reactBenchmarkStatus;
+    setBenchmarkStatus("Benchmark the mounted report with the selected export options when ready.");
+    setStatus("Export options changed. Render the report to generate a new PDF.");
+  }
+
+  async function getExportOptions() {
+    return {
+      conformance: conformance === "none" ? undefined : conformance,
+      attachments: attachment ? [{
+        name: attachment.name,
+        data: await attachment.arrayBuffer(),
+        mimeType: attachment.type || "application/octet-stream",
+        relationship: attachmentRelationship,
+        modifiedAt: new Date(attachment.lastModified),
+      }] : undefined,
+    };
+  }
+
+  function removeAttachment() {
+    setAttachment(null);
+    attachmentInputRef.current.value = "";
+    attachmentInputRef.current.focus();
+    changeExportOptions();
+  }
+
   function getDocumentProfile() {
     if (documentMode === "stress") {
       return {
@@ -278,12 +321,7 @@ export function App() {
   async function changeDocumentMode(event) {
     const nextMode = event.target.value;
     setDocumentMode(nextMode);
-    previewControllerRef.current?.dispose();
-    previewControllerRef.current = null;
-    setPreviewPage(emptyPreviewPage);
-    setPreviewPageInput("");
-    pdfRef.current?.dispose();
-    pdfRef.current = null;
+    clearPdf();
     clearBenchmarkArtifacts();
     setBenchmarkResults([]);
     setStatus(nextMode === "stress" ? "Loading the 30-page mounted stress report..." : "Ready to render the live controlled report.");
@@ -311,9 +349,11 @@ export function App() {
     let warmPdf;
 
     try {
+      const exportOptions = await getExportOptions();
       const cold = await measure(async () => {
         renderer = await createRenderer({ wasmUrl });
         return renderer.render(reportRef, {
+          ...exportOptions,
           page: profile.page,
           layoutContext: "page",
           fallback: "error",
@@ -327,6 +367,7 @@ export function App() {
       coldPdf = undefined;
 
       const warm = await measure(() => renderer.render(reportRef, {
+        ...exportOptions,
         page: profile.page,
         layoutContext: "page",
         fallback: "error",
@@ -339,12 +380,13 @@ export function App() {
       }
       const bytes = warmPdf.toUint8Array().slice();
       const analysis = await analyzePdf(bytes, pdfJs);
-      const artifact = createPdfArtifact(bytes, `${profile.filename}-html2realpdf.pdf`);
+      const suffix = conformance === "none" ? "" : `-${conformance}`;
+      const artifact = createPdfArtifact(bytes, `${profile.filename}${suffix}-html2realpdf.pdf`);
       benchmarkArtifactsRef.current.set("html2realpdf", artifact);
 
       return {
         id: "html2realpdf",
-        label: "html2realpdf",
+        label: `html2realpdf · ${conformance === "none" ? "Ordinary PDF" : "PDF/A-3u"}${attachment ? " · 1 attachment" : ""}`,
         coldMs: cold.durationMs,
         warmMs: warm.durationMs,
         size: bytes.length,
@@ -462,14 +504,12 @@ export function App() {
     const profile = getDocumentProfile();
     setRendering(true);
     setStatus("Snapshotting the mounted React component...");
+    clearPdf();
     try {
+      const exportOptions = await getExportOptions();
       rendererRef.current ??= await createRenderer({ wasmUrl });
-      previewControllerRef.current?.dispose();
-      previewControllerRef.current = null;
-      setPreviewPage(emptyPreviewPage);
-      setPreviewPageInput("");
-      pdfRef.current?.dispose();
       pdfRef.current = await rendererRef.current.render(reportRef, {
+        ...exportOptions,
         page: profile.page,
         layoutContext: "page",
         metadata: { title: profile.title, author: "Northstar Analytics" },
@@ -482,10 +522,11 @@ export function App() {
       }
       const bytes = pdfRef.current.toUint8Array();
       pdfExportRef.current.setAttribute("data-pdf", bytesToBase64(bytes));
-      setStatus(`Generated ${bytes.length.toLocaleString()} bytes across ${pdfRef.current.pageCount} page(s) from ref.current.`);
+      const summary = `${conformance === "none" ? "Ordinary PDF" : "PDF/A-3u"}${attachment ? ` with attachment “${attachment.name}”` : ""}`;
+      setStatus(`Generated ${bytes.length.toLocaleString()} bytes across ${pdfRef.current.pageCount} page(s) from ref.current. ${summary}.`);
       if (preview) {
         await previewPdf(showPreviewToolbar);
-        setStatus(`Previewing ${pdfRef.current.pageCount} PDF page(s) inside the React app.`);
+        setStatus(`Previewing ${pdfRef.current.pageCount} PDF page(s) inside the React app. ${summary}.`);
       }
     } catch (error) {
       setStatus(`Render failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -532,7 +573,8 @@ export function App() {
       setStatus("Render the React ref before downloading.");
       return;
     }
-    pdfRef.current.download(`${getDocumentProfile().filename}.pdf`);
+    const suffix = conformance === "none" ? "" : `-${conformance}`;
+    pdfRef.current.download(`${getDocumentProfile().filename}${suffix}.pdf`);
   }
 
   function showPreviousPreviewPage() {
@@ -571,10 +613,38 @@ export function App() {
         <label>Period<select value={period} onChange={(event) => setPeriod(event.target.value)} disabled={liveControlsDisabled}><option>Q1 2026</option><option>Q2 2026</option><option>Q3 2026</option></select></label>
         <label className="wide-control">Management note<textarea value={note} onChange={(event) => setNote(event.target.value)} rows="2" disabled={liveControlsDisabled} /></label>
         <label className="check-control"><input type="checkbox" checked={approved} onChange={(event) => setApproved(event.target.checked)} disabled={liveControlsDisabled} /> Approved</label>
+        <fieldset className="export-controls wide-control" disabled={busy}>
+          <legend>PDF export</legend>
+          <label className="wide-control">PDF compliance
+            <select value={conformance} onChange={(event) => { setConformance(event.target.value); changeExportOptions(); }}>
+              <option value="none">Ordinary PDF</option>
+              <option value="pdfa-3u">PDF/A-3u</option>
+            </select>
+          </label>
+          <label>Attachment (optional)
+            <input ref={attachmentInputRef} type="file" aria-describedby="attachment-help" onChange={(event) => { setAttachment(event.target.files?.[0] ?? null); changeExportOptions(); }} />
+          </label>
+          <label>Attachment relationship
+            <select value={attachmentRelationship} disabled={!attachment} onChange={(event) => { setAttachmentRelationship(event.target.value); changeExportOptions(); }}>
+              <option value="Unspecified">Unspecified</option>
+              <option value="Source">Source</option>
+              <option value="Data">Data</option>
+              <option value="Alternative">Alternative</option>
+              <option value="Supplement">Supplement</option>
+            </select>
+          </label>
+          <p id="attachment-help" className="export-note wide-control">The selected file is read locally and embedded in the PDF. Any file type is accepted.</p>
+          {attachment ? (
+            <div className="attachment-summary wide-control">
+              <p role="status">{attachment.name} · {formatBytes(attachment.size)}</p>
+              <button type="button" onClick={removeAttachment}>Remove attachment</button>
+            </div>
+          ) : null}
+        </fieldset>
         <div className="actions">
           <button type="button" onClick={() => renderReport()} disabled={busy}>Render ref</button>
           <button className="primary" type="button" onClick={() => renderReport({ preview: true })} disabled={busy}>Render and preview</button>
-          <button type="button" onClick={downloadReport} disabled={busy}>Download</button>
+          <button type="button" onClick={downloadReport} disabled={busy || !pdfRef.current}>Download</button>
           <button type="button" onClick={benchmarkDocs} disabled={busy}>{benchmarking ? "Benchmarking…" : "Benchmark docs"}</button>
         </div>
         <p className="status" aria-live="polite">{status}</p>
@@ -585,6 +655,7 @@ export function App() {
           <p className="app-kicker">PDF benchmark</p>
           <h2 id="react-benchmark-title">Same mounted report, two renderers</h2>
           <p className="benchmark-note">First PDF includes renderer initialization; warm render reuses the initialized runtime. html2canvas uses scale 1. PDF.js distinguishes selectable text from image-only PDF pages.</p>
+          <p className="benchmark-note">html2realpdf uses the selected compliance and attachment. html2pdf.js produces an ordinary PDF without attachments. Local file reading completes before timing starts.</p>
         </div>
         <p className="status" aria-live="polite">{benchmarkStatus}</p>
         {benchmarkResults.length > 0 ? (

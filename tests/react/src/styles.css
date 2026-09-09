@@ -55,6 +55,13 @@ button.primary { border-color: var(--app-accent); background: var(--app-accent);
 .wide-control { grid-column: 1 / -1; }
 .check-control { display: flex !important; align-items: center; grid-column: 1 / -1; }
 .check-control input { width: 18px; height: 18px; }
+.export-controls { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; min-width: 0; margin: 0; border: 1px solid var(--app-line); border-radius: 10px; padding: 16px; }
+.export-controls legend { padding: 0 6px; font-size: 14px; font-weight: 700; }
+.export-controls label { min-width: 0; }
+.export-note { margin: 0; color: var(--app-muted); font-size: 13px; line-height: 1.5; }
+.attachment-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.attachment-summary p { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: 13px; }
+.attachment-summary button { flex-shrink: 0; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; grid-column: 1 / -1; }
 .theme-toggle { align-items: center; display: inline-flex; justify-content: center; min-width: 44px; padding: 0; }
 .theme-toggle svg { height: 19px; width: 19px; }
@@ -131,6 +138,7 @@ button.primary { border-color: var(--app-accent); background: var(--app-accent);
 @media (max-width: 680px) {
   .app-shell { width: min(100% - 20px, 1540px); padding-top: 24px; }
   .controls { grid-template-columns: 1fr; }
+  .export-controls { grid-template-columns: 1fr; }
   .document-stage, .preview-stage { padding: 10px; }
 }
 

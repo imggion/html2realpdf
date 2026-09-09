@@ -44,6 +44,11 @@ Read these local docs before changing code:
 - The browser fixture set includes portrait reports and an A4 landscape presentation deck; keep both available from `tests/web/index.html` and in automated browser verification.
 - Browser pseudo-element snapshots resolve nested CSS counters before emitting synthetic text nodes; keep counter scope traversal in `bindings/js/src/snapshot.ts` rather than teaching the PDF core browser-only generated-content state.
 - `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
+- Its PDF export controls select ordinary PDF or PDF/A-3u and a local attachment
+  with an explicit relationship. Export changes clear stale PDFs and benchmark
+  artifacts; html2realpdf benchmark renders use the same options, while
+  html2pdf.js remains ordinary without attachments. `react-pdfa.spec.mjs`
+  verifies selection, extraction, removal, read failures and veraPDF compliance.
 - The browser package is framework-agnostic; React refs are supported structurally without a React dependency.
 - Supported inline SVG shapes/paths, selectable text/tspan, bounded linear and
   radial gradient fills, and local clip paths remain vector through

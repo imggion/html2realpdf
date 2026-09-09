@@ -88,6 +88,11 @@ browser package build copies that file to `dist/LICENSE.md`.
 - `tests/react/` is an isolated Vite/React application that exercises a mounted
   component ref, controlled state, computed styles, tables, SVG, canvas, and
   the same two-engine benchmark against the live mounted report.
+  Its export controls select ordinary PDF or PDF/A-3u and a local file with an
+  attachment relationship. Changing options invalidates PDFs and benchmark
+  artifacts. html2realpdf benchmark renders share those options; html2pdf.js
+  stays ordinary without attachments. `tests/web/e2e/react-pdfa.spec.mjs`
+  checks the UI flow, local read failures, exact extraction and veraPDF output.
 - `tests/benchmark/benchmark.js` owns the shared measurement boundary,
   retained download artifacts, byte formatting, and PDF.js classification.
 - `tests/benchmark/stress-report.js` owns the deterministic 30-page report
