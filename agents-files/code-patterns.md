@@ -2,7 +2,17 @@
 
 ## Structure and readability
 
-- Prefer explicit Zig state transitions and small phase-specific helpers.
+- Prefer explicit Zig state transitions and straightforward control flow.
+- Default to minimal abstraction in both Zig and TypeScript. Keep single-use
+  logic inline when it remains easy to follow; do not extract helpers merely
+  to shorten a function. Extract only for real reuse or a concrete responsibility
+  boundary that improves readability.
+- Separate logical sections within functions with blank lines and keep related
+  statements together. Expand long conditions and dense error-handling blocks
+  over multiple lines before considering extraction into another function.
+- Add short comments where intent, ownership, or a non-obvious constraint needs
+  explanation. Use section comments only when spacing and names are insufficient;
+  do not narrate obvious operations.
 - Preserve flat `NodeId`, `BoxId`, and fragment arrays; do not introduce
   recursively owned child arrays.
 - Keep continuous layout separate from pagination and painting.

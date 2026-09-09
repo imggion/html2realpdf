@@ -118,6 +118,8 @@ Read these local docs before changing code:
 ## Style Rules
 
 - Prefer small, explicit changes that fit the current Zig module layout.
+- Default to straightforward code with minimal abstraction across Zig and TypeScript. Keep single-use logic inline when blank lines and clear control flow make it easy to follow; do not extract helpers merely to shorten a function. Extract only for real reuse or a concrete responsibility boundary that improves readability.
+- Separate logical sections within functions with blank lines, keeping related statements together. Expand long conditions and dense error-handling blocks over multiple lines. Add short comments where intent, ownership, or a non-obvious constraint needs explanation; avoid comments that merely repeat the code.
 - Keep tokenizer and parsing control flow readable; avoid nested ternaries, clever state shortcuts, and giant multi-purpose functions when a local helper or state branch would be clearer.
 - Keep Box Tree construction in `src/box.zig`; use flat `BoxId` links like `dom.NodeId` instead of recursive owned child arrays.
 - Keep continuous layout, pagination, display-list generation, and PDF serialization in their focused modules; do not merge phase ownership into `box.zig` or `wasm.zig`.
