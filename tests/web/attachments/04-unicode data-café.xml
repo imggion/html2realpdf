@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<campioni>
+  <testo lingua="it">Caffè, città, perché, già: € 123,45.</testo>
+  <testo lingua="fr">Élève, cœur, Noël.</testo>
+  <testo lingua="el">Καλημέρα κόσμε</testo>
+  <testo lingua="ar" direzione="rtl">مرحبا بالعالم</testo>
+  <testo lingua="he" direzione="rtl">שלום עולם</testo>
+  <testo lingua="ja">こんにちは世界</testo>
+  <testo lingua="zh">你好，世界</testo>
+  <testo tipo="emoji">📄 📎 ✅ 👩‍💻</testo>
+  <testo tipo="precomposto">é</testo>
+  <testo tipo="combinante">é q́</testo>
+  <testo tipo="spazi" xml:space="preserve">  iniziale    intermedio    finale  </testo>
+</campioni>

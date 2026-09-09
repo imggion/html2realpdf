@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<arch:archivio xmlns:arch="urn:html2realpdf:test:archive"
+              xmlns:doc="urn:html2realpdf:test:document"
+              xmlns:meta="urn:html2realpdf:test:metadata"
+              versione="1.0">
+  <meta:provenienza>Fixture locale sintetica</meta:provenienza>
+  <doc:documento id="DOC-001">
+    <doc:titolo>Report con namespace</doc:titolo>
+    <meta:autore>Autore Demo</meta:autore>
+    <meta:tag>report</meta:tag>
+    <meta:tag>archivio</meta:tag>
+  </doc:documento>
+  <dettagli xmlns="urn:html2realpdf:test:details">
+    <stato>approvato</stato>
+    <nota>I namespace sono identificatori; non richiedono richieste di rete.</nota>
+  </dettagli>
+</arch:archivio>

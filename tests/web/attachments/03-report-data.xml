@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<report periodo="2026-Q2" valuta="EUR" dati="sintetici">
+  <titolo>Northstar Analytics — dati del report</titolo>
+  <canali>
+    <canale id="organic"><nome>Organic search</nome><ricavi>482120.00</ricavi><ordini>6914</ordini><conversionePercentuale>4.8</conversionePercentuale></canale>
+    <canale id="social"><nome>Paid social</nome><ricavi>327840.00</ricavi><ordini>4720</ordini><conversionePercentuale>3.2</conversionePercentuale></canale>
+    <canale id="email"><nome>Email lifecycle</nome><ricavi>289330.00</ricavi><ordini>4152</ordini><conversionePercentuale>7.6</conversionePercentuale></canale>
+    <canale id="partners"><nome>Partnerships</nome><ricavi>240710.00</ricavi><ordini>2706</ordini><conversionePercentuale>5.1</conversionePercentuale></canale>
+  </canali>
+  <totali><ricavi>1340000.00</ricavi><ordini>18492</ordini></totali>
+</report>
