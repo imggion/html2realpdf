@@ -250,24 +250,8 @@ keep their ordinary PDF output.
 
 ## Compliance
 
-`html2realpdf` supports **PDF/A-3 (ISO 19005-3)** through the opt-in
-`conformance: "pdfa-3u"` option. Ordinary PDF output is the default.
-
-| Profile | Coverage |
-| --- | --- |
-| **PDF/A-3u** | Archival PDF with Unicode mappings for text. This is the profile declared by the generated file and checked by the automated veraPDF gate. |
-| **PDF/A-3b** | The base archival requirements, also satisfied by a conforming PDF/A-3u file. There is no separate `pdfa-3b` API option. |
-
-[veraPDF's conformance rules](https://github.com/veraPDF/veraPDF-validation-profiles/wiki/PDFA-Parts-2-and-3-rules#rule-664-3)
-confirm that level B requirements are a subset of level U and that level B
-validation accepts files declaring U.
-
-The validation report below shows **test.pdf** passing the **PDF/A-3u**
-profile with **veraPDF 1.30.2**: **14,749 passed checks and zero failed checks**.
-It records the result for that file; validate your own generated documents too.
-
 <p align="center">
-  <img src="https://raw.githubusercontent.com/imggion/html2realpdf/main/docs/assets/pdfa-3u-validation.png" alt="veraPDF 1.30.2 report for test.pdf: PDF/A-3u validation passed, with 14,749 passed checks and zero failed checks." width="600">
+  <img src="https://raw.githubusercontent.com/imggion/html2realpdf/bacb5d0c1f8e240593c4813c4e78cf529f48e710/docs/assets/pdfa-3u-validation.png" alt="veraPDF 1.30.2 report for test.pdf: PDF/A-3u validation passed, with 14,749 passed checks and zero failed checks." width="600">
 </p>
 
 Try it yourself: render a document with `conformance: "pdfa-3u"`, download it,
@@ -279,10 +263,8 @@ verapdf --flavour 3u --format text invoice.pdf
 verapdf --flavour 3b --format text invoice.pdf
 ```
 
-Both checks should report **PASS**. To reproduce the repository's PDF/A-3u
-validation suite, run `make test-pdfa` after the
-[contributor setup](#contributing). It covers native and WASM fixtures,
-text extraction, embedded files, visual checks and a 30-page benchmark.
+To run the repository's PDF/A-3u validation suite, use `make test-pdfa` after
+completing the [contributor setup](#contributing).
 
 ## Benchmark
 
