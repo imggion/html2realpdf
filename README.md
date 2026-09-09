@@ -10,10 +10,10 @@
       <img src="https://img.shields.io/badge/release-0.2.0-2ea44f?style=flat-square" alt="Latest release: 0.2.0">
     </a>
     <a href="#compliance">
-      <img src="https://img.shields.io/badge/PDF%2FA--3u-2ea44f?style=flat-square" alt="PDF/A-3u">
+      <img src="https://img.shields.io/badge/PDF%2FA--3u-d32f2f?style=flat-square&amp;logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTTE0IDJINXYyMGgxNFY3ek0xNCAydjVoNSIvPjx0ZXh0IHg9IjEyIiB5PSIxNyIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxzYW5zLXNlcmlmIiBmb250LXNpemU9IjciIGZvbnQtd2VpZ2h0PSJib2xkIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5QREY8L3RleHQ%2BPC9zdmc%2B" alt="PDF/A-3u">
     </a>
     <a href="#compliance">
-      <img src="https://img.shields.io/badge/PDF%2FA--3b-2ea44f?style=flat-square" alt="PDF/A-3b">
+      <img src="https://img.shields.io/badge/PDF%2FA--3b-d32f2f?style=flat-square&amp;logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTTE0IDJINXYyMGgxNFY3ek0xNCAydjVoNSIvPjx0ZXh0IHg9IjEyIiB5PSIxNyIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxzYW5zLXNlcmlmIiBmb250LXNpemU9IjciIGZvbnQtd2VpZ2h0PSJib2xkIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5QREY8L3RleHQ%2BPC9zdmc%2B" alt="PDF/A-3b">
     </a>
     <img src="https://img.shields.io/badge/-zig-f39b34?style=flat-square&amp;logo=zig&amp;logoColor=white" alt="Zig">
     <img src="https://img.shields.io/badge/-WASM-654ff0?style=flat-square&amp;logo=webassembly&amp;logoColor=white" alt="WebAssembly">
