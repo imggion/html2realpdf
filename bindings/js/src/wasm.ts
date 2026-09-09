@@ -4,12 +4,13 @@
  * @packageDocumentation
  */
 
+import type { PdfExtras } from "./attachments.js";
 import { WasmRenderError } from "./errors.js";
 import type { NormalizedPage } from "./page.js";
 import type { CssProfile, Diagnostic, FontRegistration, PdfMetadata } from "./types.js";
 import type { SnapshotPageMarginBox, SnapshotPageRule } from "./snapshot.js";
 
-const EXPECTED_ABI_VERSION = 1;
+const EXPECTED_ABI_VERSION = 2;
 
 /** ABI surface implemented by `src/wasm.zig`. */
 interface WasmExports {
@@ -108,36 +109,40 @@ export class WasmBridge {
   }
 
   /** Serializes render options, invokes the native renderer, and returns owned output. */
-  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile: CssProfile = "document", marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[]): WasmRenderResult {
+  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile: CssProfile = "document", marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], extras?: PdfExtras): WasmRenderResult {
     if (this.disposed) throw new WasmRenderError("WASM bridge has been disposed", -15);
-    const input = this.encoder.encode(html);
-    const renderOptions = this.encoder.encode(JSON.stringify({
-      pageWidthPoints: page.widthPoints,
-      pageHeightPoints: page.heightPoints,
-      marginTopPoints: page.marginTopPoints,
-      marginRightPoints: page.marginRightPoints,
-      marginBottomPoints: page.marginBottomPoints,
-      marginLeftPoints: page.marginLeftPoints,
-      cssProfile,
-      marginBoxes,
-      pageRules,
-      metadata: metadata ? {
-        ...metadata,
-        keywords: Array.isArray(metadata.keywords) ? metadata.keywords.join(", ") : metadata.keywords,
-      } : undefined,
-    }));
-    const inputPointer = this.exports.alloc(input.length);
-    if (inputPointer === 0) throw new WasmRenderError("WASM input allocation failed", -11);
-    const optionsPointer = this.exports.alloc(renderOptions.length);
-    if (optionsPointer === 0) {
-      this.exports.free(inputPointer, input.length);
-      throw new WasmRenderError("WASM options allocation failed", -11);
-    }
-
+    const allocations: { pointer: number; length: number }[] = [];
+    const copy = (bytes: Uint8Array): number => {
+      const length = Math.max(bytes.length, 1);
+      const pointer = this.exports.alloc(length);
+      if (pointer === 0) throw new WasmRenderError("WASM input allocation failed", -11);
+      allocations.push({ pointer, length });
+      new Uint8Array(this.exports.memory.buffer, pointer, bytes.length).set(bytes);
+      return pointer;
+    };
     let resultHandle = 0;
     try {
-      new Uint8Array(this.exports.memory.buffer, inputPointer, input.length).set(input);
-      new Uint8Array(this.exports.memory.buffer, optionsPointer, renderOptions.length).set(renderOptions);
+      const attachments = extras?.attachments?.map(({ data, ...metadata }) => ({
+        ...metadata, dataPointer: copy(data), dataLength: data.byteLength,
+      }));
+      const input = this.encoder.encode(html);
+      const inputPointer = copy(input);
+      const renderOptions = this.encoder.encode(JSON.stringify({
+        pageWidthPoints: page.widthPoints,
+        pageHeightPoints: page.heightPoints,
+        marginTopPoints: page.marginTopPoints,
+        marginRightPoints: page.marginRightPoints,
+        marginBottomPoints: page.marginBottomPoints,
+        marginLeftPoints: page.marginLeftPoints,
+        cssProfile, marginBoxes, pageRules,
+        conformance: extras?.conformance,
+        attachments,
+        metadata: metadata ? {
+          ...metadata,
+          keywords: Array.isArray(metadata.keywords) ? metadata.keywords.join(", ") : metadata.keywords,
+        } : undefined,
+      }));
+      const optionsPointer = copy(renderOptions);
       resultHandle = this.exports.render_html_to_pdf_with_context_json_options(
         this.context,
         inputPointer,
@@ -164,8 +169,7 @@ export class WasmBridge {
       };
     } finally {
       if (resultHandle !== 0) this.exports.pdf_result_free(resultHandle);
-      this.exports.free(inputPointer, input.length);
-      this.exports.free(optionsPointer, renderOptions.length);
+      for (const { pointer, length } of allocations) this.exports.free(pointer, length);
     }
   }
 

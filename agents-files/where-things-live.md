@@ -75,3 +75,12 @@
 
 There are no routes, application state stores, server services, or UI framework
 components. Do not introduce such concepts for renderer-library work.
+
+- PDF/A policy, Unicode checks, XMP and ICC ownership belong in `src/pdfa.zig`.
+  PDF object serialization and associated files remain in `src/pdf.zig`.
+  `bindings/js/src/attachments.ts` validates and copies render-local attachment
+  views; `wasm.ts` sends binary pointers/lengths through ABI v2. Do not base64
+  encode attachment bytes or retain them on the renderer context.
+- `tests/pdfa/` owns pinned veraPDF setup, fail-closed reports, text/font/visual
+  verification, exact attachment retrieval and timing/memory comparisons.
+  `tests/web/e2e/pdfa.spec.mjs` checks both browser backends and compatibility.

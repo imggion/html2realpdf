@@ -29,6 +29,12 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
+      - name: Set up Java for veraPDF
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
       - name: Install JavaScript dependencies
         run: |
           npm ci --prefix bindings/js

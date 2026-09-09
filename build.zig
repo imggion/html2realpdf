@@ -213,6 +213,20 @@ pub fn build(b: *std.Build) void {
     const harfbuzz_test_step = b.step("test-harfbuzz", "Run the linked HarfBuzz shaping tests");
     harfbuzz_test_step.dependOn(&run_harfbuzz_tests.step);
 
+    const pdfa_mod = b.createModule(.{
+        .root_source_file = b.path("src/pdfa_integration.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    pdfa_mod.addObjectFile(native_harfbuzz_object);
+    pdfa_mod.addObjectFile(native_sheenbidi_object);
+    pdfa_mod.addObjectFile(native_libunibreak_object);
+    const pdfa_fixture = b.addExecutable(.{ .name = "html2realpdf-pdfa-fixture", .root_module = pdfa_mod });
+    const run_pdfa = b.addRunArtifact(pdfa_fixture);
+    const pdfa_step = b.step("test-pdfa-native", "Render PDF/A fixtures with production shaping");
+    pdfa_step.dependOn(&run_pdfa.step);
+
     const bidi_test_mod = b.createModule(.{
         .root_source_file = b.path("src/bidi_test.zig"),
         .target = target,

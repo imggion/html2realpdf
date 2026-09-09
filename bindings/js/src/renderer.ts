@@ -9,11 +9,12 @@ import { normalizePage, type NormalizedPage } from "./page.js";
 import { PdfDocument } from "./pdf-document.js";
 import { snapshotSource, type SnapshotOptions, type SnapshotPageMarginBox, type SnapshotPageRule } from "./snapshot.js";
 import type { CssProfile, FontRegistration, HtmlSource, PageBreakRules, PdfMetadata, RendererInit, RenderOptions } from "./types.js";
+import { preparePdfExtras, type PdfExtras } from "./attachments.js";
 import { WasmBridge, type WasmRenderResult } from "./wasm.js";
 
 /** Common ownership boundary for main-thread and Worker WASM contexts. */
 interface Backend {
-  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult>;
+  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal, extras?: PdfExtras): Promise<WasmRenderResult>;
   dispose(): void;
 }
 
@@ -21,9 +22,9 @@ interface Backend {
 class MainThreadBackend implements Backend {
   constructor(private readonly bridge: WasmBridge) {}
 
-  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult> {
+  render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal, extras?: PdfExtras): Promise<WasmRenderResult> {
     if (signal?.aborted) return Promise.reject(abortReason(signal));
-    return Promise.resolve(this.bridge.render(html, page, metadata, cssProfile, marginBoxes, pageRules));
+    return Promise.resolve(this.bridge.render(html, page, metadata, cssProfile, marginBoxes, pageRules, extras));
   }
 
   dispose(): void {
@@ -79,7 +80,7 @@ class WorkerBackend implements Backend {
     this.worker.postMessage({ type: "init", wasmUrl, fonts });
   }
 
-  async render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal): Promise<WasmRenderResult> {
+  async render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal, extras?: PdfExtras): Promise<WasmRenderResult> {
     if (this.disposed) throw new Error("Renderer has been disposed");
     if (signal?.aborted) throw abortReason(signal);
     await this.ready;
@@ -96,7 +97,14 @@ class WorkerBackend implements Backend {
         pending.removeAbort = () => signal.removeEventListener("abort", onAbort);
       }
       this.pending.set(id, pending);
-      this.worker.postMessage({ type: "render", id, html, page, metadata, cssProfile, marginBoxes, pageRules });
+      try {
+        this.worker.postMessage({ type: "render", id, html, page, metadata, cssProfile, marginBoxes, pageRules, extras },
+          extras?.attachments?.map((attachment) => attachment.data.buffer) ?? []);
+      } catch (error) {
+        this.pending.delete(id);
+        pending.removeAbort?.();
+        reject(error);
+      }
     });
   }
 
@@ -159,6 +167,7 @@ export class Html2RealPdf {
   async render(source: HtmlSource, options: RenderOptions = {}): Promise<PdfDocument> {
     if (this.disposed) throw new Error("Renderer has been disposed");
     if (options.signal?.aborted) throw abortReason(options.signal);
+    const extras = preparePdfExtras(options);
     options.onProgress?.({ phase: "snapshot", completed: 0, total: 1 });
     const snapshotOptions: SnapshotOptions = {
       resourcePolicy: options.resourcePolicy ?? "error",
@@ -195,6 +204,7 @@ export class Html2RealPdf {
       snapshot.pageMarginBoxes,
       options.page === undefined ? snapshot.pageRules : undefined,
       options.signal,
+      extras,
     );
     options.onProgress?.({ phase: "wasm", completed: 1, total: 1 });
     options.onProgress?.({ phase: "complete", completed: 1, total: 1 });

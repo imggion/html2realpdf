@@ -27,10 +27,12 @@ framework dependency.
     subset, including shapes/paths, selectable text/tspan, bounded linear and
     radial gradient fills, local clip paths, path arcs, and affine transforms.
 11. `src/pdf.zig` writes compressed PDF 1.7 objects and xref data, including affine `cm` operators, axial/radial/mesh shadings, vector alpha-gradient bands, SVG and isolated-transparency Form XObjects, transformed clip paths, and transformed link bounds.
+    Optional `src/pdfa.zig` supplies PDF/A-3u policy, XMP and the pinned ICC
+    asset; `pdf.zig` owns associated files, Unicode names, IDs and resource dictionaries.
 12. `src/render.zig` owns one complete native render lifetime.
 13. `src/diagnostics.zig` defines structured phase-aware diagnostics shared by
     the native renderer and ABI.
-14. `src/wasm.zig` exposes ABI v1 contexts and independent result handles.
+14. `src/wasm.zig` exposes ABI v2 contexts and independent result handles.
 15. `bindings/js/src/` snapshots browser input in an inert, deterministic
     media/viewport environment (with resolver-controlled stylesheets), resolves
     default and selected `@page` geometry into typed rules, and runs WASM in a
@@ -61,6 +63,10 @@ browser package build copies that file to `dist/LICENSE.md`.
 
 ## Tests
 
+- `make test-pdfa` runs linked native fixtures, pinned veraPDF 1.30.2,
+  extraction/attachment/pixel checks and isolated 30-page timing/memory cases.
+  It is part of `make test-release` and requires Java, Poppler, curl and unzip.
+
 - `make test` runs every focused Zig module test, the pinned renderer-native WPT subset, deterministic parser/resource/large-document robustness gates, Unicode case mapping, and linked HarfBuzz, bidi, and line-break gates.
 - `make test-wpt` isolates the three upstream scenarios documented in
   `tests/wpt/README.md`; `make test-robustness` runs its 512-case mutation corpus
@@ -82,6 +88,11 @@ browser package build copies that file to `dist/LICENSE.md`.
 - `tests/react/` is an isolated Vite/React application that exercises a mounted
   component ref, controlled state, computed styles, tables, SVG, canvas, and
   the same two-engine benchmark against the live mounted report.
+  Its export controls select ordinary PDF or PDF/A-3u and a local file with an
+  attachment relationship. Changing options invalidates PDFs and benchmark
+  artifacts. html2realpdf benchmark renders share those options; html2pdf.js
+  stays ordinary without attachments. `tests/web/e2e/react-pdfa.spec.mjs`
+  checks the UI flow, local read failures, exact extraction and veraPDF output.
 - `tests/benchmark/benchmark.js` owns the shared measurement boundary,
   retained download artifacts, byte formatting, and PDF.js classification.
 - `tests/benchmark/stress-report.js` owns the deterministic 30-page report

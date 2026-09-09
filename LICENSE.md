@@ -463,3 +463,19 @@ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
 ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+## ICC sRGB2014 profile
+
+Asset: `src/assets/color/sRGB2014.icc` (unmodified, February 2015 revision).
+Source: https://registry.color.org/rgb-registry/profiles/sRGB2014.icc
+SHA-256: `384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a`
+Copyright International Color Consortium.
+
+This profile is made available by the International Color Consortium, and may
+be copied, distributed, embedded, made, used, and sold without restriction.
+Altered versions of this profile shall have the original identification and
+copyright information removed and shall not be misrepresented as the original
+profile.
+
+License source: https://registry.color.org/profile-library/

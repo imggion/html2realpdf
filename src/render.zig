@@ -33,6 +33,8 @@ pub const Options = struct {
     custom_page_width_points: ?f32 = null,
     custom_page_height_points: ?f32 = null,
     metadata: pdf.Metadata = .{},
+    conformance: ?pdf.Conformance = null,
+    attachments: []const pdf.Attachment = &.{},
     font_registry: ?*const font.Registry = null,
     css_profile: CssProfile = .document,
     margin_boxes: []const MarginBox = &.{},
@@ -67,6 +69,12 @@ pub fn renderHtml(
     source: []const u8,
     options: Options,
 ) !Result {
+    if (options.conformance != null) {
+        // Native callers can supply registries directly, bypassing WASM registration.
+        if (options.font_registry) |registry| for (registry.fonts) |registered| {
+            _ = try font.Metrics.parse(registered.data);
+        };
+    }
     var arena_state = std.heap.ArenaAllocator.init(output_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -90,6 +98,13 @@ pub fn renderHtml(
             options.orientation,
             options.margins_points,
         );
+
+    if (options.conformance != null) {
+        try pdf.pdfa.validatePage(page_spec.width_points, page_spec.height_points);
+        for (options.page_rules) |rule| {
+            try pdf.pdfa.validatePage(rule.width_points orelse page_spec.width_points, rule.height_points orelse page_spec.height_points);
+        }
+    }
 
     const styles = try css.styleArrayFromDocumentWithContext(arena, &document, .{
         .viewport_width = page_spec.contentWidthCssPx(),
@@ -143,6 +158,8 @@ pub fn renderHtml(
 
     const temporary_pdf = try pdf.writeWithOptions(arena, &display, .{
         .metadata = options.metadata,
+        .conformance = options.conformance,
+        .attachments = options.attachments,
         .font_registry = options.font_registry,
         .shaping_mode = if (options.css_profile == .document) .identity else .harfbuzz,
     });
@@ -613,4 +630,12 @@ test "render forced blank pages with blank page geometry" {
     try std.testing.expectEqual(@as(usize, 3), result.page_count);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, result.bytes, "/MediaBox [0 0 75.000 75.000]"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.bytes, "/MediaBox [0 0 150.000 112.500]"));
+}
+
+test "PDF/A rejects invalid native fonts and page rules before layout" {
+    const allocator = std.testing.allocator;
+    const registry = font.Registry{ .fonts = &.{.{ .family = "Invalid", .postscript_name = "Invalid", .data = "" }} };
+    try std.testing.expectError(error.InvalidFont, renderHtml(allocator, "<p>x</p>", .{ .conformance = .@"pdfa-3u", .font_registry = &registry }));
+    try std.testing.expectError(error.PdfaInvalidPageSize, renderHtml(allocator, "<p>x</p>", .{ .conformance = .@"pdfa-3u", .custom_page_width_points = std.math.inf(f32), .custom_page_height_points = 800 }));
+    try std.testing.expectError(error.PdfaInvalidPageSize, renderHtml(allocator, "<p>x</p>", .{ .conformance = .@"pdfa-3u", .page_rules = &.{.{ .height_points = 14401 }} }));
 }

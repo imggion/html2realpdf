@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- XML comments, entity escapes, CDATA and significant whitespace. -->
+<contenuti>
+  <testo>Ricerca &amp; sviluppo: 3 &lt; 5 e 8 &gt; 4.</testo>
+  <attributi descrizione="Virgolette &quot;doppie&quot; e apostrofo &apos;singolo&apos;" />
+  <frammentoHtml><![CDATA[<section class="note"><h1>Test & anteprima</h1><p>€ 42,00</p></section>]]></frammentoHtml>
+  <json><![CDATA[{"enabled":true,"values":[1,2,3],"note":"A < B & C"}]]></json>
+  <terminatoreCdata><![CDATA[Il testo include ]]]]><![CDATA[> senza interrompere il documento.]]></terminatoreCdata>
+  <multilinea xml:space="preserve">Prima riga
+    Seconda riga indentata
+Terza riga</multilinea>
+  <riferimentiNumerici>&#8364; &#x1F4CE;</riferimentiNumerici>
+</contenuti>

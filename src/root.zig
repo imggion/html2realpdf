@@ -14,6 +14,7 @@ pub const font = @import("font.zig");
 pub const layout = @import("layout.zig");
 pub const pagination = @import("pagination.zig");
 pub const display_list = @import("display_list.zig");
+pub const pdfa = @import("pdfa.zig");
 pub const pdf = @import("pdf.zig");
 pub const render = @import("render.zig");
 pub const build_info = @import("build_info");

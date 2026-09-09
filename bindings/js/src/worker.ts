@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 
+import type { PdfExtras } from "./attachments.js";
 import { WasmBridge } from "./wasm.js";
 import type { NormalizedPage } from "./page.js";
 import type { CssProfile, FontRegistration, PdfMetadata } from "./types.js";
@@ -21,6 +22,7 @@ interface InitMessage {
 /** Requests one render and correlates its transferable result by `id`. */
 interface RenderMessage {
   type: "render";
+  extras?: PdfExtras;
   id: number;
   html: string;
   page: NormalizedPage;
@@ -51,7 +53,7 @@ scope.addEventListener("message", (event: MessageEvent<InitMessage | RenderMessa
     return;
   }
 
-  bridgePromise.then((bridge) => bridge.render(message.html, message.page, message.metadata, message.cssProfile, message.marginBoxes, message.pageRules)).then(
+  bridgePromise.then((bridge) => bridge.render(message.html, message.page, message.metadata, message.cssProfile, message.marginBoxes, message.pageRules, message.extras)).then(
     (result) => {
       scope.postMessage(
         { type: "render-result", id: message.id, bytes: result.bytes, pageCount: result.pageCount, diagnostics: result.diagnostics },

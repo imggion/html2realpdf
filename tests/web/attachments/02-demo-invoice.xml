@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic fixture with a custom schema; not FatturaPA, UBL or Factur-X. -->
+<fatturaDemo numero="DEMO-2026-001" valuta="EUR">
+  <data>2026-09-09</data>
+  <fornitore><nome>Fornitore Demo</nome><email>billing@example.com</email></fornitore>
+  <cliente><nome>Cliente di Prova</nome><riferimento>CLIENTE-001</riferimento></cliente>
+  <righe>
+    <riga numero="1"><descrizione>Servizio di esempio</descrizione><quantita>2</quantita><prezzoUnitario>1200.00</prezzoUnitario><imponibile>2400.00</imponibile><aliquotaIva>22.00</aliquotaIva></riga>
+    <riga numero="2"><descrizione>Assistenza di esempio</descrizione><quantita>1</quantita><prezzoUnitario>600.00</prezzoUnitario><imponibile>600.00</imponibile><aliquotaIva>22.00</aliquotaIva></riga>
+  </righe>
+  <totali><imponibile>3000.00</imponibile><iva>660.00</iva><totale>3660.00</totale></totali>
+  <note>Dati interamente fittizi per test di allegati PDF.</note>
+</fatturaDemo>

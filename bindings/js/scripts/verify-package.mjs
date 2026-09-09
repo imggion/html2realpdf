@@ -149,13 +149,17 @@ const typecheckSource = `import html2pdf, {
   renderPdf,
   type Html2PdfOptions,
   type PdfPreviewOptions,
+  type PdfAttachment,
   type RenderOptions,
   type ResourceRequest,
 } from "@imggion/html2realpdf";
 
 const element = document.createElement("main");
 const ref = { current: element };
-const options: RenderOptions = { page: { format: "a4", margin: [10, 12] } };
+const attachment: PdfAttachment = { name: "invoice.xml", data: new Uint8Array([1]), mimeType: "application/xml", relationship: "Data", modifiedAt: new Date() };
+const options: RenderOptions = { page: { format: "a4", margin: [10, 12] }, conformance: "pdfa-3u", attachments: [attachment] };
+const archivalCompat: Html2PdfOptions = { conformance: "pdfa-3u", attachments: [attachment], metadata: { title: "Archive" } };
+void html2pdf().set(archivalCompat);
 const previewOptions: PdfPreviewOptions = {
   showToolbar: false,
   padding: 12,

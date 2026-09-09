@@ -9,6 +9,12 @@
     <a href="https://github.com/imggion/html2realpdf/releases/tag/v0.2.0">
       <img src="https://img.shields.io/badge/release-0.2.0-2ea44f?style=flat-square" alt="Latest release: 0.2.0">
     </a>
+    <a href="#compliance">
+      <img src="https://img.shields.io/badge/PDF%2FA--3u-d32f2f?style=flat-square&amp;logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTTE0IDJINXYyMGgxNFY3ek0xNCAydjVoNSIvPjx0ZXh0IHg9IjEyIiB5PSIxNyIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxzYW5zLXNlcmlmIiBmb250LXNpemU9IjciIGZvbnQtd2VpZ2h0PSJib2xkIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5QREY8L3RleHQ%2BPC9zdmc%2B" alt="PDF/A-3u">
+    </a>
+    <a href="#compliance">
+      <img src="https://img.shields.io/badge/PDF%2FA--3b-d32f2f?style=flat-square&amp;logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTTE0IDJINXYyMGgxNFY3ek0xNCAydjVoNSIvPjx0ZXh0IHg9IjEyIiB5PSIxNyIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxzYW5zLXNlcmlmIiBmb250LXNpemU9IjciIGZvbnQtd2VpZ2h0PSJib2xkIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5QREY8L3RleHQ%2BPC9zdmc%2B" alt="PDF/A-3b">
+    </a>
     <img src="https://img.shields.io/badge/-zig-f39b34?style=flat-square&amp;logo=zig&amp;logoColor=white" alt="Zig">
     <img src="https://img.shields.io/badge/-WASM-654ff0?style=flat-square&amp;logo=webassembly&amp;logoColor=white" alt="WebAssembly">
     <img src="https://img.shields.io/badge/-TypeScript-3178c6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript">
@@ -28,6 +34,8 @@
 - [Vue](#vue)
 - [Preview](#preview)
 - [Page layouts](#page-layouts)
+- [PDF/A and attachments](#pdfa-and-attachments)
+- [Compliance](#compliance)
 - [Benchmark](#benchmark)
 - [Contributing](#contributing)
 - [License](#license)
@@ -206,6 +214,58 @@ const pdf = await renderPdf(postcard, {
 });
 ```
 
+## PDF/A and attachments
+
+Opt into PDF/A-3u independently of the CSS profile:
+
+```ts
+const pdf = await renderPdf(invoice, {
+  conformance: "pdfa-3u",
+  metadata: { title: "Invoice" },
+  attachments: [{
+    name: "invoice.xml",
+    data: new TextEncoder().encode(xml),
+    mimeType: "application/xml",
+    relationship: "Data",
+  }],
+});
+```
+
+The writer embeds sRGB, synchronized XMP metadata and Unicode font mappings.
+Incompatible resources produce an error; there is no fallback to ordinary PDF.
+CMYK JPEGs, missing glyphs and fonts that forbid outline embedding are rejected.
+Transparency and supported SVG remain native PDF graphics. This is PDF/A-3u,
+not a claim of Tagged PDF, PDF/UA, digital signatures or Factur-X compliance.
+
+Attachments also work without `conformance`. Their bytes are preserved, and
+caller buffers stay usable in both Worker and main-thread execution. MIME type
+defaults to `application/octet-stream` and relationship to `Unspecified`.
+Optional `description` and `modifiedAt: Date` are supported; dates are never
+invented. Empty/duplicate names, malformed MIME types and invalid dates fail.
+The html2pdf.js adapter accepts the same options through `.set(...)`.
+
+See [PDF/A implementation and validation](https://github.com/imggion/html2realpdf/blob/main/docs/pdfa.md)
+for limits and the pinned veraPDF gate. Existing calls without these options
+keep their ordinary PDF output.
+
+## Compliance
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/imggion/html2realpdf/bacb5d0c1f8e240593c4813c4e78cf529f48e710/docs/assets/pdfa-3u-validation.png" alt="veraPDF 1.30.2 report for test.pdf: PDF/A-3u validation passed, with 14,749 passed checks and zero failed checks." width="600">
+</p>
+
+Try it yourself: render a document with `conformance: "pdfa-3u"`, download it,
+and open it in [veraPDF](https://verapdf.org/), or check both profiles with its
+[CLI](https://docs.verapdf.org/cli/validation/):
+
+```sh
+verapdf --flavour 3u --format text invoice.pdf
+verapdf --flavour 3b --format text invoice.pdf
+```
+
+To run the repository's PDF/A-3u validation suite, use `make test-pdfa` after
+completing the [contributor setup](#contributing).
+
 ## Benchmark
 
 One recorded run of the deterministic 30-page stress report produced:
@@ -224,7 +284,8 @@ One recorded run of the deterministic 30-page stress report produced:
 
 ## Contributing
 
-You need Zig `0.16.0`, Node.js `20.16+`, npm, and Make. On a fresh checkout,
+You need Zig `0.16.0`, Node.js `20.16+`, npm, and Make. The PDF/A gate
+also needs Java 17+, Poppler, curl and unzip. On a fresh checkout,
 install the JavaScript dependencies once:
 
 ```sh
@@ -240,6 +301,7 @@ npm ci --prefix tests/web
 | `make wasm` | Build the default `ReleaseFast` WebAssembly and browser package |
 | `make wasm-small` | Build the optional size-oriented `ReleaseSmall` package asset |
 | `make react` | Start the React integration app |
+| `make test-pdfa` | Validate PDF/A-3u with veraPDF 1.30.2 and benchmark 30 pages |
 | `make test-release` | Run the complete release gate |
 
 To open the small browser test harness:

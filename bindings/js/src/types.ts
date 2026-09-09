@@ -230,6 +230,10 @@ export interface RenderOptions {
   pageBreak?: PageBreakRules;
   /** PDF information dictionary fields. */
   metadata?: PdfMetadata;
+  /** Opts into PDF/A-3u; incompatible resources reject the render without fallback. */
+  conformance?: "pdfa-3u";
+  /** Embedded files for this render only; does not implicitly enable PDF/A. */
+  attachments?: readonly PdfAttachment[];
   /** Preserves HTTP(S), mail, telephone, and FTP annotations unless explicitly set to `false`. */
   enableLinks?: boolean;
   /**
@@ -287,6 +291,10 @@ export interface CompatPageBreakOptions {
 
 /** Options supported by the PDF-oriented html2pdf.js compatibility layer. */
 export interface Html2PdfOptions {
+  /** Same metadata and archival options as RenderOptions. */
+  metadata?: PdfMetadata;
+  conformance?: "pdfa-3u";
+  attachments?: readonly PdfAttachment[];
   /** Page margins in html2pdf.js order. */
   margin?: Margin;
   /** Filename used by `save` when no method argument is supplied. */
@@ -311,3 +319,19 @@ export type PdfOutputType =
   | "bloburi"
   | "datauristring"
   | "dataurlstring";
+
+/** File embedded in one PDF; caller data is copied and never transferred or detached. */
+export interface PdfAttachment {
+  /** Nonempty, unique filename. Unicode is preserved. */
+  name: string;
+  /** Original bytes; a Uint8Array embeds only its selected view. */
+  data: ArrayBuffer | Uint8Array;
+  /** MIME media type without parameters. Defaults to application/octet-stream. */
+  mimeType?: string;
+  /** Relationship to the document. Defaults to Unspecified. */
+  relationship?: "Source" | "Data" | "Alternative" | "Supplement" | "Unspecified";
+  /** Optional human-readable attachment description. */
+  description?: string;
+  /** Explicit modification time, stored in UTC with second precision; no date is invented. */
+  modifiedAt?: Date;
+}

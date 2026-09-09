@@ -23,6 +23,15 @@ Read these local docs before changing code:
 - `src/wpt_subset_test.zig` adapts three pinned upstream Web Platform Test scenarios into renderer-native geometry assertions; `src/robustness_test.zig` owns deterministic malformed-input, allocation-exhaustion, and large-document gates.
 - `docs/css-support.md` is the public, versioned CSS support contract; `src/css/properties.zig` is its machine-readable property inventory.
 - `src/layout/page_geometry.zig` owns typed page boxes, page-selector cascade, and named-page sequences. `src/layout/fragmentation.zig` consumes those sequences for variable-height page boundaries, facing-page resolution, break arbitration, and block-child propagation. Block, inline, table, Flex, and Grid formatters must use that shared fragmentainer model instead of duplicating modulo arithmetic.
+- `src/pdfa.zig` owns optional PDF/A-3u policy, XMP and the pinned sRGB2014 asset;
+  object IDs, associated-file streams, name trees, fonts and xref remain in
+  `src/pdf.zig`. Never convert or re-render output to obtain conformance.
+- ABI v2 carries render-local binary attachment descriptors; JSON contains no
+  attachment bytes. The browser copies selected views before Worker transfer,
+  validates WASM memory ranges, and frees temporary allocations on failure.
+- `tests/pdfa/` owns pinned veraPDF 1.30.2 setup, fail-closed report checks,
+  extraction/visual/attachment gates and the four-case 30-page benchmark.
+  `src/pdfa_integration.zig` must run with actual native HarfBuzz linkage.
 - `src/paged_media.zig` selects default/named/pseudo `@page` margin-box text only after pagination establishes page names, forced blank pages, and the final page count. Keep selector matching, page counters, margin-slot geometry, and generated text commands there; do not synthesize DOM boxes or consume content flow.
 - Web table fragmentation measures `<tfoot>` groups before final placement, reserves their page-end extent, and repeats both `<thead>` and `<tfoot>` only on pages occupied by the table. Keep the rollback measurement scoped to table fragments, positioned descendants, and line identifiers.
 - Browser snapshots must preserve which positioned inset sides were authored; computed `top`/`left` used values derived from `bottom`/`right` cannot be reinterpreted against PDF page geometry. Pagination copies fixed templates before appending repeats so array reallocation cannot drop later fixed furniture.
@@ -35,6 +44,11 @@ Read these local docs before changing code:
 - The browser fixture set includes portrait reports and an A4 landscape presentation deck; keep both available from `tests/web/index.html` and in automated browser verification.
 - Browser pseudo-element snapshots resolve nested CSS counters before emitting synthetic text nodes; keep counter scope traversal in `bindings/js/src/snapshot.ts` rather than teaching the PDF core browser-only generated-content state.
 - `tests/react/` is an isolated Vite app that passes a mounted `forwardRef` report, controlled state, tables, SVG, and live canvas pixels through the public package API.
+- Its PDF export controls select ordinary PDF or PDF/A-3u and a local attachment
+  with an explicit relationship. Export changes clear stale PDFs and benchmark
+  artifacts; html2realpdf benchmark renders use the same options, while
+  html2pdf.js remains ordinary without attachments. `react-pdfa.spec.mjs`
+  verifies selection, extraction, removal, read failures and veraPDF compliance.
 - The browser package is framework-agnostic; React refs are supported structurally without a React dependency.
 - Supported inline SVG shapes/paths, selectable text/tspan, bounded linear and
   radial gradient fills, and local clip paths remain vector through
@@ -85,6 +99,7 @@ Read these local docs before changing code:
 - `make test-browser` runs the browser harness and mounted React-ref preview on Chromium, Firefox, and WebKit.
 - The Chromium browser gate also benchmarks both engines from the native harness and mounted React ref, verifies native/selectable versus raster PDF classification, checks the shared stress report is exactly 30 pages, and checks automatic plus individual downloads without asserting machine-specific timings.
 - `make baseline` intentionally regenerates versioned PDF/PNG baselines; `make test-baseline` checks current PDF bytes against their digests.
+- `make test-pdfa` runs native fixtures, veraPDF 1.30.2, extraction/visual checks and the 30-page benchmark; requires Java, Poppler, curl and unzip.
 - `make test-release` runs Zig, package, React-build, snapshot, browser E2E, and PDF baseline suites.
 - `NPM_TOKEN=... make deploy` is the explicit local npm publication fallback. It
   builds through the package `prepack` lifecycle, publishes prereleases with
@@ -103,6 +118,8 @@ Read these local docs before changing code:
 ## Style Rules
 
 - Prefer small, explicit changes that fit the current Zig module layout.
+- Default to straightforward code with minimal abstraction across Zig and TypeScript. Keep single-use logic inline when blank lines and clear control flow make it easy to follow; do not extract helpers merely to shorten a function. Extract only for real reuse or a concrete responsibility boundary that improves readability.
+- Separate logical sections within functions with blank lines, keeping related statements together. Expand long conditions and dense error-handling blocks over multiple lines. Add short comments where intent, ownership, or a non-obvious constraint needs explanation; avoid comments that merely repeat the code.
 - Keep tokenizer and parsing control flow readable; avoid nested ternaries, clever state shortcuts, and giant multi-purpose functions when a local helper or state branch would be clearer.
 - Keep Box Tree construction in `src/box.zig`; use flat `BoxId` links like `dom.NodeId` instead of recursive owned child arrays.
 - Keep continuous layout, pagination, display-list generation, and PDF serialization in their focused modules; do not merge phase ownership into `box.zig` or `wasm.zig`.
