@@ -6,8 +6,8 @@
     <a href="https://www.npmjs.com/package/@imggion/html2realpdf">
       <img src="https://img.shields.io/npm/v/@imggion/html2realpdf.svg?style=flat-square" alt="npm version">
     </a>
-    <a href="https://github.com/imggion/html2realpdf/releases/tag/v0.2.0">
-      <img src="https://img.shields.io/badge/release-0.2.0-2ea44f?style=flat-square" alt="Latest release: 0.2.0">
+    <a href="https://github.com/imggion/html2realpdf/releases/tag/v0.3.0">
+      <img src="https://img.shields.io/badge/release-0.3.0-2ea44f?style=flat-square" alt="Latest release: 0.3.0">
     </a>
     <a href="#compliance">
       <img src="https://img.shields.io/badge/PDF%2FA--3u-d32f2f?style=flat-square&amp;logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTTE0IDJINXYyMGgxNFY3ek0xNCAydjVoNSIvPjx0ZXh0IHg9IjEyIiB5PSIxNyIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxzYW5zLXNlcmlmIiBmb250LXNpemU9IjciIGZvbnQtd2VpZ2h0PSJib2xkIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5QREY8L3RleHQ%2BPC9zdmc%2B" alt="PDF/A-3u">
