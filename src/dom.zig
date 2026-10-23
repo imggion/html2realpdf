@@ -10,6 +10,9 @@ const html = @import("html.zig");
 /// Stable index into `Document.nodes`.
 pub const NodeId = usize;
 
+/// Bounds stack use in the cascade, Box Tree, and layout phases after parsing.
+pub const max_element_depth = 64;
+
 /// Parsed document plus the source bytes it borrows from.
 ///
 /// Most strings point into `source`. Decoded character references are owned by
@@ -177,6 +180,8 @@ pub const Parser = struct {
                 .tag_open => |open_tag| {
                     const tag = tagFromName(open_tag.name);
                     closeImpliedElements(&document, &stack, tag);
+
+                    if (stack.items.len > max_element_depth) return error.DocumentTooDeep;
 
                     const attributes = try copyAttributes(&document, allocator, open_tag.attributes);
                     const node_id = document.appendNode(
@@ -731,6 +736,25 @@ test "dump DOM tree" {
         \\
     ;
     try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "element depth limit rejects nesting but permits siblings and implied closes" {
+    const allocator = std.testing.allocator;
+    const accepted = [_][]const u8{
+        "<div>" ** max_element_depth ++ "text" ++ "</div>" ** max_element_depth,
+        "<div>text</div>" ** (max_element_depth * 4),
+        "<div>" ** (max_element_depth - 1) ++ "<p>one<p>two",
+    };
+    for (accepted) |source| {
+        var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+        defer deinitTokens(allocator, &tokens);
+        var document = try Parser.parse(allocator, source, tokens.items);
+        defer document.deinit(allocator);
+    }
+    const source = "<div>" ** (max_element_depth + 1);
+    var tokens = try html.Tokenizer.tokenizeHtml(allocator, source);
+    defer deinitTokens(allocator, &tokens);
+    try std.testing.expectError(error.DocumentTooDeep, Parser.parse(allocator, source, tokens.items));
 }
 
 test "debug dump DOM tree" {

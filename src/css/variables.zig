@@ -6,6 +6,17 @@
 
 const std = @import("std");
 
+pub const max_expanded_value_bytes = 64 * 1024;
+pub const max_expansion_bytes = 8 * 1024 * 1024;
+pub const max_substitutions = 65536;
+const ResolveError = std.mem.Allocator.Error || error{CssExpansionLimitExceeded};
+
+/// Shared by every scope in one cascade, including intermediate expansions.
+const ExpansionBudget = struct {
+    bytes: usize = max_expansion_bytes,
+    substitutions: usize = max_substitutions,
+};
+
 pub const CustomValue = union(enum) {
     invalid,
     raw: []const u8,
@@ -14,10 +25,14 @@ pub const CustomValue = union(enum) {
 pub const Scope = struct {
     parent: ?*const Scope,
     values: std.StringHashMapUnmanaged(CustomValue) = .empty,
+    budget: *ExpansionBudget,
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*const Scope) !*Scope {
         const scope = try allocator.create(Scope);
-        scope.* = .{ .parent = parent };
+        errdefer allocator.destroy(scope);
+        const budget = if (parent) |p| p.budget else try allocator.create(ExpansionBudget);
+        if (parent == null) budget.* = .{};
+        scope.* = .{ .parent = parent, .budget = budget };
         return scope;
     }
 
@@ -57,16 +72,19 @@ fn resolveValue(
     value: []const u8,
     stack: *std.ArrayList([]const u8),
     depth: u8,
-) std.mem.Allocator.Error!?[]const u8 {
+) ResolveError!?[]const u8 {
     if (depth >= 64) return null;
+    if (value.len > max_expanded_value_bytes) return error.CssExpansionLimitExceeded;
     const first = findVarFunction(value, 0) orelse return value;
-    var output = try std.ArrayList(u8).initCapacity(allocator, value.len);
-    errdefer output.deinit(allocator);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
     var cursor: usize = 0;
     var function_start: ?usize = first;
 
     while (function_start) |start| {
-        try output.appendSlice(allocator, value[cursor..start]);
+        if (scope.budget.substitutions == 0) return error.CssExpansionLimitExceeded;
+        scope.budget.substitutions -= 1;
+        try appendExpanded(allocator, &output, value[cursor..start], scope.budget);
         const open = start + 3;
         const close = findClosingParen(value, open) orelse return null;
         const arguments = value[open + 1 .. close];
@@ -79,14 +97,20 @@ fn resolveValue(
             const fallback_value = fallback orelse return null;
             break :blk try resolveValue(allocator, scope, fallback_value, stack, depth + 1) orelse return null;
         };
-        try output.appendSlice(allocator, replacement);
+        try appendExpanded(allocator, &output, replacement, scope.budget);
         cursor = close + 1;
         function_start = findVarFunction(value, cursor);
     }
 
-    try output.appendSlice(allocator, value[cursor..]);
+    try appendExpanded(allocator, &output, value[cursor..], scope.budget);
     const owned = try output.toOwnedSlice(allocator);
     return @as([]const u8, owned);
+}
+
+fn appendExpanded(allocator: std.mem.Allocator, output: *std.ArrayList(u8), value: []const u8, budget: *ExpansionBudget) ResolveError!void {
+    if (value.len > max_expanded_value_bytes - output.items.len or value.len > budget.bytes) return error.CssExpansionLimitExceeded;
+    budget.bytes -= value.len;
+    try output.appendSlice(allocator, value);
 }
 
 fn resolveCustom(
@@ -95,7 +119,7 @@ fn resolveCustom(
     name: []const u8,
     stack: *std.ArrayList([]const u8),
     depth: u8,
-) std.mem.Allocator.Error!?[]const u8 {
+) ResolveError!?[]const u8 {
     for (stack.items) |active| {
         if (std.mem.eql(u8, active, name)) return null;
     }
@@ -186,4 +210,49 @@ test "var cycles use fallback or invalidate the declaration" {
     try scope.set(allocator, "--b", "var(--a)");
     try std.testing.expect((try resolve(allocator, scope, "var(--a)")) == null);
     try std.testing.expectEqualStrings("10px", (try resolve(allocator, scope, "var(--a, 10px)")).?);
+}
+
+test "var expansion rejects exponential output before exhausting memory" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const scope = try Scope.create(allocator, null);
+    try scope.set(allocator, "--x0", "1px");
+    for (1..19) |index| {
+        const name = try std.fmt.allocPrint(allocator, "--x{d}", .{index});
+        const value = try std.fmt.allocPrint(allocator, "var(--x{d}) var(--x{d})", .{ index - 1, index - 1 });
+        try scope.set(allocator, name, value);
+    }
+    try std.testing.expectError(error.CssExpansionLimitExceeded, resolve(allocator, scope, "var(--x18)"));
+}
+
+test "var expansion budgets span declarations and descendant scopes" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const root = try Scope.create(allocator, null);
+    const child = try Scope.create(allocator, root);
+    try root.set(allocator, "--x", "1px");
+    root.budget.bytes = 6;
+    try std.testing.expectEqualStrings("1px", (try resolve(allocator, root, "var(--x)")).?);
+    try std.testing.expectEqualStrings("1px", (try resolve(allocator, child, "var(--x)")).?);
+    try std.testing.expectError(error.CssExpansionLimitExceeded, resolve(allocator, child, "var(--x)"));
+
+    const empty = try Scope.create(allocator, null);
+    try empty.set(allocator, "--empty", "");
+    empty.budget.substitutions = 2;
+    try std.testing.expectEqualStrings("", (try resolve(allocator, empty, "var(--empty)var(--empty)")).?);
+    try std.testing.expectError(error.CssExpansionLimitExceeded, resolve(allocator, empty, "var(--empty)"));
+}
+
+test "var expanded value accepts the limit and rejects one extra byte" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+    const scope = try Scope.create(allocator, null);
+    const value = try allocator.alloc(u8, max_expanded_value_bytes);
+    @memset(value, 'x');
+    try scope.set(allocator, "--value", value);
+    try std.testing.expectEqualStrings(value, (try resolve(allocator, scope, "var(--value)")).?);
+    try std.testing.expectError(error.CssExpansionLimitExceeded, resolve(allocator, scope, "var(--value)x"));
 }

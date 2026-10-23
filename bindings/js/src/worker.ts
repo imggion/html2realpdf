@@ -8,6 +8,7 @@
 
 import type { PdfExtras } from "./attachments.js";
 import { WasmBridge } from "./wasm.js";
+import { WasmRenderError } from "./errors.js";
 import type { NormalizedPage } from "./page.js";
 import type { CssProfile, FontRegistration, PdfMetadata } from "./types.js";
 import type { SnapshotPageMarginBox, SnapshotPageRule } from "./snapshot.js";
@@ -60,7 +61,10 @@ scope.addEventListener("message", (event: MessageEvent<InitMessage | RenderMessa
         [result.bytes.buffer],
       );
     },
-    (error: unknown) => scope.postMessage({ type: "render-error", id: message.id, error: errorMessage(error) }),
+    (error: unknown) => scope.postMessage({
+      type: "render-error", id: message.id, error: errorMessage(error),
+      status: error instanceof WasmRenderError ? error.status : -21,
+    }),
   );
 });
 

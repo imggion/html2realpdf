@@ -11,7 +11,11 @@ pub const Error = error{
     InvalidDataUrl,
     InvalidJpeg,
     InvalidPng,
+    ImageTooLarge,
 };
+
+/// Caps decoded pixel storage before either alpha decoding or PDF embedding.
+pub const max_png_pixels = 16 * 1024 * 1024;
 
 pub const Jpeg = struct {
     bytes: []u8,
@@ -97,6 +101,8 @@ pub fn decodePngDataUrl(allocator: std.mem.Allocator, source: []const u8) !Png {
         offset = chunk_end;
     }
     if (width == 0 or height == 0 or bit_depth != 8 or idat.writer.end == 0) return Error.InvalidPng;
+    const pixel_count = std.math.mul(usize, width, height) catch return Error.ImageTooLarge;
+    if (pixel_count > max_png_pixels) return Error.ImageTooLarge;
     const components: u8 = switch (color_type) {
         0 => 1,
         2 => 3,
@@ -120,13 +126,11 @@ pub fn decodePngDataUrl(allocator: std.mem.Allocator, source: []const u8) !Png {
     const filtered_len = std.math.mul(usize, height, stride + 1) catch return Error.InvalidPng;
     const filtered = try inflateZlib(allocator, idat.written(), filtered_len);
     defer allocator.free(filtered);
-    if (filtered.len != filtered_len) return Error.InvalidPng;
     const pixels = try allocator.alloc(u8, stride * height);
     defer allocator.free(pixels);
     try unfilterPng(pixels, filtered, @intCast(width), @intCast(height), components);
 
     const color_components: u8 = if (color_type == 4) 1 else 3;
-    const pixel_count = std.math.mul(usize, width, height) catch return Error.InvalidPng;
     const colors = try allocator.alloc(u8, pixel_count * color_components);
     defer allocator.free(colors);
     const alpha = try allocator.alloc(u8, pixel_count);
@@ -160,11 +164,17 @@ fn decodeBase64DataUrl(allocator: std.mem.Allocator, source: []const u8, prefix:
 
 fn inflateZlib(allocator: std.mem.Allocator, compressed: []const u8, expected_size: usize) ![]u8 {
     var input: std.Io.Reader = .fixed(compressed);
-    var output = try std.Io.Writer.Allocating.initCapacity(allocator, expected_size);
-    errdefer output.deinit();
+    // The decoder needs one writable byte to consume an empty final stored
+    // block. This sentinel also detects excess output without a growing writer.
+    const capacity = std.math.add(usize, expected_size, 1) catch return Error.InvalidPng;
+    const filtered = try allocator.alloc(u8, capacity);
+    errdefer allocator.free(filtered);
+    // A fixed writer rejects excess decoded bytes before allocating for them.
+    var output: std.Io.Writer = .fixed(filtered);
     var decompressor: std.compress.flate.Decompress = .init(&input, .zlib, &.{});
-    _ = try decompressor.reader.streamRemaining(&output.writer);
-    return output.toOwnedSlice();
+    const written = decompressor.reader.streamRemaining(&output) catch return Error.InvalidPng;
+    if (written != expected_size) return Error.InvalidPng;
+    return allocator.realloc(filtered, expected_size);
 }
 
 pub fn compressZlib(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
@@ -288,4 +298,37 @@ test "decode RGBA PNG and preserve a soft-mask channel" {
     try std.testing.expectEqual(@as(u32, 1), png.height);
     try std.testing.expectEqual(@as(u8, 3), png.color_components);
     try std.testing.expect(png.alpha_bytes != null);
+}
+
+test "PNG inflation rejects excess output with only the declared scanline storage" {
+    const allocator = std.testing.allocator;
+    const inflated = try allocator.alloc(u8, 1024 * 1024);
+    defer allocator.free(inflated);
+    @memset(inflated, 0);
+    const compressed = try compressZlib(allocator, inflated);
+    defer allocator.free(compressed);
+    // Five declared scanline bytes plus the decoder's single sentinel byte.
+    var storage: [6]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&storage);
+    try std.testing.expectError(Error.InvalidPng, inflateZlib(fixed.allocator(), compressed, 5));
+}
+
+test "PNG inflation requires the exact declared output size" {
+    const allocator = std.testing.allocator;
+    const compressed = try compressZlib(allocator, "abcde");
+    defer allocator.free(compressed);
+    const decoded = try inflateZlib(allocator, compressed, 5);
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("abcde", decoded);
+    try std.testing.expectError(Error.InvalidPng, inflateZlib(allocator, compressed, 4));
+    try std.testing.expectError(Error.InvalidPng, inflateZlib(allocator, compressed, 6));
+}
+
+test "PNG inflation accepts an empty final stored block after exact output" {
+    const allocator = std.testing.allocator;
+    // zlib, five bytes in a non-final stored block, then an empty final block.
+    const compressed = "\x78\x01\x00\x05\x00\xfa\xffabcde\x01\x00\x00\xff\xff\x05\xc8\x01\xf0";
+    const decoded = try inflateZlib(allocator, compressed, 5);
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("abcde", decoded);
 }

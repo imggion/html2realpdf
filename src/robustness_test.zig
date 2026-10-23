@@ -72,3 +72,24 @@ test "robustness: large multi-page document remains native and completes" {
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/Subtype /Image") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.bytes, "/ToUnicode") != null);
 }
+
+test "robustness: excessive nesting and CSS expansion return controlled errors" {
+    try std.testing.expectError(error.DocumentTooDeep, render.renderHtml(
+        std.testing.allocator,
+        "<div>" ** 250 ++ "x" ++ "</div>" ** 250,
+        .{ .css_profile = .web },
+    ));
+
+    var source = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer source.deinit();
+    try source.writer.writeAll("<div style='--x0:1px;");
+    for (1..19) |index| {
+        try source.writer.print("--x{d}:var(--x{d}) var(--x{d});", .{ index, index - 1, index - 1 });
+    }
+    try source.writer.writeAll("width:var(--x18)'>x</div>");
+    try std.testing.expectError(error.CssExpansionLimitExceeded, render.renderHtml(
+        std.testing.allocator,
+        source.written(),
+        .{ .css_profile = .web },
+    ));
+}

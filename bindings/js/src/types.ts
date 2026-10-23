@@ -156,8 +156,10 @@ export interface ResourceRequest {
  *
  * @remarks
  * For stylesheets, a string is CSS source. For images, a string is a data URL
- * or replacement URL. `null` leaves the request unresolved and applies
- * `resourcePolicy`.
+ * or replacement URL. `null` denies the resource without a fallback fetch:
+ * `resourcePolicy: "error"` rejects the render and `"omit"` omits the resource.
+ * Without a resolver, images may be fetched directly; HTML-string stylesheets
+ * require a resolver. Already embedded image data URLs bypass the resolver.
  */
 export type ResourceResolver = (request: ResourceRequest) => Blob | string | null | Promise<Blob | string | null>;
 

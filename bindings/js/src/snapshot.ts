@@ -2843,6 +2843,7 @@ async function materializeImages(
     try {
       const url = new URL(source, options.baseUrl ?? image.ownerDocument.baseURI);
       const resolved = await options.resourceResolver?.({ kind: "image", url });
+      if (resolved === null) throw new Error("Image resource was declined by resourceResolver");
       if (typeof resolved === "string" && /^data:image\/(?:jpeg|jpg|png);/i.test(resolved)) {
         (image as HTMLImageElement).src = resolved;
         continue;
@@ -2932,6 +2933,7 @@ async function materializeBackgroundImages(
       try {
         const url = new URL(source, options.baseUrl ?? element.ownerDocument.baseURI);
         const resolved = await options.resourceResolver?.({ kind: "image", url });
+        if (resolved === null) throw new Error("Image resource was declined by resourceResolver");
         let dataUrl: string;
         if (typeof resolved === "string" && /^data:image\/(?:jpeg|jpg|png);/i.test(resolved)) {
           dataUrl = resolved;

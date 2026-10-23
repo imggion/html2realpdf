@@ -248,6 +248,33 @@ See [PDF/A implementation and validation](https://github.com/imggion/html2realpd
 for limits and the pinned veraPDF gate. Existing calls without these options
 keep their ordinary PDF output.
 
+## Resource limits and untrusted input
+
+The native renderer rejects documents deeper than 64 nested elements
+(`DocumentTooDeep`). CSS `var()` substitution is limited to 64 KiB per value,
+8 MiB of cumulative expansion including intermediate values, and 65,536
+substitutions per cascade (`CssExpansionLimitExceeded`). PNGs are limited to
+16,777,216 pixels (`ImageTooLarge`); alpha PNG decompression must fit the exact
+scanline size declared by the image (`InvalidPng` otherwise). These limits
+also apply to trusted documents and cannot be raised through render options.
+
+These errors leave the renderer usable. An unexpected WASM trap instead
+discards its instance: recreate an explicit `createRenderer()` instance, or
+call `renderPdf()` again to create a fresh default Worker. Failed documents
+are never retried automatically.
+
+Returning `null` from `resourceResolver` denies an image, background image, or
+stylesheet without fetching the original URL. `resourcePolicy: "error"`
+rejects the render; `"omit"` skips the resource and returns a diagnostic.
+Without a resolver, image URLs can be fetched normally. Already embedded
+image data URLs bypass the resolver, and live DOM resources may already have
+been loaded by the host page.
+
+These are targeted safeguards, not a general CPU or memory quota. Keep Worker
+execution for untrusted documents and apply application-level input-size and
+resource allowlists; native service integrations also need process isolation
+and external time/memory limits.
+
 ## Compliance
 
 <p align="center">
