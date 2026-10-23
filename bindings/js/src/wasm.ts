@@ -11,6 +11,8 @@ import type { CssProfile, Diagnostic, FontRegistration, PdfMetadata } from "./ty
 import type { SnapshotPageMarginBox, SnapshotPageRule } from "./snapshot.js";
 
 const EXPECTED_ABI_VERSION = 2;
+/** Internal status: the instance must be discarded without further WASM calls. */
+export const WASM_TRAP_STATUS = -23;
 
 /** ABI surface implemented by `src/wasm.zig`. */
 interface WasmExports {
@@ -71,7 +73,8 @@ export interface WasmRenderResult {
  * @remarks
  * All temporary allocations and result handles are freed before `render`
  * returns. PDF bytes are copied first because freeing handles or growing WASM
- * memory invalidates borrowed views.
+ * memory invalidates borrowed views. After a WASM trap the whole instance is
+ * discarded without further calls, including cleanup against damaged state.
  */
 export class WasmBridge {
   private readonly encoder = new TextEncoder();
@@ -103,8 +106,11 @@ export class WasmBridge {
       for (const registration of fonts) bridge.registerFont(registration);
       return bridge;
     } catch (error) {
-      bridge.dispose();
-      throw error;
+      try {
+        return bridge.rethrow(error);
+      } finally {
+        bridge.dispose();
+      }
     }
   }
 
@@ -167,9 +173,17 @@ export class WasmBridge {
         pageCount: this.exports.pdf_result_page_count(resultHandle),
         diagnostics: this.readDiagnostics(resultHandle),
       };
+    } catch (error) {
+      return this.rethrow(error);
     } finally {
-      if (resultHandle !== 0) this.exports.pdf_result_free(resultHandle);
-      for (const { pointer, length } of allocations) this.exports.free(pointer, length);
+      if (!this.disposed) {
+        try {
+          if (resultHandle !== 0) this.exports.pdf_result_free(resultHandle);
+          for (const { pointer, length } of allocations) this.exports.free(pointer, length);
+        } catch (error) {
+          this.rethrow(error);
+        }
+      }
     }
   }
 
@@ -210,10 +224,27 @@ export class WasmBridge {
         registration.style === "italic" ? 1 : 0,
       );
       if (status !== 0) throw new WasmRenderError(`WASM font registration failed with status ${status}`, status);
+    } catch (error) {
+      this.rethrow(error);
     } finally {
-      this.exports.free(familyPointer, family.length);
-      this.exports.free(dataPointer, data.length);
+      if (!this.disposed) {
+        try {
+          this.exports.free(familyPointer, family.length);
+          this.exports.free(dataPointer, data.length);
+        } catch (error) {
+          this.rethrow(error);
+        }
+      }
     }
+  }
+
+  private rethrow(error: unknown): never {
+    if (error instanceof WebAssembly.RuntimeError) {
+      // A trap may leave the stack or allocator invalid, including during free.
+      this.disposed = true;
+      throw new WasmRenderError(`WASM instance was discarded after a trap: ${error.message}`, WASM_TRAP_STATUS, { cause: error });
+    }
+    throw error;
   }
 
   private readResultString(handle: number, kind: "error" | "diagnostics"): string {

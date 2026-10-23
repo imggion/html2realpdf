@@ -10,7 +10,7 @@ import { PdfDocument } from "./pdf-document.js";
 import { snapshotSource, type SnapshotOptions, type SnapshotPageMarginBox, type SnapshotPageRule } from "./snapshot.js";
 import type { CssProfile, FontRegistration, HtmlSource, PageBreakRules, PdfMetadata, RendererInit, RenderOptions } from "./types.js";
 import { preparePdfExtras, type PdfExtras } from "./attachments.js";
-import { WasmBridge, type WasmRenderResult } from "./wasm.js";
+import { WASM_TRAP_STATUS, WasmBridge, type WasmRenderResult } from "./wasm.js";
 
 /** Common ownership boundary for main-thread and Worker WASM contexts. */
 interface Backend {
@@ -46,6 +46,7 @@ class WorkerBackend implements Backend {
   private readonly ready: Promise<void>;
   private nextId = 1;
   private disposed = false;
+  private failure: unknown;
 
   constructor(wasmUrl: string, fonts: readonly FontRegistration[]) {
     this.worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module", name: "html2realpdf" });
@@ -70,20 +71,17 @@ class WorkerBackend implements Backend {
     });
     this.worker.addEventListener("message", (event) => this.handleMessage(event));
     this.worker.addEventListener("error", (event) => {
-      const error = new WasmRenderError(event.message || "PDF Worker failed", -22);
-      for (const pending of this.pending.values()) {
-        pending.removeAbort?.();
-        pending.reject(error);
-      }
-      this.pending.clear();
+      this.stop(new WasmRenderError(event.message || "PDF Worker failed", WASM_TRAP_STATUS));
     });
     this.worker.postMessage({ type: "init", wasmUrl, fonts });
   }
 
   async render(html: string, page: NormalizedPage, metadata?: PdfMetadata, cssProfile?: CssProfile, marginBoxes?: readonly SnapshotPageMarginBox[], pageRules?: readonly SnapshotPageRule[], signal?: AbortSignal, extras?: PdfExtras): Promise<WasmRenderResult> {
-    if (this.disposed) throw new Error("Renderer has been disposed");
+    if (this.disposed) throw this.failure;
     if (signal?.aborted) throw abortReason(signal);
     await this.ready;
+    if (this.disposed) throw this.failure;
+    if (signal?.aborted) throw abortReason(signal);
 
     const id = this.nextId++;
     return new Promise<WasmRenderResult>((resolve, reject) => {
@@ -109,12 +107,17 @@ class WorkerBackend implements Backend {
   }
 
   dispose(): void {
+    this.stop(new Error("Renderer was disposed"));
+  }
+
+  private stop(error: unknown): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.failure = error;
     this.worker.terminate();
     for (const pending of this.pending.values()) {
       pending.removeAbort?.();
-      pending.reject(new Error("Renderer was disposed"));
+      pending.reject(error);
     }
     this.pending.clear();
   }
@@ -122,6 +125,11 @@ class WorkerBackend implements Backend {
   private handleMessage(event: MessageEvent): void {
     const message = event.data;
     if (message?.type !== "render-result" && message?.type !== "render-error") return;
+    // Even an aborted request can report a trap that invalidates other work.
+    if (message.type === "render-error" && message.status === WASM_TRAP_STATUS) {
+      this.stop(new WasmRenderError(message.error, WASM_TRAP_STATUS));
+      return;
+    }
     const pending = this.pending.get(message.id);
     if (!pending) return;
     this.pending.delete(message.id);
@@ -145,7 +153,8 @@ class WorkerBackend implements Backend {
  * @remarks
  * Create instances with `createRenderer`. Fonts and execution mode belong to
  * the renderer lifetime; each returned `PdfDocument` has its own shorter
- * lifetime. Call `dispose` when the renderer is no longer needed.
+ * lifetime. Call `dispose` when the renderer is no longer needed. Input-limit
+ * errors leave it reusable; an unexpected WASM trap disposes it permanently.
  */
 export class Html2RealPdf {
   private disposed = false;
@@ -163,6 +172,7 @@ export class Html2RealPdf {
    * @throws {@link InvalidSourceError} when a ref is null or the source shape is invalid.
    * @throws {@link UnsupportedCssError} when strict CSS or fallback policy rejects input.
    * @throws {@link ResourceLoadError} when required resources cannot be materialized.
+   * @throws {@link WasmRenderError} when native limits reject input or WASM fails.
    */
   async render(source: HtmlSource, options: RenderOptions = {}): Promise<PdfDocument> {
     if (this.disposed) throw new Error("Renderer has been disposed");
@@ -196,16 +206,22 @@ export class Html2RealPdf {
 
     options.onProgress?.({ phase: "wasm", completed: 0, total: 1 });
     const page = options.page !== undefined ? normalizePage(options.page) : snapshot.page ?? normalizePage();
-    const rendered = await this.backend.render(
-      applyPageBreakRules(snapshot.html, options.pageBreak),
-      page,
-      options.metadata,
-      options.cssProfile ?? "document",
-      snapshot.pageMarginBoxes,
-      options.page === undefined ? snapshot.pageRules : undefined,
-      options.signal,
-      extras,
-    );
+    let rendered: WasmRenderResult;
+    try {
+      rendered = await this.backend.render(
+        applyPageBreakRules(snapshot.html, options.pageBreak),
+        page,
+        options.metadata,
+        options.cssProfile ?? "document",
+        snapshot.pageMarginBoxes,
+        options.page === undefined ? snapshot.pageRules : undefined,
+        options.signal,
+        extras,
+      );
+    } catch (error) {
+      if (error instanceof WasmRenderError && error.status === WASM_TRAP_STATUS) this.dispose();
+      throw error;
+    }
     options.onProgress?.({ phase: "wasm", completed: 1, total: 1 });
     options.onProgress?.({ phase: "complete", completed: 1, total: 1 });
     return PdfDocument.create(rendered.bytes, rendered.pageCount, [...snapshot.diagnostics, ...rendered.diagnostics]);
@@ -257,7 +273,9 @@ let defaultRenderer: Promise<Html2RealPdf> | undefined;
  * The default renderer is cached for the application lifetime and cannot be
  * configured with custom fonts. Use `createRenderer` when deterministic
  * backend disposal or renderer-level configuration is required. The returned
- * document must still be disposed by the caller.
+ * document must still be disposed by the caller. After an unexpected WASM trap,
+ * the failed render is rejected and the next call creates a fresh renderer;
+ * the failed document is never retried automatically.
  *
  * @example
  * ```ts
@@ -270,7 +288,15 @@ export async function renderPdf(source: HtmlSource, options: RenderOptions = {})
     defaultRenderer = undefined;
     throw error;
   });
-  return (await defaultRenderer).render(source, options);
+  const current = defaultRenderer;
+  try {
+    return await (await current).render(source, options);
+  } catch (error) {
+    if (error instanceof WasmRenderError && error.status === WASM_TRAP_STATUS && defaultRenderer === current) {
+      defaultRenderer = undefined;
+    }
+    throw error;
+  }
 }
 
 function applyPageBreakRules(html: string, rules?: PageBreakRules): string {

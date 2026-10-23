@@ -60,8 +60,28 @@ browser package build copies that file to `dist/LICENSE.md`.
   before freeing the handle.
 - `PdfDocument.dispose()` revokes all object URLs; renderer disposal terminates
   the Worker or releases the main-thread WASM context.
+- Input limits belong to the earliest shared native boundary: `dom.zig` caps
+  element depth at 64; `css/variables.zig` shares a cascade-wide budget of
+  8 MiB expanded bytes and 65,536 substitutions with a 64 KiB value limit;
+  `image.zig` caps PNGs at 16,777,216 pixels and inflates alpha scanlines into
+  fixed-size storage. Rejections propagate as ordinary render errors.
+- `wasm.ts` discards a trapped instance without calling back into WASM, even
+  for cleanup. `worker.ts` propagates fatal status; `renderer.ts` terminates
+  the Worker, rejects pending work, and clears a failed default renderer so
+  the next call can create a new one. Explicit renderers must be recreated.
+- `snapshot.ts` treats resolver `null` as a denial for images, backgrounds,
+  and stylesheets, applying error/omit policy without fetching the original URL.
+  Embedded SVG images and backgrounds bypass the resolver while retaining the
+  shared SVG validation and explicit raster-fallback policy.
 
 ## Tests
+
+- `bindings/js/test/security.test.mjs` checks native-limit rejection, bounded
+  WASM memory growth, reuse after rejection, and trap handling including
+  cleanup. `tests/web/e2e/security.spec.mjs` checks resolver denial without
+  network fallback, embedded SVG validation without resolver calls, depth-error
+  recovery, and fatal Worker/default-cache recovery in Chromium, Firefox, and
+  WebKit using local fixtures.
 
 - `make test-pdfa` runs linked native fixtures, pinned veraPDF 1.30.2,
   extraction/attachment/pixel checks and isolated 30-page timing/memory cases.
