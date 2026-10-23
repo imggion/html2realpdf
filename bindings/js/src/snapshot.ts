@@ -2932,7 +2932,10 @@ async function materializeBackgroundImages(
       if (!source || /^data:image\/(?:jpeg|jpg|png);/i.test(source)) continue;
       try {
         const url = new URL(source, options.baseUrl ?? element.ownerDocument.baseURI);
-        const resolved = await options.resourceResolver?.({ kind: "image", url });
+        // Embedded SVG follows the image path: bypass resolution, retain validation below.
+        const resolved = /^data:image\/svg\+xml;/i.test(source)
+          ? source
+          : await options.resourceResolver?.({ kind: "image", url });
         if (resolved === null) throw new Error("Image resource was declined by resourceResolver");
         let dataUrl: string;
         if (typeof resolved === "string" && /^data:image\/(?:jpeg|jpg|png);/i.test(resolved)) {

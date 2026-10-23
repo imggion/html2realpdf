@@ -11,7 +11,7 @@ test.beforeEach(async ({ page }) => {
 
 test("resolver null denies image and background fetches under both resource policies", async ({ page }) => {
   const requests = [];
-  const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X1y8WQAAAABJRU5ErkJggg==", "base64");
+  const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64");
   await page.route("**/security-resource/*", (route) => {
     requests.push(new URL(route.request().url()).pathname);
     return route.fulfill({ contentType: "image/png", body: pixel });
@@ -56,6 +56,42 @@ test("resolver null denies image and background fetches under both resource poli
     }
   }
   expect(requests.sort()).toEqual(["/security-resource/background-allowed.png", "/security-resource/image-allowed.png"]);
+});
+
+test("embedded SVG images and backgrounds bypass the resolver but retain SVG validation", async ({ page }) => {
+  const results = await page.evaluate(async () => {
+    const manifest = await fetch("/bindings/js/.browser-build/manifest.json").then((response) => response.json());
+    const { createRenderer } = await import(`/bindings/js/.browser-build/${manifest.entry}`);
+    const renderer = await createRenderer({ execution: "main" });
+    const results = [];
+    try {
+      for (const kind of ["image", "background"]) {
+        let calls = 0;
+        const options = { cssProfile: "web", resourceResolver: () => { calls++; return null; } };
+        const source = (content) => {
+          const url = `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">${content}</svg>`)}`;
+          return kind === "image" ? `<img src="${url}" width="40" height="20">`
+            : `<div style="width:40px;height:20px;background-image:url('${url}')"></div>`;
+        };
+        const pdf = await renderer.render(source('<rect width="40" height="20" fill="#f59e0b"/>'), options);
+        const output = new TextDecoder().decode(pdf.toUint8Array());
+        const diagnostics = pdf.diagnostics;
+        pdf.dispose();
+        let unsupportedCode = "";
+        try { await renderer.render(source('<foreignObject width="40" height="20">unsupported</foreignObject>'), options); }
+        catch (error) { unsupportedCode = error.code; }
+        results.push({ kind, calls, diagnostics, hasForm: output.includes("/Subtype /Form"), hasImage: output.includes("/Subtype /Image"), unsupportedCode });
+      }
+    } finally { renderer.dispose(); }
+    return results;
+  });
+  for (const result of results) {
+    expect(result.calls).toBe(0);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.hasForm).toBe(true);
+    expect(result.hasImage).toBe(false);
+    expect(result.unsupportedCode).toBe("UNSUPPORTED_CSS");
+  }
 });
 
 test("deep input is rejected without poisoning main-thread or Worker renderers", async ({ page }) => {

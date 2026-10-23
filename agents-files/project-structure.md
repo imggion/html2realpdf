@@ -71,14 +71,17 @@ browser package build copies that file to `dist/LICENSE.md`.
   the next call can create a new one. Explicit renderers must be recreated.
 - `snapshot.ts` treats resolver `null` as a denial for images, backgrounds,
   and stylesheets, applying error/omit policy without fetching the original URL.
+  Embedded SVG images and backgrounds bypass the resolver while retaining the
+  shared SVG validation and explicit raster-fallback policy.
 
 ## Tests
 
 - `bindings/js/test/security.test.mjs` checks native-limit rejection, bounded
   WASM memory growth, reuse after rejection, and trap handling including
   cleanup. `tests/web/e2e/security.spec.mjs` checks resolver denial without
-  network fallback, depth-error recovery, and fatal Worker/default-cache
-  recovery in Chromium, Firefox, and WebKit using local fixtures.
+  network fallback, embedded SVG validation without resolver calls, depth-error
+  recovery, and fatal Worker/default-cache recovery in Chromium, Firefox, and
+  WebKit using local fixtures.
 
 - `make test-pdfa` runs linked native fixtures, pinned veraPDF 1.30.2,
   extraction/attachment/pixel checks and isolated 30-page timing/memory cases.
