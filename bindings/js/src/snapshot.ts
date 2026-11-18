@@ -1937,6 +1937,9 @@ function materializeComputedStyle(
   if (!isSvgElement(original)) {
     const unsupportedComputed = [
       ["filter", computed.getPropertyValue("filter"), "none", false],
+      // PDF output paints source-over; a dropped blend mode must be reported
+      // rather than silently painting a multiply/overlay layer opaquely.
+      ["mix-blend-mode", computed.getPropertyValue("mix-blend-mode"), "normal", false],
       ["background-image", computed.getPropertyValue("background-image"), "none", true],
       ["box-shadow", computed.getPropertyValue("box-shadow"), "none", true],
       ["text-shadow", computed.getPropertyValue("text-shadow"), "none", true],
@@ -1959,9 +1962,19 @@ function materializeComputedStyle(
     properties = [...SUPPORTED_COMPUTED_PROPERTIES, ...SVG_COMPUTED_PROPERTIES];
   }
 
+  // Pseudo-elements share their host's geometry, so only real elements can
+  // freeze the parent tracks a subgrid spans.
+  const isPseudo = target.hasAttribute("data-html2realpdf-pseudo");
+  const subgridOverrides = isPseudo ? new Map<string, string>() : resolveSubgridOverrides(original, computed, view, options, diagnostics);
+
   for (const property of properties) {
     let value = computed.getPropertyValue(property);
     let authoredFlowDimension = "";
+
+    if (subgridOverrides.has(property)) {
+      declarations.push(`${property}:${subgridOverrides.get(property)!}`);
+      continue;
+    }
 
     if (property === "display") {
       value = display;
@@ -2004,6 +2017,100 @@ function materializeComputedStyle(
     if (value) declarations.push(`${property}:${value}`);
   }
   target.setAttribute("style", declarations.join(";"));
+}
+
+/**
+ * The native Grid formatter has no subgrid. A subgrid uses its parent's
+ * tracks, so the snapshot freezes the parent tracks it spans as explicit
+ * lengths. Columns keep the browser's used sizes; rows keep them as minimums
+ * so native text that measures slightly taller can still grow. A subgrid
+ * whose tracks cannot be identified is reported and falls back to `none`.
+ */
+function resolveSubgridOverrides(
+  original: Element,
+  computed: CSSStyleDeclaration,
+  view: Window,
+  options: SnapshotOptions,
+  diagnostics: Diagnostic[],
+): Map<string, string> {
+  const overrides = new Map<string, string>();
+  for (const axis of ["columns", "rows"] as const) {
+    const property = axis === "columns" ? "grid-template-columns" : "grid-template-rows";
+    if (!/^subgrid\b/i.test(computed.getPropertyValue(property).trim())) continue;
+
+    const resolved = subgridTracks(original, computed, view, axis);
+    if (!resolved) {
+      reportUnsupportedCss(`${property}:subgrid`, options, diagnostics);
+      overrides.set(property, "none");
+      continue;
+    }
+    overrides.set(property, resolved.tracks);
+    if (resolved.gap !== null) overrides.set(axis === "columns" ? "column-gap" : "row-gap", resolved.gap);
+  }
+  return overrides;
+}
+
+function subgridTracks(
+  original: Element,
+  computed: CSSStyleDeclaration,
+  view: Window,
+  axis: "columns" | "rows",
+): { tracks: string; gap: string | null } | null {
+  const parent = original.parentElement;
+  if (!parent) return null;
+  const parentStyle = view.getComputedStyle(parent);
+  if (!/grid$/.test(parentStyle.getPropertyValue("display"))) return null;
+  if (axis === "columns" && parentStyle.getPropertyValue("direction") === "rtl") return null;
+
+  // Grid containers report their used track sizes; line names are skipped.
+  const rawTracks = parentStyle.getPropertyValue(axis === "columns" ? "grid-template-columns" : "grid-template-rows");
+  const sizes: number[] = [];
+  for (const token of rawTracks.replace(/\[[^\]]*\]/g, " ").trim().split(/\s+/).filter(Boolean)) {
+    const match = token.match(/^(\d+(?:\.\d+)?(?:e[+-]?\d+)?)px$/i);
+    if (!match) return null;
+    sizes.push(Number.parseFloat(match[1]!));
+  }
+  if (sizes.length === 0) return null;
+
+  const gapProperty = axis === "columns" ? "column-gap" : "row-gap";
+  const parentGap = Number.parseFloat(parentStyle.getPropertyValue(gapProperty)) || 0;
+  const start = axis === "columns" ? "left" : "top";
+  const end = axis === "columns" ? "right" : "bottom";
+  const parentRect = parent.getBoundingClientRect();
+  const rect = original.getBoundingClientRect();
+  const pixels = (style: CSSStyleDeclaration, property: string) => Number.parseFloat(style.getPropertyValue(property)) || 0;
+  const contentStart = parentRect[start] + pixels(parentStyle, `border-${start}-width`) + pixels(parentStyle, `padding-${start}`);
+  const startEdges = pixels(computed, `margin-${start}`) + pixels(computed, `border-${start}-width`) + pixels(computed, `padding-${start}`);
+  const endEdges = pixels(computed, `margin-${end}`) + pixels(computed, `border-${end}-width`) + pixels(computed, `padding-${end}`);
+  const areaStart = rect[start] - pixels(computed, `margin-${start}`);
+  const areaEnd = rect[end] + pixels(computed, `margin-${end}`);
+
+  // Track lines from the parent's content edge; content-distribution offsets
+  // other than `normal`/`start` make the match fail and fall back.
+  const trackStarts: number[] = [];
+  let cursor = contentStart;
+  for (const size of sizes) {
+    trackStarts.push(cursor);
+    cursor += size + parentGap;
+  }
+  const tolerance = 1;
+  const first = trackStarts.findIndex((line) => Math.abs(line - areaStart) <= tolerance);
+  if (first < 0) return null;
+  let last = -1;
+  for (let index = first; index < sizes.length; index += 1) {
+    if (Math.abs(trackStarts[index]! + sizes[index]! - areaEnd) <= tolerance) last = index;
+  }
+  if (last < 0) return null;
+
+  // The subgrid's own margin, border, and padding shrink its edge tracks.
+  const spanned = sizes.slice(first, last + 1);
+  spanned[0] = Math.max(spanned[0]! - startEdges, 0);
+  spanned[spanned.length - 1] = Math.max(spanned[spanned.length - 1]! - endEdges, 0);
+  const tracks = spanned
+    .map((size) => (axis === "columns" ? `${size}px` : `minmax(${size}px, auto)`))
+    .join(" ");
+  const ownGap = computed.getPropertyValue(gapProperty).trim();
+  return { tracks, gap: ownGap === "normal" ? `${parentGap}px` : null };
 }
 
 type InsetProperty = "top" | "right" | "bottom" | "left";
@@ -2439,6 +2546,7 @@ async function materializeInlineSvgs(
     if (!svg.isConnected && !svg.parentNode && svg !== root) continue;
     try {
       if (!svg.hasAttribute("xmlns")) svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      if (options.fallback !== "rasterize-subtree") omitOuterSvgBoxEffects(svg, options, diagnostics);
       const unsupportedReason = vectorSvgUnsupportedReason(svg);
       const source = serializeVectorSvg(svg);
       const replacement = svg.ownerDocument.createElement("img");
@@ -2456,7 +2564,7 @@ async function materializeInlineSvgs(
         if (options.fallback === "error") {
           throw new UnsupportedCssError(`Inline SVG requires subtree rasterization: ${unsupportedReason}`);
         }
-        replacement.src = await rasterizeBlobToPng(new Blob([source], { type: "image/svg+xml" }));
+        replacement.src = await rasterizeBlobToPng(new Blob([source], { type: "image/svg+xml" }), SVG_RASTER_SCALE);
         diagnostics.push({
           code: "CSS_SUBTREE_RASTERIZED",
           severity: "warning",
@@ -2481,6 +2589,23 @@ async function materializeInlineSvgs(
     }
   }
   return replacements;
+}
+
+/**
+ * CSS `filter` and `mix-blend-mode` on the outer `<svg>` box are box effects,
+ * like on any HTML element. Without an explicit rasterization opt-in they are
+ * reported through the unsupported-CSS policy and omitted, so a decorative
+ * drop-shadow keeps the SVG vector instead of failing the whole document.
+ */
+function omitOuterSvgBoxEffects(svg: SVGSVGElement, options: SnapshotOptions, diagnostics: Diagnostic[]): void {
+  for (const property of ["filter", "mix-blend-mode"] as const) {
+    const value = svg.style.getPropertyValue(property);
+    if (!value || !svgUnsupportedPropertyIsActive(property, value)) continue;
+    reportUnsupportedCss(property, options, diagnostics);
+    // Edit the attribute text: CSSOM removal re-serializes the declaration
+    // block and folds `marker-*` longhands into an unsupported `marker`.
+    svg.setAttribute("style", stripStyleProperties(svg.getAttribute("style") ?? "", [property]));
+  }
 }
 
 function serializeVectorSvg(source: SVGSVGElement): string {
@@ -3075,18 +3200,24 @@ function canvasToPng(source: HTMLCanvasElement): string {
   return canvas.toDataURL("image/png");
 }
 
-async function rasterizeBlobToPng(blob: Blob): Promise<string> {
+/**
+ * Device pixels per CSS pixel for rasterized SVG fallbacks. Layout keeps the
+ * SVG's CSS size, so the extra pixels only sharpen the printed image.
+ */
+const SVG_RASTER_SCALE = 2;
+
+async function rasterizeBlobToPng(blob: Blob, scale = 1): Promise<string> {
   const objectUrl = URL.createObjectURL(blob);
   try {
     const image = new Image();
     image.src = objectUrl;
     await image.decode();
     const canvas = document.createElement("canvas");
-    canvas.width = Math.max(image.naturalWidth, 1);
-    canvas.height = Math.max(image.naturalHeight, 1);
+    canvas.width = Math.max(Math.round(image.naturalWidth * scale), 1);
+    canvas.height = Math.max(Math.round(image.naturalHeight * scale), 1);
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D context is unavailable");
-    context.drawImage(image, 0, 0);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL("image/png");
   } finally {
     URL.revokeObjectURL(objectUrl);

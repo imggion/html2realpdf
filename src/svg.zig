@@ -26,7 +26,9 @@ pub const LineCap = enum { butt, round, square };
 pub const LineJoin = enum { miter, round, bevel };
 pub const TextAnchor = enum { start, middle, end };
 pub const DominantBaseline = enum { alphabetic, middle, central, hanging };
-pub const FontWeight = enum { normal, bold };
+/// Numeric SVG text weight, mirroring `box.FontWeight` without depending on
+/// the Box Tree module.
+pub const FontWeight = enum(u16) { normal = 400, bold = 700, _ };
 pub const FontStyle = enum { normal, italic };
 pub const TextDirection = enum { ltr, rtl };
 
@@ -1044,7 +1046,16 @@ fn applyStyle(style: *Style, attributes: []const u8) !void {
         style.font_size = @max(parseNumber(value) orelse return Error.UnsupportedSvg, 0.001);
     }
     if (styleProperty(declaration, "font-weight") orelse attribute(attributes, "font-weight")) |value| {
-        style.font_weight = if (equals(value, "bold") or (parseNumber(value) orelse 0) >= 600) .bold else .normal;
+        if (equals(value, "bold") or equals(value, "bolder")) {
+            style.font_weight = .bold;
+        } else if (equals(value, "normal") or equals(value, "lighter")) {
+            style.font_weight = .normal;
+        } else {
+            // Unknown values keep the historical `normal` fallback.
+            const numeric = parseNumber(value) orelse 400;
+            const clamped = if (std.math.isFinite(numeric)) std.math.clamp(@round(numeric), 1, 1000) else 400;
+            style.font_weight = @enumFromInt(@as(u16, @intFromFloat(clamped)));
+        }
     }
     if (styleProperty(declaration, "font-style") orelse attribute(attributes, "font-style")) |value| {
         style.font_style = if (equals(value, "italic") or equals(value, "oblique")) .italic else .normal;

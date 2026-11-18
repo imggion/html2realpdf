@@ -14,7 +14,7 @@ pub const PageSelector = page_geometry.PageSelector;
 pub const PageRule = page_geometry.PageRule;
 pub const resolvePageSpec = page_geometry.resolvePageSpec;
 
-const epsilon: f32 = 0.0001;
+const epsilon = page_geometry.fragmentation_tolerance;
 
 const PageSequence = struct {
     document: *const layout.LayoutDocument,
@@ -105,7 +105,7 @@ pub fn paginateWithRules(
             var content_height = sequence.extent(page_index);
             var page_y = fragment.rect.y - page_start;
 
-            if (page_y > 0 and page_y + fragment.rect.height > content_height and fragment.rect.height <= sequence.extent(page_index + 1)) {
+            if (page_y > 0 and page_y + fragment.rect.height > content_height + epsilon and fragment.rect.height <= sequence.extent(page_index + 1)) {
                 page_index += 1;
                 page_start = sequence.start(page_index);
                 content_height = sequence.extent(page_index);
@@ -309,7 +309,7 @@ fn appendSplitBox(
     const first_page_start = sequence.start(first_page_index);
     const first_page_height = sequence.extent(first_page_index);
     const first_page_y = absolute_y - first_page_start;
-    const is_split = fragment.rect.height > first_page_height - first_page_y;
+    const is_split = fragment.rect.height > first_page_height - first_page_y + epsilon;
     var is_first = true;
 
     while (remaining > 0) {
@@ -317,7 +317,10 @@ fn appendSplitBox(
         const page_start = sequence.start(page_index);
         const content_height = sequence.extent(page_index);
         const page_y = absolute_y - page_start;
-        const segment_height = @min(remaining, content_height - page_y);
+        var segment_height = @min(remaining, content_height - page_y);
+        // A remainder within the fragmentation tolerance stays on this page
+        // instead of opening a page that would only hold a rounding sliver.
+        if (remaining - segment_height <= epsilon) segment_height = remaining;
 
         var segment = fragment;
         segment.rect.y = page_y;
@@ -536,6 +539,36 @@ test "trailing colored box continuation keeps its page" {
     defer paged.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 2), paged.page_count);
+}
+
+test "page-sized boxes rounded by browser serialization stay on one page each" {
+    const allocator = std.testing.allocator;
+    const spec = PageSpec.standard(.a4, .portrait, .{});
+    // Chromium serializes 297mm (1122.5197px) as `1122.52px`.
+    const serialized_height: f32 = 1122.52;
+    try std.testing.expect(serialized_height > spec.contentHeightCssPx());
+
+    var fragments = try std.ArrayList(layout.Fragment).initCapacity(allocator, 3);
+    defer fragments.deinit(allocator);
+    for (0..3) |index| try fragments.append(allocator, .{
+        .kind = .box,
+        .source_box = index,
+        .rect = .{ .y = serialized_height * @as(f32, @floatFromInt(index)), .width = 793, .height = serialized_height },
+        .background = .{ .red = 0.9, .green = 0.95, .blue = 1 },
+    });
+    const continuous = layout.LayoutDocument{
+        .fragments = fragments,
+        .content_width = 793,
+        .content_height = serialized_height * 3,
+    };
+    var paged = try paginate(allocator, &continuous, spec);
+    defer paged.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), paged.page_count);
+    try std.testing.expectEqual(@as(usize, 3), paged.fragments.items.len);
+    for (paged.fragments.items, 0..) |paged_fragment, index| {
+        try std.testing.expectEqual(index, paged_fragment.page_index);
+    }
 }
 
 test "translate clipping rectangles into the destination page" {

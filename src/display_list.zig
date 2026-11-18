@@ -1,7 +1,9 @@
 //! Backend-neutral painting commands produced from paged layout fragments.
 
 const std = @import("std");
+const box = @import("box.zig");
 const geometry = @import("geometry.zig");
+const layout = @import("layout.zig");
 const pagination = @import("pagination.zig");
 pub const paint = struct {
     pub const types = @import("paint/types.zig");
@@ -66,15 +68,19 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
             try paint.effects.appendTextDecoration(allocator, &commands, paged.page_index, fragment);
         } else if (fragment.kind == .replaced) {
             if (fragment.image_source) |source| {
+                const content_rect = fragment.image_content_rect orelse fragment.rect;
+                const content_radii = replacedContentRadii(fragment, content_rect);
                 try commands.append(allocator, .{
                     .page_index = paged.page_index,
                     .command = .{ .image = .{
-                        .rect = fragment.image_content_rect orelse fragment.rect,
+                        .rect = content_rect,
                         .source = source,
                         .intrinsic_width = fragment.intrinsic_width,
                         .intrinsic_height = fragment.intrinsic_height,
                         .object_fit = fragment.object_fit,
                         .object_position = fragment.object_position,
+                        .paint_clip = if (content_radii.hasRadius()) content_rect else null,
+                        .paint_clip_radii = content_radii,
                     } },
                 });
             } else if (edgeIsZero(fragment.border)) {
@@ -109,6 +115,25 @@ pub fn build(allocator: std.mem.Allocator, document: *const pagination.PagedDocu
         .page_spec = document.page_spec,
         .page_specs = document.page_specs.items,
     };
+}
+
+/// A replaced element's content is clipped to its content-edge curve: the
+/// border radii reduced by border and padding widths (CSS Backgrounds 3
+/// §5.3). Returns no radius when the element is not rounded so square images
+/// keep their plain rectangular clip.
+fn replacedContentRadii(fragment: layout.Fragment, content_rect: geometry.Rect) box.ResolvedBorderRadii {
+    var radii = fragment.border_radii.resolve(fragment.rect.width, fragment.rect.height);
+    if (!radii.hasRadius() and fragment.border_radius > 0) {
+        radii = box.ResolvedBorderRadii.uniform(fragment.border_radius).normalized(fragment.rect.width, fragment.rect.height);
+    }
+    if (!radii.hasRadius()) return .{};
+    const insets = box.EdgeSizes{
+        .top = @max(content_rect.y - fragment.rect.y, 0),
+        .right = @max((fragment.rect.x + fragment.rect.width) - (content_rect.x + content_rect.width), 0),
+        .bottom = @max(fragment.rect.bottom() - content_rect.bottom(), 0),
+        .left = @max(content_rect.x - fragment.rect.x, 0),
+    };
+    return radii.inset(insets).normalized(content_rect.width, content_rect.height);
 }
 
 fn edgeIsZero(edge: @import("box.zig").EdgeSizes) bool {
@@ -205,7 +230,6 @@ test "accept only safe absolute PDF links" {
 }
 
 test "build text and border commands" {
-    const layout = @import("layout.zig");
     const allocator = std.testing.allocator;
     var fragments = try std.ArrayList(pagination.PagedFragment).initCapacity(allocator, 1);
     defer fragments.deinit(allocator);
@@ -267,7 +291,6 @@ test "build rounded fill and uniform rounded border commands" {
 }
 
 test "build per-corner elliptical paint and rounded clip commands" {
-    const box = @import("box.zig");
     const allocator = std.testing.allocator;
     var fragments = try std.ArrayList(pagination.PagedFragment).initCapacity(allocator, 1);
     defer fragments.deinit(allocator);
@@ -302,6 +325,57 @@ test "build per-corner elliptical paint and rounded clip commands" {
     try std.testing.expectApproxEqAbs(@as(f32, 30), page_command.command.fill_rounded_rect.radii.top_right.x, 0.001);
     try std.testing.expect(page_command.clip_radii != null);
     try std.testing.expectEqual(box.ResolvedCornerRadius{ .x = 15, .y = 8 }, page_command.clip_radii.?.top_left);
+}
+
+test "rounded replaced images clip to their content-edge curve" {
+    const allocator = std.testing.allocator;
+    var fragments = try std.ArrayList(pagination.PagedFragment).initCapacity(allocator, 2);
+    defer fragments.deinit(allocator);
+    const corner = box.CornerRadius{ .x = .{ .px = 33554428 }, .y = .{ .px = 33554428 } };
+    try fragments.append(allocator, .{
+        .page_index = 0,
+        .fragment = .{
+            .kind = .replaced,
+            .source_box = 0,
+            .rect = .{ .x = 10, .y = 10, .width = 64, .height = 48 },
+            .border = .{ .top = 2, .right = 2, .bottom = 2, .left = 2 },
+            // Tailwind v4 `rounded-full` clamps to the parser limit.
+            .border_radii = .{ .top_left = corner, .top_right = corner, .bottom_right = corner, .bottom_left = corner },
+            .image_source = "data:image/png;base64,AA==",
+            .image_content_rect = .{ .x = 12, .y = 12, .width = 60, .height = 44 },
+        },
+    });
+    try fragments.append(allocator, .{ .page_index = 0, .fragment = .{
+        .kind = .replaced,
+        .source_box = 1,
+        .rect = .{ .x = 100, .y = 10, .width = 40, .height = 40 },
+        .image_source = "data:image/png;base64,AA==",
+    } });
+    const paged = pagination.PagedDocument{
+        .fragments = fragments,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var list = try build(allocator, &paged);
+    defer list.deinit(allocator);
+
+    var images: [2]paint.types.Image = undefined;
+    var count: usize = 0;
+    for (list.commands.items) |command| {
+        if (command.command != .image) continue;
+        images[count] = command.command.image;
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+
+    // The border-box pill (radius 24) shrinks by the 2px border to radius 22.
+    const rounded = images[0];
+    try std.testing.expectEqual(geometry.Rect{ .x = 12, .y = 12, .width = 60, .height = 44 }, rounded.paint_clip.?);
+    try std.testing.expectApproxEqAbs(@as(f32, 22), rounded.paint_clip_radii.top_left.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 22), rounded.paint_clip_radii.bottom_right.y, 0.001);
+
+    // Square images keep the plain rectangular clip.
+    try std.testing.expect(images[1].paint_clip == null);
 }
 
 test "build asymmetric partial rounded border commands" {

@@ -261,9 +261,17 @@ export interface RendererInit {
 export interface FontRegistration {
   /** CSS family name used during font resolution. */
   family: string;
-  /** Complete TrueType font bytes, copied into the native context. */
+  /**
+   * Complete TrueType (`glyf` outline) font bytes, copied into the native
+   * context. WOFF/WOFF2 files are rejected with a descriptive error.
+   */
   data: ArrayBuffer | Uint8Array;
-  /** CSS font weight. Defaults to `400`. */
+  /**
+   * CSS font weight from 1 to 1000. Defaults to `400`. Faces of one family are
+   * selected with the CSS font-matching algorithm, so Medium (500) and
+   * SemiBold (600) coexist with Regular and Bold; registering the same family,
+   * weight, and style again replaces the earlier face.
+   */
   weight?: number | "normal" | "bold";
   /** CSS font style. Defaults to `normal`. */
   style?: "normal" | "italic";

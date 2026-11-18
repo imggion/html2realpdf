@@ -30,6 +30,9 @@ pub fn Cursor(comptime State: type) type {
         fragmentation_enabled: bool,
         has_content: bool = false,
         pending_space: bool = false,
+        /// Width of the collapsed space in the style of the text that left it
+        /// pending. Atomic inlines have no space of their own to measure.
+        pending_space_width: f32 = 0,
         capitalize_next: bool = true,
         ellipsis_enabled: bool = false,
         truncated: bool = false,
@@ -188,6 +191,7 @@ pub fn Cursor(comptime State: type) type {
                 saw_space = false;
             }
             self.pending_space = saw_space;
+            if (saw_space) self.pending_space_width = self.spaceWidth(style);
         }
 
         fn layoutUnicodeCollapsedText(
@@ -219,6 +223,7 @@ pub fn Cursor(comptime State: type) type {
                 index = end;
             }
             self.pending_space = saw_space;
+            if (saw_space) self.pending_space_width = self.spaceWidth(style);
             if (normalized.items.len == 0) {
                 normalized.deinit(self.state.allocator);
                 return;
@@ -657,6 +662,17 @@ pub fn Cursor(comptime State: type) type {
                 style.word_spacing * @as(f32, @floatFromInt(countWordSeparators(text)));
         }
 
+        /// A collapsed space left by preceding text separates it from an atomic
+        /// inline, as in browsers. The space is dropped when the atomic inline
+        /// wraps, because spaces at a line edge collapse away.
+        fn consumePendingSpaceBeforeAtomic(self: *Self, outer_width: f32) void {
+            if (!self.pending_space) return;
+            self.pending_space = false;
+            if (!self.has_content) return;
+            if (self.x + self.pending_space_width + outer_width > self.start_x + self.width) return;
+            self.x += self.pending_space_width;
+        }
+
         fn spaceWidth(self: *Self, style: box.Style) f32 {
             return self.measureStyledText(" ", style);
         }
@@ -699,6 +715,7 @@ pub fn Cursor(comptime State: type) type {
             const outer_height = if (modern) source.margin.top + border_height + source.margin.bottom else border_height;
 
             self.ensureLineFits(outer_height);
+            self.consumePendingSpaceBeforeAtomic(outer_width);
             if (self.has_content and self.x + outer_width > self.start_x + self.width) self.newLine();
             self.line_height = @max(self.line_height, outer_height);
             const border_x = self.x + if (modern) source.margin.left else 0;
@@ -767,6 +784,7 @@ pub fn Cursor(comptime State: type) type {
                 if (maximum) |value| requested_content = @min(requested_content, value);
             }
             const expected_outer_width = requested_content + horizontal_edges;
+            self.consumePendingSpaceBeforeAtomic(expected_outer_width);
             if (self.has_content and self.x + expected_outer_width > self.start_x + self.width) self.newLine();
 
             const fragment_start = self.state.fragments.items.len;

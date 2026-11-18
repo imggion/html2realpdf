@@ -29,19 +29,19 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `display` | Y | Y | Y | Y | - | Y | Y | block, inline, inline-block, list-item, flex, inline-flex, grid, inline-grid, and table roles |
 | width/height/min/max | Y | Y | Y | Y | - | Y | Y | typed lengths, `calc()`/`min()`/`max()`/`clamp()`, `min-content`/`max-content`/`fit-content()`, viewport/font units; web/strict resolve block-axis percentages only through definite containing sizes |
 | `aspect-ratio` | Y | Y | Y | Y | - | Y | Y | preferred ratio with intrinsic fallback for replaced elements; web/strict transfer the preferred ratio into auto block size for normal boxes |
-| `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping |
-| inline/data URL SVG | Y | Y | Y | Y | Y | Y | Y | `path`, rect, circle/ellipse, line, polyline/polygon, nested groups, affine transforms, arcs, rounded rects, solid fill/stroke, dash/cap/join, selectable `text`/`tspan`, bounded linear/radial gradient fills, local `clipPath`, viewBox and preserveAspectRatio become clipped PDF Form XObjects; masks, filters, gradient stroke/text, inherited gradients and unsupported elements use a diagnostic scoped fallback |
+| `object-fit` / `object-position` | Y | Y | Y | Y | Y | Y | Y | fill, contain, cover, none, scale-down; common one/two-value positions and native PDF clipping to the content box, rounded by the element's own `border-radius` |
+| inline/data URL SVG | Y | Y | Y | Y | Y | Y | Y | `path`, rect, circle/ellipse, line, polyline/polygon, nested groups, affine transforms, arcs, rounded rects, solid fill/stroke, dash/cap/join, selectable `text`/`tspan`, bounded linear/radial gradient fills, local `clipPath`, viewBox and preserveAspectRatio become clipped PDF Form XObjects; masks, filters, gradient stroke/text, inherited gradients and unsupported elements use a diagnostic scoped fallback rasterized at 2× CSS resolution; CSS `filter`/`mix-blend-mode` on the outer `<svg>` box follow the unsupported-CSS policy like HTML elements unless `fallback: "rasterize-subtree"` is set |
 | margin/padding | Y | Y | Y | Y | Y | Y | Y | four physical sides; web/strict collapse sibling, parent/child, empty-block, and mixed positive/negative margin groups across eligible block formatting contexts; flex items consume main/cross `auto` margins |
 | logical sizing/margin/padding/border | Y | Y | Y | Y | Y | Y | Y | `*-block`/`*-inline` longhands and axis shorthands map with final `direction`, share cascade priority with physical peers, and preserve logical `inherit`; horizontal-tb writing mode |
 | borders | Y | Y | Y | Y | Y | Y | Y | physical sides; solid, dashed, dotted |
-| `border-radius` | Y | Y | Y | Y | Y | Y | Y | four independent length-percentage corners, elliptical slash syntax, overlap normalization, native PDF curves, and rounded overflow clipping |
+| `border-radius` | Y | Y | Y | Y | Y | Y | Y | four independent length-percentage corners, elliptical slash syntax, overlap normalization, native PDF curves, and rounded overflow clipping; exponent-serialized lengths such as `calc(infinity * 1px)` (Tailwind v4 `rounded-full`) clamp to 33,554,428px |
 | `box-decoration-break` | Y | Y | Y | Y | Y | Y | Y | web/strict support `slice` and `clone` across page fragments; document preserves its legacy repeated-border behavior |
-| color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `currentColor`, and native PDF alpha via ExtGState |
+| color/background color | Y | Y | Y | Y | Y | Y | Y | common named/hex/rgb(a) colors, `oklab()`/`oklch()`, `color(srgb \| srgb-linear \| display-p3)`, `currentColor`, and native PDF alpha via ExtGState; wide-gamut values clip to sRGB |
 | multiple `background-image` layers | Y | Y | Y | Y | Y | Y | Y | URL images plus linear, radial, and conic gradients; CSS list matching preserves front-to-back layer order |
 | `background-size` / `background-position` / `background-repeat` | Y | Y | Y | Y | Y | Y | Y | per-layer auto/length/percentage/cover/contain sizing, keyword or length-percentage placement, repeat/no-repeat/repeat-x/repeat-y tiling, and rounded border-box clipping |
 | `box-shadow` / `text-shadow` | Y | Y | Y | Y | Y | Y | Y | multiple outer/inset box shadows use native vector falloff paths; text shadows remain font-backed PDF artifacts and do not replace selectable source text |
-| font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | four Noto Sans Latin faces plus built-in Arabic/Hebrew fallbacks and registered TTF faces |
-| line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | web/strict use HarfBuzz OpenType shaping, kerning, ligatures, positioned clusters, and per-glyph fallback; document keeps its byte-stable identity shaper |
+| font family/size/weight/style | Y | Y | Y | Y | Y | Y | Y | four Noto Sans Latin faces plus built-in Arabic/Hebrew fallbacks and registered TrueType faces; numeric weights 1–1000 and relative `bolder`/`lighter` select registered faces with CSS Fonts 4 matching; WOFF/WOFF2 are rejected with a descriptive error |
+| line height/letter spacing | Y | Y | Y | Y | Y | Y | Y | web/strict use HarfBuzz OpenType shaping, kerning (positioned glyphs or `TJ` adjustments), ligatures, positioned clusters, and per-glyph fallback; document keeps its byte-stable identity shaper |
 | `word-spacing` | Y | Y | Y | Y | Y | Y | Y | U+0020 spacing is measured in layout and emitted with Type 0 font `TJ` adjustments |
 | `direction` / bidi | Y | Y | Y | Y | Y | Y | Y | web/strict use SheenBidi UAX #9 paragraph levels and L2 visual reordering; `ltr` and `rtl` base directions |
 | `text-indent` | Y | Y | Y | Y | Y | Y | Y | lengths and percentages on the first formatted line |
@@ -58,7 +58,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `border-spacing` | Y | Y | Y | Y | Y | Y | Y | inherited one/two-value non-negative lengths; horizontal and vertical outer/inter-cell spacing applies only to separate-border tables |
 | `caption-side` | Y | Y | Y | Y | Y | Y | Y | inherited `top` and `bottom` placement on table captions |
 | table formatting | Y | Y | Y | Y | Y | Y | Y | intrinsic auto-layout tracks, percentage/column hints, rowspan/colspan, captions and column groups, repeated headers plus page-end footers with reserved body extent, avoid-linked row groups, and top/middle/bottom/baseline cell alignment including row spans |
-| break before/after/inside | Y | Y | Y | Y | - | Y | Y | `always` alias plus `page`, `left`, `right`, `recto`, `verso`, `avoid`, and `avoid-page`; adjacent values arbitrate together, first/last block-child values propagate, forced values override avoid, and block/table/Flex/Grid page opportunities share one fragmentainer model |
+| break before/after/inside | Y | Y | Y | Y | - | Y | Y | `always` alias plus `page`, `left`, `right`, `recto`, `verso`, `avoid`, and `avoid-page`; adjacent values arbitrate together, first/last block-child values propagate, forced values override avoid, and block/table/Flex/Grid page opportunities share one fragmentainer model; content within 0.1 CSS px of a page end stays on that page so `297mm` boxes serialized as `1122.52px` do not spill |
 | `orphans` / `widows` | Y | Y | Y | Y | - | Y | Y | paragraph line constraints |
 | `page` | Y | Y | Y | Y | - | Y | Y | `auto` plus case-sensitive custom identifiers; used values resolve through the nearest named ancestor, first/last eligible children propagate page names, and name changes force class A page breaks in block/table/Flex/Grid flows |
 | default `@page` size/margins | Y | Y | Y | Y | - | Y | Y | browser CSSOM cascade including `!important`; A3/A4/A5, Letter/Legal/Ledger/Tabloid, portrait/landscape, one/two absolute lengths, and physical margin longhands; explicit API page options override CSS |
@@ -73,7 +73,7 @@ coverage. A dash means the stage is not applicable or not implemented.
 | `clear` | Y | Y | Y | Y | - | Y | Y | none, left, right, and both within the current block formatting context |
 | Flexbox container | Y | Y | Y | Y | Y | Y | Y | web/strict `flex` and `inline-flex`; row/column/reverse, wrap/wrap-reverse, gaps, justify/align items/content, baseline and RTL main-start |
 | Flexbox items | Y | Y | Y | Y | Y | Y | Y | basis including percentages/content, grow/shrink with iterative min/max freezing, partial grow factors, order, auto margins, replaced elements, nested flex, intrinsic sizing, and atomic line/item page advancement |
-| Grid container | Y | Y | Y | Y | Y | Y | Y | web/strict `grid` and `inline-grid`; explicit/implicit rows and columns, fixed/percentage/intrinsic/`fr` tracks, integer/auto `repeat()`, `minmax()`, gaps, nested grids, and row-aware pagination |
+| Grid container | Y | Y | Y | Y | Y | Y | Y | web/strict `grid` and `inline-grid`; explicit/implicit rows and columns, fixed/percentage/intrinsic/`fr` tracks, integer/auto `repeat()`, `minmax()`, gaps, nested grids, and row-aware pagination; browser snapshots freeze a `subgrid` to the parent tracks it spans |
 | Grid placement | Y | Y | Y | Y | Y | Y | Y | row/column auto-flow with dense packing, numeric and negative lines, spans, named lines, rectangular named areas, stable `order`, and replaced items |
 | Grid alignment | Y | Y | Y | Y | Y | Y | Y | justify/align items, self, and content plus auto margins; horizontal-tb axes |
 | selectors | Y | Y | - | - | - | - | Y | type, class, ID, universal, compound, descendant, child |
@@ -93,9 +93,11 @@ Playwright E2E make the matrix verifiable.
 
 ## Explicitly unsupported in the current profile
 
-- blend/compositing modes beyond normal source-over remain pending;
+- blend/compositing modes beyond normal source-over remain pending; browser
+  snapshots report `mix-blend-mode` through the unsupported-CSS policy;
 - complex pseudo-element `content` values beyond strings, `attr()`, common quote keywords, and decimal/alphabetic/Roman counters;
-- Grid `subgrid`, masonry, and experimental features; full Appendix E painting
+- native Grid `subgrid` (HTML strings treat it as `none`; browser snapshots
+  freeze the parent tracks), masonry, and experimental features; full Appendix E painting
   nuances beyond the supported positioned stacking phases;
 - filters, 3D transforms, background origin/clip/attachment variants, and blend modes;
 - vertical `writing-mode` values; logical box properties currently map within horizontal-tb;

@@ -323,8 +323,12 @@ Pass only renderer-owned resources and execution settings to `createRenderer`:
 | `fonts` | `FontRegistration[]`; none by default | Register reusable TrueType faces once for every render owned by this renderer. |
 
 Configure each font registration with `family`, binary `data`, optional
-`weight` (`400` by default, or `"normal"`/`"bold"`), and optional `style`
-(`"normal"` by default or `"italic"`).
+`weight` (`400` by default, any CSS weight from `1` to `1000`, or
+`"normal"`/`"bold"`), and optional `style` (`"normal"` by default or
+`"italic"`). Register one face per weight you use, such as Regular `400`,
+Medium `500`, and SemiBold `600`: faces are chosen with CSS font matching, and
+only the same family, weight, and style replaces an earlier face. Pass
+TrueType (`.ttf`) bytes; WOFF and WOFF2 files are rejected.
 
 ### Per-render options
 

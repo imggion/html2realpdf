@@ -232,12 +232,18 @@ pub fn parseWhiteSpace(value: []const u8) ?box.WhiteSpace {
     return null;
 }
 
+/// Parses absolute weights. `bolder`/`lighter` depend on the parent weight and
+/// are resolved by the computed-value pass; without a parent they act like the
+/// relative step from `normal`.
 pub fn parseFontWeight(value: []const u8) ?box.FontWeight {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
-    if (eqlProp(v, "normal") or eqlProp(v, "400")) return .normal;
-    if (eqlProp(v, "bold") or eqlProp(v, "bolder")) return .bold;
-    const numeric = std.fmt.parseInt(u16, v, 10) catch return null;
-    return if (numeric >= 600) .bold else .normal;
+    if (eqlProp(v, "normal")) return .normal;
+    if (eqlProp(v, "bold")) return .bold;
+    if (eqlProp(v, "bolder")) return box.FontWeight.normal.bolder();
+    if (eqlProp(v, "lighter")) return box.FontWeight.normal.lighter();
+    const numeric = std.fmt.parseFloat(f32, v) catch return null;
+    if (!std.math.isFinite(numeric) or numeric < 1 or numeric > 1000) return null;
+    return box.FontWeight.fromNumber(numeric);
 }
 
 pub fn parseFontStyle(value: []const u8) ?box.FontStyle {
@@ -247,20 +253,54 @@ pub fn parseFontStyle(value: []const u8) ?box.FontStyle {
     return null;
 }
 
+pub const max_length_magnitude = expressions.max_length_magnitude;
+pub const clampLength = expressions.clampLength;
+
+pub const NumberPrefix = struct { number: f32, end: usize };
+
+/// Parses a leading CSS `<number>` including fraction and `e` exponent.
+/// Browsers serialize very large or small computed values in scientific
+/// notation, so the exponent must not be mistaken for a unit. An `e` only
+/// starts an exponent when digits follow, which keeps `em` and `ex` units.
+pub fn parseNumberPrefix(value: []const u8) ?NumberPrefix {
+    var end: usize = 0;
+    if (end < value.len and (value[end] == '-' or value[end] == '+')) end += 1;
+
+    var saw_digit = false;
+    while (end < value.len and std.ascii.isDigit(value[end])) : (end += 1) saw_digit = true;
+    if (end < value.len and value[end] == '.') {
+        end += 1;
+        while (end < value.len and std.ascii.isDigit(value[end])) : (end += 1) saw_digit = true;
+    }
+    if (!saw_digit) return null;
+
+    if (end < value.len and (value[end] == 'e' or value[end] == 'E')) {
+        var exponent_end = end + 1;
+        if (exponent_end < value.len and (value[exponent_end] == '-' or value[exponent_end] == '+')) exponent_end += 1;
+        if (exponent_end < value.len and std.ascii.isDigit(value[exponent_end])) {
+            while (exponent_end < value.len and std.ascii.isDigit(value[exponent_end])) exponent_end += 1;
+            end = exponent_end;
+        }
+    }
+
+    const wide = std.fmt.parseFloat(f64, value[0..end]) catch return null;
+    if (std.math.isNan(wide)) return null;
+    const limit: f64 = std.math.floatMax(f32);
+    return .{ .number = @floatCast(std.math.clamp(wide, -limit, limit)), .end = end };
+}
+
 pub fn parseLength(value: []const u8) ?f32 {
+    const length = parseUnclampedLength(value) orelse return null;
+    return clampLength(length);
+}
+
+fn parseUnclampedLength(value: []const u8) ?f32 {
     const v = std.mem.trim(u8, value, " \t\n\r\x0C");
     if (v.len == 0) return null;
 
-    var end: usize = 0;
-    while (end < v.len) : (end += 1) {
-        const c = v[end];
-        if (!((c >= '0' and c <= '9') or c == '.' or c == '-')) break;
-    }
-
-    const num_str = v[0..end];
-    if (num_str.len == 0) return null;
-
-    const num = std.fmt.parseFloat(f32, num_str) catch return null;
+    const prefix = parseNumberPrefix(v) orelse return null;
+    const end = prefix.end;
+    const num = prefix.number;
 
     if (end < v.len and v[end] != ' ') {
         const unit = std.mem.trim(u8, v[end..], " \t\n\r\x0C");
@@ -283,23 +323,18 @@ pub fn parseDimension(value: []const u8, font_size: f32) ?box.Length {
     if (eqlProp(v, "fit-content")) return .{ .fitContent = null };
     if (v.len == 0) return null;
 
-    var end: usize = 0;
-    while (end < v.len) : (end += 1) {
-        const c = v[end];
-        if (!((c >= '0' and c <= '9') or c == '.' or c == '-')) break;
-    }
-    if (end == 0) return null;
-    const number = std.fmt.parseFloat(f32, v[0..end]) catch return null;
-    const unit = std.mem.trim(u8, v[end..], " \t\n\r\x0C");
+    const prefix = parseNumberPrefix(v) orelse return null;
+    const number = prefix.number;
+    const unit = std.mem.trim(u8, v[prefix.end..], " \t\n\r\x0C");
 
-    if (unit.len == 0 or eqlProp(unit, "px")) return .{ .px = number };
-    if (eqlProp(unit, "%")) return .{ .percent = number / 100 };
-    if (eqlProp(unit, "em")) return .{ .px = number * font_size };
-    if (eqlProp(unit, "rem")) return .{ .px = number * 16 };
-    if (eqlProp(unit, "pt")) return .{ .px = number / 0.75 };
-    if (eqlProp(unit, "in")) return .{ .px = number * 96 };
-    if (eqlProp(unit, "cm")) return .{ .px = number * 96 / 2.54 };
-    if (eqlProp(unit, "mm")) return .{ .px = number * 96 / 25.4 };
+    if (unit.len == 0 or eqlProp(unit, "px")) return .{ .px = clampLength(number) };
+    if (eqlProp(unit, "%")) return .{ .percent = std.math.clamp(number, -max_length_magnitude, max_length_magnitude) / 100 };
+    if (eqlProp(unit, "em")) return .{ .px = clampLength(number * font_size) };
+    if (eqlProp(unit, "rem")) return .{ .px = clampLength(number * 16) };
+    if (eqlProp(unit, "pt")) return .{ .px = clampLength(number / 0.75) };
+    if (eqlProp(unit, "in")) return .{ .px = clampLength(number * 96) };
+    if (eqlProp(unit, "cm")) return .{ .px = clampLength(number * 96 / 2.54) };
+    if (eqlProp(unit, "mm")) return .{ .px = clampLength(number * 96 / 25.4) };
     return null;
 }
 
@@ -632,4 +667,18 @@ test "page names preserve custom-ident case and reject reserved or malformed val
     try std.testing.expect(parsePageName("default") == null);
     try std.testing.expect(parsePageName("2chapter") == null);
     try std.testing.expect(parsePageName("chapter two") == null);
+}
+
+test "lengths accept browser exponent serialization and clamp infinite radii" {
+    try std.testing.expectEqual(@as(f32, 33554400), parseLength("3.35544e+07px").?);
+    try std.testing.expectEqual(max_length_magnitude, parseLength("3.40282e+38px").?);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.00001), parseLength("1e-05px").?, 1e-9);
+    try std.testing.expectEqual(@as(f32, 9999), parseLength("9999px").?);
+
+    const infinite = parseDimension("3.40282e+38px", 16).?;
+    try std.testing.expectEqual(max_length_magnitude, infinite.px);
+    try std.testing.expectEqual(@as(f32, 32), parseDimension("2em", 16).?.px);
+    try std.testing.expectEqual(@as(f32, 24), parseDimension("1.5e1em", 1.6).?.px);
+    try std.testing.expect(parseDimension("2e", 16) == null);
+    try std.testing.expect(parseDimension("e5px", 16) == null);
 }

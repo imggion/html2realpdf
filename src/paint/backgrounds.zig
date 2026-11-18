@@ -611,8 +611,7 @@ fn splitWhitespace(raw: []const u8) Parts {
 }
 
 fn startsWithColorFunction(raw: []const u8) bool {
-    const value = trim(raw);
-    return startsWithIgnoreCase(value, "rgb(") or startsWithIgnoreCase(value, "rgba(");
+    return geometry.isColorFunction(raw);
 }
 
 fn tokenOffset(haystack: []const u8, token: []const u8) usize {

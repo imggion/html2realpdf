@@ -260,7 +260,14 @@ pub fn applyDeclaration(context: Context, style: *box.Style, property_name: []co
     } else if (eqlProp(name, "font-family")) {
         style.font_family = value;
     } else if (eqlProp(name, "font-weight")) {
-        if (parseFontWeight(value)) |weight| style.font_weight = weight;
+        const parent_weight = if (context.parent_style) |parent| parent.font_weight else box.FontWeight.normal;
+        if (eqlProp(normalized, "bolder")) {
+            style.font_weight = parent_weight.bolder();
+        } else if (eqlProp(normalized, "lighter")) {
+            style.font_weight = parent_weight.lighter();
+        } else if (parseFontWeight(value)) |weight| {
+            style.font_weight = weight;
+        }
     } else if (eqlProp(name, "font-style")) {
         if (parseFontStyle(value)) |font_style| style.font_style = font_style;
     } else if (eqlProp(name, "color")) {

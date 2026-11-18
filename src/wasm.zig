@@ -138,7 +138,9 @@ export fn pdf_context_register_font(
     const family_bytes: [*]const u8 = @ptrFromInt(family_ptr);
     const font_bytes: [*]const u8 = @ptrFromInt(data_ptr);
     _ = font.Metrics.parse(font_bytes[0..data_len]) catch return -6;
-    const font_weight: box.FontWeight = if (weight >= 600) .bold else .normal;
+    // Faces keep their numeric weight so Medium/SemiBold registrations no
+    // longer replace Regular/Bold; 0 keeps the historical `normal` default.
+    const font_weight: box.FontWeight = if (weight == 0) .normal else box.FontWeight.fromNumber(@floatFromInt(@min(weight, 1000)));
     const font_style: box.FontStyle = if (style != 0) .italic else .normal;
     const family = std.heap.wasm_allocator.dupe(u8, family_bytes[0..family_len]) catch return -2;
     const data = std.heap.wasm_allocator.dupe(u8, font_bytes[0..data_len]) catch {
@@ -593,7 +595,11 @@ fn makePostscriptName(family: []const u8, weight: box.FontWeight, style: box.Fon
         try output.writer.writeByte(if (safe) byte else '-');
     }
     if (output.writer.end == 0) try output.writer.writeAll("CustomFont");
-    if (weight == .bold) try output.writer.writeAll("-Bold");
+    switch (weight) {
+        .normal => {},
+        .bold => try output.writer.writeAll("-Bold"),
+        _ => try output.writer.print("-W{d}", .{weight.value()}),
+    }
     if (style == .italic) try output.writer.writeAll("-Italic");
     return output.toOwnedSlice();
 }
