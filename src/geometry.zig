@@ -139,6 +139,12 @@ pub fn parseColor(value: []const u8) ?Color {
         return parseRgbColor(text);
     }
 
+    // Browsers keep modern color spaces in computed values; Tailwind v4 emits
+    // its palette as `oklch()` and alpha utilities resolve to `oklab()`.
+    if (startsWithIgnoreCase(text, "oklab(")) return parseOklabColor(text, false);
+    if (startsWithIgnoreCase(text, "oklch(")) return parseOklabColor(text, true);
+    if (startsWithIgnoreCase(text, "color(")) return parseColorFunction(text);
+
     if (text.len == 4 and text[0] == '#') {
         return .{
             .red = @as(f32, @floatFromInt(parseHexNibble(text[1]) orelse return null)) / 15,
@@ -252,6 +258,170 @@ fn parseRgbColor(text: []const u8) ?Color {
     };
 }
 
+pub fn isColorFunction(raw: []const u8) bool {
+    const value = std.mem.trim(u8, raw, " \t\n\r\x0C");
+    for ([_][]const u8{ "rgb(", "rgba(", "oklab(", "oklch(", "color(" }) |prefix| {
+        if (startsWithIgnoreCase(value, prefix)) return true;
+    }
+    return false;
+}
+
+fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
+    return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
+}
+
+/// Space-separated color-function arguments with an optional `/ alpha`.
+/// `none` components resolve to zero as CSS Color 4 specifies.
+const ColorArguments = struct {
+    values: [4]f32 = .{ 0, 0, 0, 1 },
+    percent: [4]bool = .{ false, false, false, false },
+    count: usize = 0,
+    has_alpha: bool = false,
+};
+
+fn parseColorArguments(body: []const u8) ?ColorArguments {
+    var result = ColorArguments{};
+    var parts = std.mem.tokenizeAny(u8, body, " \t\n\r\x0C");
+    var saw_slash = false;
+    while (parts.next()) |raw_part| {
+        var part = raw_part;
+        // Accept both `0.5 / 0.2` and the compact `0.5/0.2` spelling.
+        while (part.len > 0) {
+            if (part[0] == '/') {
+                if (saw_slash or result.count != 3) return null;
+                saw_slash = true;
+                part = part[1..];
+                continue;
+            }
+            const slash = std.mem.indexOfScalar(u8, part, '/');
+            const token = if (slash) |index| part[0..index] else part;
+            part = if (slash) |index| part[index..] else "";
+
+            const slot = if (saw_slash) 3 else result.count;
+            if (saw_slash and result.has_alpha) return null;
+            if (!saw_slash and result.count >= 3) return null;
+
+            if (std.ascii.eqlIgnoreCase(token, "none")) {
+                result.values[slot] = 0;
+            } else {
+                const is_percent = token.len > 0 and token[token.len - 1] == '%';
+                var numeric = if (is_percent) token[0 .. token.len - 1] else token;
+                if (std.ascii.endsWithIgnoreCase(numeric, "deg")) numeric = numeric[0 .. numeric.len - 3];
+                const parsed = std.fmt.parseFloat(f32, numeric) catch return null;
+                if (!std.math.isFinite(parsed)) return null;
+                result.values[slot] = parsed;
+                result.percent[slot] = is_percent;
+            }
+            if (saw_slash) result.has_alpha = true else result.count += 1;
+        }
+    }
+    if (result.count != 3 or (saw_slash and !result.has_alpha)) return null;
+    return result;
+}
+
+fn colorAlpha(arguments: ColorArguments) f32 {
+    const raw = if (arguments.percent[3]) arguments.values[3] / 100 else arguments.values[3];
+    return std.math.clamp(raw, 0, 1);
+}
+
+fn functionArguments(text: []const u8) ?[]const u8 {
+    const open = std.mem.indexOfScalar(u8, text, '(') orelse return null;
+    if (text[text.len - 1] != ')' or text.len < open + 2) return null;
+    return text[open + 1 .. text.len - 1];
+}
+
+/// Converts CSS `oklab()`/`oklch()` to sRGB with Björn Ottosson's matrices.
+/// Out-of-gamut channels are clipped, matching browsers on sRGB output.
+fn parseOklabColor(text: []const u8, polar: bool) ?Color {
+    const arguments = parseColorArguments(functionArguments(text) orelse return null) orelse return null;
+    const lightness = if (arguments.percent[0]) arguments.values[0] / 100 else arguments.values[0];
+    var a: f32 = undefined;
+    var b: f32 = undefined;
+    if (polar) {
+        // 100% chroma is 0.4 in CSS Color 4; hue is in degrees.
+        const chroma = @max(if (arguments.percent[1]) arguments.values[1] * 0.4 / 100 else arguments.values[1], 0);
+        const hue = arguments.values[2] * std.math.pi / 180;
+        a = chroma * @cos(hue);
+        b = chroma * @sin(hue);
+    } else {
+        a = if (arguments.percent[1]) arguments.values[1] * 0.4 / 100 else arguments.values[1];
+        b = if (arguments.percent[2]) arguments.values[2] * 0.4 / 100 else arguments.values[2];
+    }
+
+    const l_root = lightness + 0.3963377774 * a + 0.2158037573 * b;
+    const m_root = lightness - 0.1055613458 * a - 0.0638541728 * b;
+    const s_root = lightness - 0.0894841775 * a - 1.2914855480 * b;
+    const l = l_root * l_root * l_root;
+    const m = m_root * m_root * m_root;
+    const s = s_root * s_root * s_root;
+    return linearSrgbColor(
+        4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+        colorAlpha(arguments),
+    );
+}
+
+/// Parses `color(srgb|srgb-linear|display-p3 r g b [/ a])`; browsers emit it
+/// for `color-mix(in srgb, …)` and wide-gamut authored colors.
+fn parseColorFunction(text: []const u8) ?Color {
+    const body = std.mem.trim(u8, functionArguments(text) orelse return null, " \t\n\r\x0C");
+    const space_end = std.mem.indexOfAny(u8, body, " \t\n\r\x0C") orelse return null;
+    const space = body[0..space_end];
+    const arguments = parseColorArguments(body[space_end..]) orelse return null;
+    var channels: [3]f32 = undefined;
+    for (0..3) |index| {
+        channels[index] = if (arguments.percent[index]) arguments.values[index] / 100 else arguments.values[index];
+    }
+    const alpha = colorAlpha(arguments);
+
+    if (std.ascii.eqlIgnoreCase(space, "srgb")) {
+        return .{
+            .red = std.math.clamp(channels[0], 0, 1),
+            .green = std.math.clamp(channels[1], 0, 1),
+            .blue = std.math.clamp(channels[2], 0, 1),
+            .alpha = alpha,
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(space, "srgb-linear")) {
+        return linearSrgbColor(channels[0], channels[1], channels[2], alpha);
+    }
+    if (std.ascii.eqlIgnoreCase(space, "display-p3")) {
+        // Display P3 shares the sRGB transfer curve; convert in linear light.
+        const red = srgbToLinear(channels[0]);
+        const green = srgbToLinear(channels[1]);
+        const blue = srgbToLinear(channels[2]);
+        return linearSrgbColor(
+            1.2249401 * red - 0.2249404 * green,
+            -0.0420569 * red + 1.0420571 * green,
+            -0.0196376 * red - 0.0786361 * green + 1.0982735 * blue,
+            alpha,
+        );
+    }
+    return null;
+}
+
+fn linearSrgbColor(red: f32, green: f32, blue: f32, alpha: f32) Color {
+    return .{
+        .red = std.math.clamp(linearToSrgb(red), 0, 1),
+        .green = std.math.clamp(linearToSrgb(green), 0, 1),
+        .blue = std.math.clamp(linearToSrgb(blue), 0, 1),
+        .alpha = alpha,
+    };
+}
+
+fn linearToSrgb(value: f32) f32 {
+    const magnitude = @abs(value);
+    const encoded = if (magnitude <= 0.0031308) magnitude * 12.92 else 1.055 * std.math.pow(f32, magnitude, 1.0 / 2.4) - 0.055;
+    return std.math.copysign(encoded, value);
+}
+
+fn srgbToLinear(value: f32) f32 {
+    const magnitude = @abs(value);
+    const decoded = if (magnitude <= 0.04045) magnitude / 12.92 else std.math.pow(f32, (magnitude + 0.055) / 1.055, 2.4);
+    return std.math.copysign(decoded, value);
+}
+
 fn parseHexNibble(value: u8) ?u8 {
     return switch (value) {
         '0'...'9' => value - '0',
@@ -287,6 +457,39 @@ test "parse named and hexadecimal colors" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.5333), parseColor("#33669988").?.alpha, 0.0001);
     try std.testing.expectEqual(Color.transparent, parseColor("transparent").?);
     try std.testing.expectApproxEqAbs(@as(f32, 0.4), parseColor("rebeccapurple").?.red, 0.0001);
+}
+
+test "parse modern CSS color spaces emitted by browser snapshots" {
+    // sRGB red expressed in Oklab and Oklch.
+    inline for (.{ "oklab(0.627955 0.224863 0.125846)", "oklch(62.7955% 0.257683 29.2339)", "oklch(0.627955 0.257683 29.2339deg)" }) |source| {
+        const red = parseColor(source).?;
+        try std.testing.expectApproxEqAbs(@as(f32, 1), red.red, 0.002);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), red.green, 0.002);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), red.blue, 0.002);
+        try std.testing.expectEqual(@as(f32, 1), red.alpha);
+    }
+
+    // Tailwind v4 `bg-black/40` resolves to an Oklab color with alpha.
+    const overlay = parseColor("oklab(0 0 0 / 0.4)").?;
+    try std.testing.expectApproxEqAbs(@as(f32, 0), overlay.red, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.4), overlay.alpha, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), parseColor("oklch(1 0 none/25%)").?.alpha, 0.0001);
+    const white = parseColor("oklch(1 0 0)").?;
+    try std.testing.expectApproxEqAbs(@as(f32, 1), white.green, 0.001);
+
+    const srgb = parseColor("color(srgb 1 0.5 0 / 0.5)").?;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), srgb.green, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), srgb.alpha, 0.0001);
+    const gray = parseColor("color(display-p3 0.5 0.5 0.5)").?;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), gray.red, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), gray.blue, 0.001);
+    const linear = parseColor("color(srgb-linear 0.214041 0.214041 0.214041)").?;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), linear.red, 0.001);
+
+    try std.testing.expect(parseColor("oklch(0.5 0.1)") == null);
+    try std.testing.expect(parseColor("oklch(0.5 0.1 20 0.3)") == null);
+    try std.testing.expect(parseColor("color(rec2020 1 0 0)") == null);
+    try std.testing.expect(isColorFunction(" oklch(0.5 0.1 20)"));
 }
 
 test "intersect clipping rectangles" {

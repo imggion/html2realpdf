@@ -201,6 +201,15 @@ export class WasmBridge {
       ? registration.data
       : new Uint8Array(registration.data);
     if (family.length === 0 || data.length === 0) throw new WasmRenderError("Font family and data must not be empty", -16);
+    // WOFF and WOFF2 wrap compressed tables that the native TrueType parser
+    // cannot read. Keep the native invalid-font status, but name the cause.
+    const signature = data.length >= 4 ? String.fromCharCode(data[0]!, data[1]!, data[2]!, data[3]!) : "";
+    if (signature === "wOFF" || signature === "wOF2") {
+      throw new WasmRenderError(
+        `Font "${registration.family}" is ${signature === "wOF2" ? "WOFF2" : "WOFF"}; register the TrueType (.ttf) file instead`,
+        -6,
+      );
+    }
     const familyPointer = this.exports.alloc(family.length);
     const dataPointer = this.exports.alloc(data.length);
     if (familyPointer === 0 || dataPointer === 0) {

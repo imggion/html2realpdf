@@ -271,15 +271,54 @@ pub const WhiteSpace = enum {
     }
 };
 
-pub const FontWeight = enum {
-    normal,
-    bold,
+/// CSS numeric font weight in the 1–1000 range. `normal` (400) and `bold`
+/// (700) are the CSS keywords; other weights stay distinct so registered faces
+/// such as Medium (500) and SemiBold (600) resolve through CSS font matching
+/// instead of collapsing into two buckets.
+pub const FontWeight = enum(u16) {
+    normal = 400,
+    bold = 700,
+    _,
 
-    pub fn toString(self: @This()) []const u8 {
-        return switch (self) {
-            .normal => "normal",
-            .bold => "bold",
-        };
+    pub fn fromNumber(number: f32) FontWeight {
+        if (!std.math.isFinite(number)) return .normal;
+        const clamped = std.math.clamp(@round(number), 1, 1000);
+        return @enumFromInt(@as(u16, @intFromFloat(clamped)));
+    }
+
+    pub fn value(self: @This()) u16 {
+        return @intFromEnum(self);
+    }
+
+    /// Weights the built-in bold face and PDF bold descriptors represent:
+    /// CSS matching against {400, 700} picks 700 for every weight above 500.
+    pub fn isBold(self: @This()) bool {
+        return self.value() > 500;
+    }
+
+    /// CSS Fonts 4 relative weights for `bolder` and `lighter`.
+    pub fn bolder(self: @This()) FontWeight {
+        const current = self.value();
+        if (current < 350) return .normal;
+        if (current < 550) return .bold;
+        if (current < 900) return @enumFromInt(900);
+        return self;
+    }
+
+    pub fn lighter(self: @This()) FontWeight {
+        const current = self.value();
+        if (current < 100) return self;
+        if (current < 550) return @enumFromInt(100);
+        if (current < 750) return .normal;
+        return .bold;
+    }
+
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (self) {
+            .normal => try writer.writeAll("normal"),
+            .bold => try writer.writeAll("bold"),
+            _ => try writer.print("{d}", .{self.value()}),
+        }
     }
 };
 
@@ -1797,7 +1836,7 @@ fn writeBoxStyleDebug(box: Box, writer: *std.Io.Writer) !void {
         try writer.print(" background={s}", .{background});
     }
     if (style.clear_direction != .none) try writer.print(" clear={s}", .{style.clear_direction.toString()});
-    if (style.font_weight != .normal) try writer.print(" font-weight={s}", .{style.font_weight.toString()});
+    if (style.font_weight != .normal) try writer.print(" font-weight={f}", .{style.font_weight});
     if (style.font_style != .normal) try writer.print(" font-style={s}", .{style.font_style.toString()});
     if (style.text_decoration != .none) try writer.print(" text-decoration={s}", .{style.text_decoration.toString()});
     if (style.text_decoration_style != .solid) try writer.print(" text-decoration-style={s}", .{style.text_decoration_style.toString()});

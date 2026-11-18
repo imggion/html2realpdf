@@ -694,7 +694,21 @@ test "parse value: display keywords" {
 test "parse font weight and style" {
     try std.testing.expectEqual(box.FontWeight.bold, parseFontWeight("700").?);
     try std.testing.expectEqual(box.FontWeight.normal, parseFontWeight("400").?);
+    try std.testing.expectEqual(@as(u16, 500), parseFontWeight("500").?.value());
+    try std.testing.expectEqual(@as(u16, 600), parseFontWeight(" 600 ").?.value());
+    try std.testing.expectEqual(@as(u16, 451), parseFontWeight("450.6").?.value());
+    try std.testing.expect(parseFontWeight("0") == null);
+    try std.testing.expect(parseFontWeight("1001") == null);
     try std.testing.expectEqual(box.FontStyle.italic, parseFontStyle("oblique").?);
+}
+
+test "relative font weights follow the CSS Fonts 4 table" {
+    try std.testing.expectEqual(box.FontWeight.bold, box.FontWeight.normal.bolder());
+    try std.testing.expectEqual(@as(u16, 900), box.FontWeight.bold.bolder().value());
+    try std.testing.expectEqual(box.FontWeight.normal, (@as(box.FontWeight, @enumFromInt(300))).bolder());
+    try std.testing.expectEqual(@as(u16, 100), box.FontWeight.normal.lighter().value());
+    try std.testing.expectEqual(box.FontWeight.normal, (@as(box.FontWeight, @enumFromInt(600))).lighter());
+    try std.testing.expectEqual(box.FontWeight.bold, (@as(box.FontWeight, @enumFromInt(900))).lighter());
 }
 
 test "parse value: edges shorthand" {

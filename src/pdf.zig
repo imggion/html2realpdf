@@ -145,7 +145,7 @@ fn prepareSvgTextRuns(
     shaping_mode: font.ShapingMode,
 ) !void {
     const text = prepared.document.textSlice(text_item);
-    const weight: box.FontWeight = if (text_item.style.font_weight == .bold) .bold else .normal;
+    const weight: box.FontWeight = @enumFromInt(@intFromEnum(text_item.style.font_weight));
     const style: box.FontStyle = if (text_item.style.font_style == .italic) .italic else .normal;
     const direction: font.Direction = if (text_item.style.direction == .rtl) .rtl else .ltr;
     if (direction == .rtl) {
@@ -848,40 +848,30 @@ fn pageContent(
                     x,
                     baseline,
                 });
-                try beginTextGlyphs(writer, run.word_spacing);
-                try writeTextRunGlyphs(writer, font_usage, used_font_index, run);
-
-                var previous_run = run;
-                while (command_index + 1 < list.commands.items.len) {
-                    const next_command = list.commands.items[command_index + 1];
-                    if (next_command.page_index != page_index or next_command.command != .text) break;
-
+                // Collect the runs that continue this text object first: a
+                // kerned continuation needs the whole object in `TJ` array
+                // mode, which must be chosen before the first glyph. Plain
+                // `Tj` advances by /W widths and would drop the kerning, so
+                // the painted text would overlap the next inline content.
+                var group_end = command_index;
+                var group_previous = run;
+                var use_array = run.word_spacing != 0;
+                while (group_end + 1 < list.commands.items.len) {
+                    const next_command = list.commands.items[group_end + 1];
+                    if (!continuesTextObject(font_usage, used_font_index, page_index, page_command, run, group_previous, next_command)) break;
                     const next_run = next_command.command.text;
-                    // Completing ToUnicode for continuation glyphs requires
-                    // ActualText. Keep ordinary kerning-only run grouping intact.
-                    if (font_usage.archival and hasClusterContinuation(next_run)) break;
-                    if (next_run.line_id != run.line_id or
-                        next_run.font_size != run.font_size or
-                        next_run.letter_spacing != run.letter_spacing or
-                        next_run.word_spacing != run.word_spacing or
-                        font_usage.indexForRun(next_run) != used_font_index or
-                        !clipRectsEqual(next_command.clip_rect, page_command.clip_rect) or
-                        !clipRadiiEqual(next_command.clip_radii, page_command.clip_radii) or
-                        !next_command.clip_transform.approxEqual(page_command.clip_transform, 0.0001) or
-                        !clipPathsEqual(next_command.clip_paths, page_command.clip_paths) or
-                        !next_command.transform.approxEqual(page_command.transform, 0.0001) or
-                        !opacityPathsEqual(next_command.opacity_groups, page_command.opacity_groups) or
-                        @abs(next_command.opacity - page_command.opacity) > 0.0001 or
-                        next_run.artifact != run.artifact or
-                        !colorsEqual(next_run.color, run.color) or
-                        @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) > 0.1) break;
-
-                    try writeTextRunGlyphs(writer, font_usage, used_font_index, next_run);
-                    previous_run = next_run;
-                    command_index += 1;
+                    if (hasKerning(&font_usage.fonts.items[used_font_index], next_run)) use_array = true;
+                    group_previous = next_run;
+                    group_end += 1;
                 }
 
-                try endTextGlyphs(writer, run.word_spacing);
+                try beginTextGlyphs(writer, use_array);
+                try writeTextRunGlyphs(writer, font_usage, used_font_index, run, use_array);
+                while (command_index < group_end) {
+                    command_index += 1;
+                    try writeTextRunGlyphs(writer, font_usage, used_font_index, list.commands.items[command_index].command.text, use_array);
+                }
+                try endTextGlyphs(writer, use_array);
                 if (run.artifact) try writer.writeAll("EMC\n");
             },
             .link => {},
@@ -2543,7 +2533,7 @@ fn writeEmbeddedFontObjects(
 
     const flags: u32 = 32 |
         (if (resolved.style == .italic) @as(u32, 64) else 0) |
-        (if (resolved.weight == .bold) @as(u32, 262144) else 0);
+        (if (resolved.weight.isBold()) @as(u32, 262144) else 0);
     try beginObject(output, offsets, object_base + 1);
     try output.writer.print(
         "<< /Type /FontDescriptor /FontName /{s} /Flags {d} /FontBBox [{d} {d} {d} {d}] /ItalicAngle {d} /Ascent {d} /Descent {d} /CapHeight {d} /StemV {d} /FontFile2 {d} 0 R >>\nendobj\n",
@@ -2558,7 +2548,7 @@ fn writeEmbeddedFontObjects(
             pdfMetric(metrics.ascender, metrics.units_per_em),
             pdfMetric(metrics.descender, metrics.units_per_em),
             pdfMetric(metrics.ascender, metrics.units_per_em),
-            if (resolved.weight == .bold) @as(u16, 120) else 80,
+            if (resolved.weight.isBold()) @as(u16, 120) else 80,
             object_base,
         },
     );
@@ -2690,27 +2680,29 @@ fn writeGlyphHex(writer: *std.Io.Writer, usage: *const FontUsage, used_index: us
     }
 }
 
-fn beginTextGlyphs(writer: *std.Io.Writer, word_spacing: f32) !void {
-    try writer.writeAll(if (word_spacing == 0) "<" else "[<");
+fn beginTextGlyphs(writer: *std.Io.Writer, use_array: bool) !void {
+    try writer.writeAll(if (use_array) "[<" else "<");
 }
 
-fn endTextGlyphs(writer: *std.Io.Writer, word_spacing: f32) !void {
-    try writer.writeAll(if (word_spacing == 0) "> Tj ET\n" else ">] TJ ET\n");
+fn endTextGlyphs(writer: *std.Io.Writer, use_array: bool) !void {
+    try writer.writeAll(if (use_array) ">] TJ ET\n" else "> Tj ET\n");
 }
 
-/// Emit explicit TJ adjustments after word separators. Type 0 fonts use
-/// two-byte character codes, so PDF's `Tw` operator cannot reliably identify
-/// U+0020; TJ keeps spacing deterministic for every embedded font subset.
+/// Emit explicit TJ adjustments after word separators and kerned glyphs.
+/// Type 0 fonts use two-byte character codes, so PDF's `Tw` operator cannot
+/// reliably identify U+0020; TJ keeps spacing deterministic for every embedded
+/// font subset. `use_array` must be set whenever the run has kerning.
 fn writeTextRunGlyphs(
     writer: *std.Io.Writer,
     usage: *const FontUsage,
     used_index: usize,
     run: display_list.TextRun,
+    use_array: bool,
 ) !void {
     if (usage.archival) {
-        try writeArchivalTextRunGlyphs(writer, usage, used_index, run);
+        try writeArchivalTextRunGlyphs(writer, usage, used_index, run, use_array);
         // Adjacent display runs may share a text object; bound each PDF string.
-        try writer.writeAll(if (run.word_spacing == 0) "> Tj <" else ">] TJ [<");
+        try writer.writeAll(if (use_array) ">] TJ [<" else "> Tj <");
         return;
     }
     if (run.leading_space) {
@@ -2719,12 +2711,12 @@ fn writeTextRunGlyphs(
     }
 
     if (run.shaped) |shaped| {
+        const metrics = usage.fonts.items[used_index].resolved.metrics();
         for (shaped.glyphs) |glyph| {
             const unicode = glyphUnicode(run.text, glyph);
             try writer.print("{X:0>4}", .{usage.cidFor(used_index, glyph.glyph_id, try usage.mappingUnicode(run.text, glyph))});
-            if (unicode.len == 1 and unicode[0] == ' ') {
-                try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
-            }
+            const is_space = unicode.len == 1 and unicode[0] == ' ';
+            if (use_array) try writeGlyphAdjustment(writer, metrics, glyph, run, is_space);
         }
         return;
     }
@@ -2740,37 +2732,44 @@ fn writeTextRunGlyphs(
     try writeGlyphHex(writer, usage, used_index, run.text[chunk_start..]);
 }
 
-fn writeArchivalTextRunGlyphs(writer: *std.Io.Writer, usage: *const FontUsage, used_index: usize, run: display_list.TextRun) !void {
+fn writeArchivalTextRunGlyphs(
+    writer: *std.Io.Writer,
+    usage: *const FontUsage,
+    used_index: usize,
+    run: display_list.TextRun,
+    use_array: bool,
+) !void {
     var count: usize = 0;
     if (run.leading_space) {
         try writeGlyphHex(writer, usage, used_index, " ");
         try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
         count = 1;
     }
+    const metrics = usage.fonts.items[used_index].resolved.metrics();
     if (run.shaped) |shaped| {
         for (shaped.glyphs) |glyph| {
-            try splitGlyphString(writer, &count, run.word_spacing);
+            try splitGlyphString(writer, &count, use_array);
             const cid = usage.cidFor(used_index, glyph.glyph_id, try usage.mappingUnicode(run.text, glyph));
             try writer.print("{X:0>4}", .{cid});
             const unicode = glyphUnicode(run.text, glyph);
-            if (unicode.len == 1 and unicode[0] == ' ') try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
+            const is_space = unicode.len == 1 and unicode[0] == ' ';
+            if (use_array) try writeGlyphAdjustment(writer, metrics, glyph, run, is_space);
         }
     } else {
-        const metrics = usage.fonts.items[used_index].resolved.metrics();
         var iterator = font.Utf8Iterator{ .bytes = run.text };
         while (true) {
             const start = iterator.index;
             const cp = try iterator.next() orelse break;
-            try splitGlyphString(writer, &count, run.word_spacing);
+            try splitGlyphString(writer, &count, use_array);
             try writer.print("{X:0>4}", .{usage.cidFor(used_index, metrics.glyphId(cp), run.text[start..iterator.index])});
             if (cp == ' ') try writeWordSpacingAdjustment(writer, run.word_spacing, run.font_size);
         }
     }
 }
 
-fn splitGlyphString(writer: *std.Io.Writer, count: *usize, word_spacing: f32) !void {
+fn splitGlyphString(writer: *std.Io.Writer, count: *usize, use_array: bool) !void {
     if (count.* == pdfa.max_string_bytes / 2) {
-        try writer.writeAll(if (word_spacing == 0) "> Tj <" else ">] TJ [<");
+        try writer.writeAll(if (use_array) ">] TJ [<" else "> Tj <");
         count.* = 0;
     }
     count.* += 1;
@@ -2782,6 +2781,26 @@ fn writeWordSpacingAdjustment(writer: *std.Io.Writer, word_spacing: f32, font_si
     try writer.print("> {d:.3} <", .{adjustment});
 }
 
+/// Writes the combined TJ adjustment after one shaped glyph: the kerning
+/// difference between HarfBuzz's advance and the font's default width, plus
+/// word spacing after a U+0020 separator. Units are thousandths of text space.
+fn writeGlyphAdjustment(
+    writer: *std.Io.Writer,
+    metrics: font.Metrics,
+    glyph: font.ShapedGlyph,
+    run: display_list.TextRun,
+    is_space: bool,
+) !void {
+    const default_advance: f32 = @floatFromInt(metrics.advanceWidth(glyph.glyph_id));
+    const shaped_advance: f32 = @floatFromInt(glyph.x_advance);
+    var adjustment = (default_advance - shaped_advance) * 1000 / @as(f32, @floatFromInt(metrics.units_per_em));
+    if (is_space) adjustment -= run.word_spacing * 1000 / @max(run.font_size, 0.001);
+    if (adjustment == 0) return;
+    try writer.print("> {d:.3} <", .{adjustment});
+}
+
+/// Runs whose glyphs move off the baseline, reorder, or split clusters need
+/// individually positioned glyphs. Kerning alone stays in a `TJ` array.
 fn requiresPositionedGlyphs(used: *const UsedFont, run: display_list.TextRun) bool {
     const shaped = run.shaped orelse return false;
     if (shaped.direction == .rtl) return true;
@@ -2789,6 +2808,48 @@ fn requiresPositionedGlyphs(used: *const UsedFont, run: display_list.TextRun) bo
     for (shaped.glyphs) |glyph| {
         if (glyph.x_advance != metrics.advanceWidth(glyph.glyph_id) or
             glyph.y_advance != 0 or glyph.x_offset != 0 or glyph.y_offset != 0 or !glyph.maps_cluster) return true;
+    }
+    return false;
+}
+
+/// Reports whether `next_command` can extend the open text object started by
+/// `run`: same line, font state, paint state, and a contiguous position.
+fn continuesTextObject(
+    font_usage: *const FontUsage,
+    used_font_index: usize,
+    page_index: usize,
+    page_command: display_list.PageCommand,
+    run: display_list.TextRun,
+    previous_run: display_list.TextRun,
+    next_command: display_list.PageCommand,
+) bool {
+    if (next_command.page_index != page_index or next_command.command != .text) return false;
+    const next_run = next_command.command.text;
+    // Completing ToUnicode for continuation glyphs requires ActualText.
+    if (font_usage.archival and hasClusterContinuation(next_run)) return false;
+    return next_run.line_id == run.line_id and
+        next_run.font_size == run.font_size and
+        next_run.letter_spacing == run.letter_spacing and
+        next_run.word_spacing == run.word_spacing and
+        font_usage.indexForRun(next_run) == used_font_index and
+        clipRectsEqual(next_command.clip_rect, page_command.clip_rect) and
+        clipRadiiEqual(next_command.clip_radii, page_command.clip_radii) and
+        next_command.clip_transform.approxEqual(page_command.clip_transform, 0.0001) and
+        clipPathsEqual(next_command.clip_paths, page_command.clip_paths) and
+        next_command.transform.approxEqual(page_command.transform, 0.0001) and
+        opacityPathsEqual(next_command.opacity_groups, page_command.opacity_groups) and
+        @abs(next_command.opacity - page_command.opacity) <= 0.0001 and
+        next_run.artifact == run.artifact and
+        colorsEqual(next_run.color, run.color) and
+        @abs(next_run.position.x - (previous_run.position.x + previous_run.width)) <= 0.1;
+}
+
+/// Reports a shaped advance that differs from the font's default /W width.
+fn hasKerning(used: *const UsedFont, run: display_list.TextRun) bool {
+    const shaped = run.shaped orelse return false;
+    const metrics = used.resolved.metrics();
+    for (shaped.glyphs) |glyph| {
+        if (glyph.x_advance != metrics.advanceWidth(glyph.glyph_id)) return true;
     }
     return false;
 }
@@ -3116,9 +3177,9 @@ test "write word spacing with Type 0 font TJ adjustments" {
     var usage = try FontUsage.init(allocator, null);
     defer usage.deinit(allocator);
     try usage.collect(&list);
-    try beginTextGlyphs(&output.writer, run.word_spacing);
-    try writeTextRunGlyphs(&output.writer, &usage, 0, run);
-    try endTextGlyphs(&output.writer, run.word_spacing);
+    try beginTextGlyphs(&output.writer, true);
+    try writeTextRunGlyphs(&output.writer, &usage, 0, run, true);
+    try endTextGlyphs(&output.writer, true);
     const content = output.written();
     try std.testing.expect(std.mem.count(u8, content, "<") >= 2);
     try std.testing.expect(std.mem.indexOf(u8, content, ">] TJ ET") != null);
@@ -3170,6 +3231,66 @@ test "map shaped ligature clusters and conflicting glyph Unicode through custom 
     try std.testing.expect(std.mem.indexOf(u8, bytes, expected_ligature.written()) != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/CIDToGIDMap /Identity") == null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "/CIDToGIDMap ") != null);
+}
+
+test "kerned continuation runs keep their kerning in a TJ array" {
+    const allocator = std.testing.allocator;
+    const resolved = font.resolve(null, "Noto Sans", .normal, .normal);
+    const metrics = resolved.metrics();
+    const a_glyph = metrics.glyphId('A');
+    const v_glyph = metrics.glyphId('V');
+    const plain_glyphs = [_]font.ShapedGlyph{.{
+        .glyph_id = a_glyph,
+        .x_advance = metrics.advanceWidth(a_glyph),
+        .cluster_start = 0,
+        .cluster_end = 1,
+    }};
+    // A negative kerning adjustment that `Tj` would silently drop.
+    const kerned_glyphs = [_]font.ShapedGlyph{
+        .{ .glyph_id = v_glyph, .x_advance = metrics.advanceWidth(v_glyph) - 120, .cluster_start = 0, .cluster_end = 1 },
+        .{ .glyph_id = a_glyph, .x_advance = metrics.advanceWidth(a_glyph), .cluster_start = 1, .cluster_end = 2 },
+    };
+    const units_to_css = 16 / @as(f32, @floatFromInt(metrics.units_per_em));
+    const plain_width = @as(f32, @floatFromInt(metrics.advanceWidth(a_glyph))) * units_to_css;
+
+    var commands = try std.ArrayList(display_list.PageCommand).initCapacity(allocator, 2);
+    defer commands.deinit(allocator);
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .text = .{
+        .position = .{ .x = 10, .y = 10 },
+        .text = "A",
+        .shaped = .{ .glyphs = &plain_glyphs },
+        .font_size = 16,
+        .width = plain_width,
+        .color = geometry.Color.black,
+    } } });
+    try commands.append(allocator, .{ .page_index = 0, .command = .{ .text = .{
+        .position = .{ .x = 10 + plain_width, .y = 10 },
+        .text = "VA",
+        .shaped = .{ .glyphs = &kerned_glyphs },
+        .font_size = 16,
+        .color = geometry.Color.black,
+    } } });
+    const list = display_list.DisplayList{
+        .commands = commands,
+        .page_count = 1,
+        .page_spec = pagination.PageSpec.standard(.a4, .portrait, .{}),
+    };
+    var usage = try FontUsage.init(allocator, null);
+    defer usage.deinit(allocator);
+    try usage.collect(&list);
+    var alpha = try AlphaUsage.init(allocator);
+    defer alpha.deinit(allocator);
+    const content = try pageContent(allocator, &list, 0, &usage, &alpha, &.{}, null);
+    defer allocator.free(content);
+
+    // The kerned continuation stays in the first run's text object, which
+    // switches to a `TJ` array so the kerning is not dropped by plain `Tj`.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, content, "BT "));
+    var expected = std.Io.Writer.Allocating.init(allocator);
+    defer expected.deinit();
+    try expected.writer.print("[<{X:0>4}{X:0>4}> 120.000 <", .{ usage.cidFor(0, a_glyph, "A"), usage.cidFor(0, v_glyph, "V") });
+    try std.testing.expect(std.mem.indexOf(u8, content, expected.written()) != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, ">] TJ ET") != null);
 }
 
 test "wrap clipped paint commands in PDF graphics state" {

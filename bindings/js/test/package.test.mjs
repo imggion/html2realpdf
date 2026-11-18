@@ -18,6 +18,7 @@ import html2pdf, {
   renderPdf,
 } from "../dist/index.js";
 import { normalizePage } from "../dist/page.js";
+import { WasmBridge } from "../dist/wasm.js";
 
 test("package entrypoint is safe to import without a browser", () => {
   assert.equal(typeof html2pdf, "function");
@@ -284,6 +285,61 @@ test("packaged WASM context registers and embeds a custom TrueType family", asyn
     exports.free(htmlPointer, html.length);
     exports.free(optionsPointer, options.length);
     exports.pdf_context_free(context);
+  }
+});
+
+test("WASM keeps distinct numeric weights of one registered family", async () => {
+  const [wasm, regular, bold] = await Promise.all([
+    readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url)),
+    readFile(new URL("../../../src/assets/fonts/NotoSans-Regular.ttf", import.meta.url)),
+    readFile(new URL("../../../src/assets/fonts/NotoSans-Bold.ttf", import.meta.url)),
+  ]);
+  const { instance } = await WebAssembly.instantiate(wasm, {});
+  const exports = instance.exports;
+  const context = exports.pdf_context_create();
+  const encoder = new TextEncoder();
+  const allocations = [];
+  const copy = (bytes) => {
+    const pointer = exports.alloc(bytes.length);
+    allocations.push([pointer, bytes.length]);
+    new Uint8Array(exports.memory.buffer, pointer, bytes.length).set(bytes);
+    return pointer;
+  };
+
+  try {
+    const family = encoder.encode("Weights");
+    // Regular first, then a Medium face that previously replaced it.
+    for (const [face, weight] of [[regular, 400], [bold, 500], [bold, 600]]) {
+      assert.equal(exports.pdf_context_register_font(context, copy(family), family.length, copy(face), face.length, weight, 0), 0);
+    }
+    const html = encoder.encode("<p style=\"font-family:Weights\">regular</p><p style=\"font-family:Weights;font-weight:500\">medium</p><p style=\"font-family:Weights;font-weight:600\">semibold</p>");
+    const options = encoder.encode(JSON.stringify({ pageWidthPoints: 595.2756, pageHeightPoints: 841.8898 }));
+    const result = exports.render_html_to_pdf_with_context_json_options(context, copy(html), html.length, copy(options), options.length);
+    try {
+      assert.equal(exports.pdf_result_status(result), 0);
+      const pdf = new TextDecoder("latin1").decode(new Uint8Array(exports.memory.buffer, exports.pdf_result_data_ptr(result), exports.pdf_result_data_len(result)));
+      assert.match(pdf, /\+Weights[ /]/);
+      assert.match(pdf, /\+Weights-W500[ /]/);
+      assert.match(pdf, /\+Weights-W600[ /]/);
+    } finally {
+      exports.pdf_result_free(result);
+    }
+  } finally {
+    for (const [pointer, length] of allocations) exports.free(pointer, length);
+    exports.pdf_context_free(context);
+  }
+});
+
+test("font registration names WOFF and WOFF2 files instead of failing opaquely", async () => {
+  const wasm = await readFile(new URL("../dist/libhtml2realpdf.wasm", import.meta.url));
+  const wasmUrl = `data:application/wasm;base64,${wasm.toString("base64")}`;
+  for (const [signature, label] of [["wOF2", "WOFF2"], ["wOFF", "WOFF"]]) {
+    const data = new Uint8Array(64);
+    data.set(new TextEncoder().encode(signature));
+    await assert.rejects(
+      WasmBridge.create(wasmUrl, [{ family: "Packed", data }]),
+      (error) => error instanceof WasmRenderError && error.status === -6 && error.message.includes(label) && error.message.includes(".ttf"),
+    );
   }
 });
 

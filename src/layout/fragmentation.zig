@@ -7,7 +7,7 @@
 const std = @import("std");
 const page_geometry = @import("page_geometry.zig");
 
-const epsilon: f32 = 0.0001;
+const epsilon = page_geometry.fragmentation_tolerance;
 
 pub const PageProgression = enum {
     left_to_right,

@@ -60,9 +60,73 @@ pub const Face = enum {
 const built_in_face_count = @typeInfo(Face).@"enum".fields.len;
 
 pub fn faceFor(weight: box.FontWeight, style: box.FontStyle) Face {
-    return switch (weight) {
-        .normal => if (style == .italic) .italic else .regular,
-        .bold => if (style == .italic) .bold_italic else .bold,
+    if (weight.isBold()) return if (style == .italic) .bold_italic else .bold;
+    return if (style == .italic) .italic else .regular;
+}
+
+/// Orders candidate weights by CSS Fonts 4 §5.2 font matching: lower is
+/// better and 0 is an exact match. For a desired weight in 400–500 the search
+/// goes up to 500, then down, then above 500; below 400 it goes down then up;
+/// above 500 it goes up then down.
+fn weightMatchRank(desired: box.FontWeight, candidate: box.FontWeight) u32 {
+    const want: u32 = desired.value();
+    const have: u32 = candidate.value();
+    const tier_size: u32 = 2000;
+    if (want >= 400 and want <= 500) {
+        if (have >= want and have <= 500) return have - want;
+        if (have < want) return tier_size + (want - have);
+        return 2 * tier_size + (have - 500);
+    }
+    if (want < 400) {
+        if (have <= want) return want - have;
+        return tier_size + (have - want);
+    }
+    if (have >= want) return have - want;
+    return tier_size + (want - have);
+}
+
+/// Picks the registered face of one family that CSS font matching would use:
+/// the requested style when the family has it, otherwise the other style,
+/// then the closest weight. `codepoint` restricts candidates to faces that
+/// contain a glyph for it.
+fn bestRegisteredFace(
+    available: *const Registry,
+    family: []const u8,
+    weight: box.FontWeight,
+    style: box.FontStyle,
+    codepoint: ?u21,
+) ?usize {
+    for ([_]bool{ true, false }) |same_style| {
+        var best: ?usize = null;
+        var best_rank: u32 = std.math.maxInt(u32);
+        for (available.fonts, 0..) |registered, index| {
+            if (!std.ascii.eqlIgnoreCase(registered.family, family)) continue;
+            if ((registered.style == style) != same_style) continue;
+            if (codepoint) |value| {
+                if (!registeredSupportsCodepoint(registered, value)) continue;
+                const metrics = Metrics.parse(registered.data) catch continue;
+                if (metrics.glyphId(value) == 0) continue;
+            }
+            const rank = weightMatchRank(weight, registered.weight);
+            if (rank < best_rank) {
+                best = index;
+                best_rank = rank;
+            }
+        }
+        if (best != null) return best;
+    }
+    return null;
+}
+
+fn resolvedRegistered(available: *const Registry, index: usize) ResolvedFont {
+    const registered = available.fonts[index];
+    return .{
+        .id = built_in_face_count + index,
+        .family = registered.family,
+        .postscript_name = registered.postscript_name,
+        .data = registered.data,
+        .weight = registered.weight,
+        .style = registered.style,
     };
 }
 
@@ -195,30 +259,7 @@ pub fn resolve(
         var families = std.mem.splitScalar(u8, family_list, ',');
         while (families.next()) |raw_family| {
             const family = trimFamilyName(raw_family);
-            var fallback: ?usize = null;
-            for (available.fonts, 0..) |registered, index| {
-                if (!std.ascii.eqlIgnoreCase(registered.family, family)) continue;
-                if (registered.weight == weight and registered.style == style) return .{
-                    .id = built_in_face_count + index,
-                    .family = registered.family,
-                    .postscript_name = registered.postscript_name,
-                    .data = registered.data,
-                    .weight = registered.weight,
-                    .style = registered.style,
-                };
-                if (fallback == null) fallback = index;
-            }
-            if (fallback) |index| {
-                const registered = available.fonts[index];
-                return .{
-                    .id = built_in_face_count + index,
-                    .family = registered.family,
-                    .postscript_name = registered.postscript_name,
-                    .data = registered.data,
-                    .weight = registered.weight,
-                    .style = registered.style,
-                };
-            }
+            if (bestRegisteredFace(available, family, weight, style, null)) |index| return resolvedRegistered(available, index);
         }
     }
 
@@ -269,22 +310,7 @@ pub fn resolveForCodepoint(
         var families = std.mem.splitScalar(u8, family_list, ',');
         while (families.next()) |raw_family| {
             const family = trimFamilyName(raw_family);
-            var fallback: ?ResolvedFont = null;
-            for (available.fonts, 0..) |registered, index| {
-                if (!std.ascii.eqlIgnoreCase(registered.family, family)) continue;
-                const candidate = ResolvedFont{
-                    .id = built_in_face_count + index,
-                    .family = registered.family,
-                    .postscript_name = registered.postscript_name,
-                    .data = registered.data,
-                    .weight = registered.weight,
-                    .style = registered.style,
-                };
-                if (!registeredSupportsCodepoint(registered, codepoint) or candidate.metrics().glyphId(codepoint) == 0) continue;
-                if (registered.weight == weight and registered.style == style) return candidate;
-                if (fallback == null) fallback = candidate;
-            }
-            if (fallback) |candidate| return candidate;
+            if (bestRegisteredFace(available, family, weight, style, codepoint)) |index| return resolvedRegistered(available, index);
         }
     }
 
@@ -786,6 +812,50 @@ test "built-in script fallbacks cover Arabic and Hebrew" {
     try std.testing.expectEqualStrings("Noto Sans Hebrew", hebrew.family);
     try std.testing.expect(arabic.metrics().glyphId(0x0645) != 0);
     try std.testing.expect(hebrew.metrics().glyphId(0x05E9) != 0);
+}
+
+test "registered faces resolve through CSS weight matching" {
+    const regular = Face.regular.bytes();
+    const italic = Face.italic.bytes();
+    const fonts = [_]RegisteredFont{
+        .{ .family = "Brand", .postscript_name = "Brand-W500", .data = regular, .weight = @enumFromInt(500) },
+        .{ .family = "Brand", .postscript_name = "Brand", .data = regular, .weight = .normal },
+        .{ .family = "Brand", .postscript_name = "Brand-W600", .data = regular, .weight = @enumFromInt(600) },
+        .{ .family = "Brand", .postscript_name = "Brand-Bold", .data = regular, .weight = .bold },
+        .{ .family = "Brand", .postscript_name = "Brand-Italic", .data = italic, .style = .italic },
+    };
+    const registry = Registry{ .fonts = &fonts };
+
+    // Medium registered before Regular no longer takes its place.
+    try std.testing.expectEqualStrings("Brand", resolve(&registry, "Brand", .normal, .normal).postscript_name);
+    try std.testing.expectEqualStrings("Brand-W500", resolve(&registry, "Brand", @enumFromInt(500), .normal).postscript_name);
+    try std.testing.expectEqualStrings("Brand-W600", resolve(&registry, "Brand", @enumFromInt(600), .normal).postscript_name);
+    try std.testing.expectEqualStrings("Brand-Bold", resolve(&registry, "Brand", .bold, .normal).postscript_name);
+    // 450 searches up to 500 first; 300 searches down then up; 800 searches up then down.
+    try std.testing.expectEqualStrings("Brand-W500", resolve(&registry, "Brand", @enumFromInt(450), .normal).postscript_name);
+    try std.testing.expectEqualStrings("Brand", resolve(&registry, "Brand", @enumFromInt(300), .normal).postscript_name);
+    try std.testing.expectEqualStrings("Brand-Bold", resolve(&registry, "Brand", @enumFromInt(800), .normal).postscript_name);
+    // A requested style wins over weight; a missing style falls back by weight.
+    try std.testing.expectEqualStrings("Brand-Italic", resolve(&registry, "Brand", .bold, .italic).postscript_name);
+    try std.testing.expectEqualStrings("Brand-Italic", resolveForCodepoint(&registry, "Brand", .bold, .italic, 'A').?.postscript_name);
+    try std.testing.expectEqualStrings("Brand-W600", resolveForCodepoint(&registry, "Brand", @enumFromInt(600), .normal, 'A').?.postscript_name);
+}
+
+test "regular and bold registrations keep their historical weight mapping" {
+    const fonts = [_]RegisteredFont{
+        .{ .family = "Pair", .postscript_name = "Pair", .data = Face.regular.bytes() },
+        .{ .family = "Pair", .postscript_name = "Pair-Bold", .data = Face.bold.bytes(), .weight = .bold },
+    };
+    const registry = Registry{ .fonts = &fonts };
+    for ([_]u16{ 100, 300, 400, 500 }) |weight| {
+        try std.testing.expectEqualStrings("Pair", resolve(&registry, "Pair", @enumFromInt(weight), .normal).postscript_name);
+    }
+    for ([_]u16{ 600, 700, 800, 900 }) |weight| {
+        try std.testing.expectEqualStrings("Pair-Bold", resolve(&registry, "Pair", @enumFromInt(weight), .normal).postscript_name);
+    }
+    try std.testing.expectEqual(Face.regular, faceFor(@enumFromInt(500), .normal));
+    try std.testing.expectEqual(Face.bold, faceFor(@enumFromInt(600), .normal));
+    try std.testing.expectEqual(Face.bold_italic, faceFor(.bold, .italic));
 }
 
 test "subset keeps requested and composite glyphs in a valid TrueType file" {

@@ -757,6 +757,14 @@ fn parseTemplate(allocator: std.mem.Allocator, raw_value: []const u8, available:
     errdefer result.deinit(allocator);
     const value = std.mem.trim(u8, raw_value, " \t\n\r\x0C");
     if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "none")) return result;
+    // Subgrid is unsupported natively; browser snapshots freeze the parent
+    // tracks instead. Reading the keyword as a track would create a 0px column
+    // that wraps every word, so the explicit grid is treated as `none`.
+    if (value.len >= "subgrid".len and std.ascii.eqlIgnoreCase(value[0.."subgrid".len], "subgrid") and
+        (value.len == "subgrid".len or !isTrackNameByte(value["subgrid".len])))
+    {
+        return result;
+    }
     try appendTrackList(allocator, &result, value, available, gap, font_size, false);
     result.explicit_count = result.tracks.items.len;
     return result;
@@ -875,6 +883,10 @@ fn parseAbsoluteLength(value: []const u8, font_size: f32) ?f32 {
     return null;
 }
 
+fn isTrackNameByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '_';
+}
+
 fn parseNumber(value: []const u8) ?f32 {
     return std.fmt.parseFloat(f32, std.mem.trim(u8, value, " \t\n\r\x0C")) catch null;
 }
@@ -968,6 +980,19 @@ test "parse repeat minmax named-line grid templates" {
     try std.testing.expectEqual(@as(f32, 40), template.tracks.items[0].size.min.fixed);
     try std.testing.expectEqual(@as(f32, 1), template.tracks.items[1].size.max.flex);
     try std.testing.expectEqualStrings("end", template.trailing_names[0]);
+}
+
+test "subgrid templates do not become zero-width tracks" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "subgrid", "SUBGRID [a] [b]", "subgrid [label] [value]" }) |source| {
+        var template = try parseTemplate(allocator, source, 400, 0, 16);
+        defer template.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 0), template.tracks.items.len);
+    }
+    // A named line that merely starts with the keyword is still a track list.
+    var named = try parseTemplate(allocator, "[subgrid-start] 40px", 400, 0, 16);
+    defer named.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), named.tracks.items.len);
 }
 
 test "parse named grid areas into rectangular extents" {

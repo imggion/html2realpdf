@@ -8,6 +8,16 @@ const std = @import("std");
 
 pub const Id = u32;
 
+/// Largest length magnitude kept by the parsers, matching Chromium's layout
+/// limit. Browsers serialize `calc(infinity * 1px)` (Tailwind v4
+/// `rounded-full`) as an exponent near the float limit; clamping keeps later
+/// radius sums, scaling, and unit conversion finite.
+pub const max_length_magnitude: f32 = 33554428;
+
+pub fn clampLength(pixels: f32) f32 {
+    return std.math.clamp(pixels, -max_length_magnitude, max_length_magnitude);
+}
+
 pub const Context = struct {
     font_size: f32 = 16,
     root_font_size: f32 = 16,
@@ -355,7 +365,21 @@ const Parser = struct {
             while (!self.eof() and std.ascii.isDigit(self.peek())) : (self.position += 1) saw_digit = true;
         }
         if (!saw_digit) return null;
-        const number = std.fmt.parseFloat(f32, self.source[start..self.position]) catch return null;
+
+        // Browsers serialize extreme computed values as `3.35544e+07px`; an
+        // `e` is an exponent only when digits follow, so `em`/`ex` stay units.
+        if (self.peek() == 'e' or self.peek() == 'E') {
+            var exponent_end = self.position + 1;
+            if (exponent_end < self.source.len and (self.source[exponent_end] == '-' or self.source[exponent_end] == '+')) exponent_end += 1;
+            if (exponent_end < self.source.len and std.ascii.isDigit(self.source[exponent_end])) {
+                while (exponent_end < self.source.len and std.ascii.isDigit(self.source[exponent_end])) exponent_end += 1;
+                self.position = exponent_end;
+            }
+        }
+
+        const wide = std.fmt.parseFloat(f64, self.source[start..self.position]) catch return null;
+        const limit: f64 = std.math.floatMax(f32);
+        const number: f32 = @floatCast(std.math.clamp(wide, -limit, limit));
         if (self.peek() == '%') {
             self.position += 1;
             return try self.store.append(self.allocator, .{ .length = .{ .percent = number / 100 } });
@@ -365,7 +389,7 @@ const Parser = struct {
         const unit = self.source[unit_start..self.position];
         if (unit.len == 0) return try self.store.append(self.allocator, .{ .number = number });
         const pixels = unitToPixels(number, unit, self.context) orelse return null;
-        return try self.store.append(self.allocator, .{ .length = .{ .px = pixels } });
+        return try self.store.append(self.allocator, .{ .length = .{ .px = clampLength(pixels) } });
     }
 
     fn consumeComma(self: *Parser) bool {

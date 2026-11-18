@@ -9,6 +9,12 @@ const unicode_case = @import("../unicode_case.zig");
 pub const InlineSizes = struct {
     min_content: f32 = 0,
     max_content: f32 = 0,
+    /// Width of a collapsible space before the first content, or 0. Spaces at
+    /// text-node edges collapse across siblings, so the parent line decides
+    /// whether one survives between two contributions.
+    leading_space: f32 = 0,
+    /// Width of a collapsible space after the last content, or 0.
+    trailing_space: f32 = 0,
 };
 
 pub const ReplacedSize = struct {
@@ -143,6 +149,11 @@ pub fn measureBoxInline(
     var result = InlineSizes{};
     var line_min: f32 = 0;
     var line_max: f32 = 0;
+    // Mirrors inline layout whitespace collapsing: one space survives between
+    // two contributions on a line, and spaces at the line edges are dropped.
+    var line_has_content = false;
+    var pending_space: f32 = 0;
+    var first_line = true;
     var child = source.first_child;
     const line_children = source.kind == .tableRow or !hasBlockChildren(tree, box_id);
     while (child) |child_id| {
@@ -152,12 +163,33 @@ pub fn measureBoxInline(
             result.max_content = @max(result.max_content, line_max);
             line_min = 0;
             line_max = 0;
+            line_has_content = false;
+            pending_space = 0;
+            first_line = false;
         } else {
             const measured = try measureBoxInline(allocator, tree, child_id, registry, shaping_mode);
             const contribution = resolveChildContribution(child_box, measured);
             if (line_children) {
-                line_min = @max(line_min, contribution.min_content);
-                line_max += contribution.max_content;
+                const collapses = collapsesSpaces(child_box);
+                const leading = if (collapses) measured.leading_space else 0;
+                const trailing = if (collapses) measured.trailing_space else 0;
+                const has_content = !collapses or contribution.max_content > 0;
+
+                if (!has_content) {
+                    // Whitespace-only text or an empty inline box.
+                    pending_space = @max(pending_space, @max(leading, trailing));
+                } else {
+                    const separator = if (pending_space > 0) pending_space else leading;
+                    if (line_has_content) {
+                        line_max += separator;
+                    } else if (first_line) {
+                        result.leading_space = separator;
+                    }
+                    line_min = @max(line_min, contribution.min_content);
+                    line_max += contribution.max_content;
+                    line_has_content = true;
+                    pending_space = trailing;
+                }
             } else {
                 result.min_content = @max(result.min_content, contribution.min_content);
                 result.max_content = @max(result.max_content, contribution.max_content);
@@ -168,9 +200,20 @@ pub fn measureBoxInline(
     if (line_children) {
         result.min_content = @max(result.min_content, line_min);
         result.max_content = @max(result.max_content, line_max);
+        result.trailing_space = pending_space;
+        if (!line_has_content and first_line) result.leading_space = pending_space;
     }
     result.max_content = @max(result.max_content, result.min_content);
     return result;
+}
+
+/// Text and plain inline boxes share their edge spaces with siblings; atomic
+/// inlines such as images and inline-blocks keep their own spaces inside.
+fn collapsesSpaces(source: box.Box) bool {
+    return switch (source.kind) {
+        .text, .inlineBox, .anonymousInline => true,
+        else => false,
+    };
 }
 
 fn measureGridInline(
@@ -500,16 +543,40 @@ fn measureTextIntrinsic(
 
     const normalized = try normalizeWhitespace(allocator, transformed, style.white_space);
     defer allocator.free(normalized);
+
+    // Collapsible edge spaces are resolved by the parent line, where they may
+    // merge with a neighbouring text node's space.
+    var edges = InlineSizes{};
+    if (style.white_space == .normal or style.white_space == .nowrap) {
+        const space_width = measureStyledText(registry, shaping_mode, " ", style);
+        if (transformed.len > 0 and isCollapsibleSpace(transformed[0])) edges.leading_space = space_width;
+        if (transformed.len > 0 and isCollapsibleSpace(transformed[transformed.len - 1])) edges.trailing_space = space_width;
+    }
+
     const max_content = longestForcedLineWidth(registry, shaping_mode, normalized, style);
     if (style.white_space == .nowrap or style.white_space == .pre) {
-        return .{ .min_content = max_content, .max_content = max_content };
+        return .{
+            .min_content = max_content,
+            .max_content = max_content,
+            .leading_space = edges.leading_space,
+            .trailing_space = edges.trailing_space,
+        };
     }
 
     const min_content = if (style.word_break == .breakAll or style.overflow_wrap == .anywhere)
         try widestGrapheme(allocator, registry, shaping_mode, normalized, style)
     else
         try widestBreakSegment(allocator, registry, shaping_mode, normalized, style);
-    return .{ .min_content = @min(min_content, max_content), .max_content = max_content };
+    return .{
+        .min_content = @min(min_content, max_content),
+        .max_content = max_content,
+        .leading_space = edges.leading_space,
+        .trailing_space = edges.trailing_space,
+    };
+}
+
+fn isCollapsibleSpace(byte: u8) bool {
+    return byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r' or byte == 0x0C;
 }
 
 fn normalizeWhitespace(allocator: std.mem.Allocator, text: []const u8, mode: box.WhiteSpace) std.mem.Allocator.Error![]u8 {

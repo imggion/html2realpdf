@@ -6,6 +6,14 @@
 const std = @import("std");
 
 const css_px_to_pdf_points: f32 = 0.75;
+
+/// Block-axis tolerance for deciding whether content fits a page. Browser
+/// snapshots serialize computed lengths to six significant digits, so a box
+/// authored as exactly `297mm` arrives as `1122.52px` against the 1122.5197px
+/// A4 content box, and stacked page-sized boxes drift by that amount on every
+/// page. A tenth of a CSS pixel (0.075pt) is invisible yet absorbs the
+/// rounding for hundreds of pages instead of emitting near-empty pages.
+pub const fragmentation_tolerance: f32 = 0.1;
 const Size = struct { width: f32, height: f32 };
 
 pub const PageFormat = enum { a4, letter };
